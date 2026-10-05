@@ -1,7 +1,6 @@
-# MapRoulette API
-[![Build Status](https://github.com/maproulette/maproulette-backend/actions/workflows/scala.yml/badge.svg)](https://github.com/maproulette/maproulette-backend/actions?query=branch%3Amain)
-[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=maproulette_maproulette2&metric=alert_status)](https://sonarcloud.io/dashboard?id=maproulette_maproulette2)
-![GitHub release (latest by date)](https://img.shields.io/github/v/release/maproulette/maproulette-backend)
+# MapRoulette API: mobile OAuth experiment
+
+[![Build Status](https://github.com/mvexel/maproulette-mobile-backend/actions/workflows/scala.yml/badge.svg?branch=feat/mobile-oauth)](https://github.com/mvexel/maproulette-mobile-backend/actions/workflows/scala.yml)
 
 Welcome to the repository for the MapRoulette back-end server code. The MapRoulette back-end exposes the MapRoulette API, which the MapRoulette front-end web application depends on. The source code for the web application is in [a separate repository](https://github.com/maproulette/maproulette3).
 
@@ -25,7 +24,10 @@ accounts and its own database. It is separate from `maproulette.org` and does
 not change that service's authentication. Deployment credentials are supplied
 through environment variables, outside this repository.
 
-**If you just want to deploy the MapRoulette back-end, [we have a 🚢 Docker image 🚢 for that](https://github.com/maproulette/maproulette2-docker)**. This is especially useful if you want to contribute to the MapRoulette front-end and don't intend to touch the back-end.
+The [upstream Docker image](https://github.com/maproulette/maproulette2-docker)
+is for the standard MapRoulette backend and does not include this mobile OAuth
+patch. Build this branch with the standalone Compose guide above for mobile
+sign-in.
 
 ## Requirements
 
