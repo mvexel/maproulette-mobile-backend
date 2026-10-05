@@ -1,0 +1,1115 @@
+/*
+ * Copyright (C) 2020 MapRoulette contributors (see CONTRIBUTORS.md).
+ * Licensed under the Apache License, Version 2.0 (see LICENSE).
+ */
+package org.maproulette.controllers.api
+
+import java.sql.Connection
+import akka.util.ByteString
+
+import javax.inject.Inject
+import org.locationtech.jts.geom.Envelope
+import org.maproulette.Config
+import org.maproulette.controllers.CRUDController
+import org.maproulette.data._
+import org.maproulette.exception.{
+  InvalidException,
+  LockConflictException,
+  LockedException,
+  NotFoundException,
+  StatusMessage
+}
+import org.maproulette.framework.model._
+import org.maproulette.framework.model.Challenge
+import org.maproulette.framework.psql.Paging
+import org.maproulette.framework.service.{ServiceManager, TagService, TaskClusterService}
+import org.maproulette.framework.mixins.TagsControllerMixin
+import org.maproulette.framework.repository.TaskRepository
+import org.maproulette.metrics.Metrics
+import org.maproulette.permissions.Permission
+import org.maproulette.models.dal.mixin.TagDALMixin
+import org.maproulette.models.dal.{DALManager, TaskDAL}
+import org.maproulette.provider.osm._
+import org.maproulette.provider.websockets.{WebSocketMessages, WebSocketProvider}
+import org.maproulette.session.{
+  SearchChallengeParameters,
+  SearchLocation,
+  SearchParameters,
+  SearchTaskParameters,
+  SessionManager
+}
+import org.maproulette.utils.Utils
+import org.wololo.geojson.{FeatureCollection, GeoJSONFactory}
+import org.wololo.jts2geojson.GeoJSONReader
+import play.api.http.HttpEntity
+import play.api.libs.json._
+import play.api.libs.ws.WSClient
+import play.api.mvc._
+
+import scala.concurrent.duration._
+import scala.concurrent.{Await, Future, Promise}
+import scala.util.{Failure, Success}
+
+/**
+  * The Task controller handles all operations for the Task objects.
+  * This includes CRUD operations and searching/listing.
+  * See {@link org.maproulette.controllers.CRUDController} for more details on CRUD object operations
+  *
+  * @author cuthbertm
+  */
+class TaskController @Inject() (
+    override val sessionManager: SessionManager,
+    override val actionManager: ActionManager,
+    override val dal: TaskDAL,
+    override val tagService: TagService,
+    serviceManager: ServiceManager,
+    dalManager: DALManager,
+    wsClient: WSClient,
+    webSocketProvider: WebSocketProvider,
+    override val config: Config,
+    components: ControllerComponents,
+    changeService: ChangesetProvider,
+    taskClusterService: TaskClusterService,
+    override val bodyParsers: PlayBodyParsers,
+    taskRepository: TaskRepository,
+    permission: Permission
+) extends AbstractController(components)
+    with CRUDController[Task]
+    with TagsControllerMixin[Task] {
+
+  import scala.concurrent.ExecutionContext.Implicits.global
+
+  // json reads for automatically reading Tasks from a posted json body
+  override implicit val tReads: Reads[Task] = Task.TaskFormat
+  // json writes for automatically writing Tasks to a json body response
+  override implicit val tWrites: Writes[Task] = Task.TaskFormat
+  // json writes for automatically writing Challenges to a json body response
+  implicit val cWrites: Writes[Challenge] = Challenge.writes.challengeWrites
+
+  // The type of object that this controller deals with.
+  override implicit val itemType = TaskType()
+  override implicit val tagType  = this.dal.tableName
+  // json reads for automatically reading Tags from a posted json body
+  implicit val commentReads: Reads[Comment]   = Comment.reads
+  implicit val commentWrites: Writes[Comment] = Comment.writes
+  implicit val tagReads: Reads[Tag]           = Tag.tagReads
+
+  implicit val tagChangeReads           = ChangeObjects.tagChangeReads
+  implicit val tagChangeResultWrites    = ChangeObjects.tagChangeResultWrites
+  implicit val tagChangeSubmissionReads = ChangeObjects.tagChangeSubmissionReads
+  implicit val changeReads              = ChangeObjects.changeReads
+  implicit val changeSubmissionReads    = ChangeObjects.changeSubmissionReads
+
+  implicit val taskBundleWrites: Writes[TaskBundle] = TaskBundle.taskBundleWrites
+
+  implicit val pointReviewWrites = ClusteredPoint.pointReviewWrites
+
+  override def dalWithTags: TagDALMixin[Task] = dal
+
+  /**
+    * This function allows sub classes to modify the body, primarily this would be used for inserting
+    * default elements into the body that shouldn't have to be required to create an object.
+    *
+    * @param body The incoming body from the request
+    * @return
+    */
+  override def updateCreateBody(body: JsValue, user: User): JsValue = {
+    // add a default priority, this will be updated later when the task is created if there are
+    // priority rules defined in the challenge parent
+    var updatedBody = Utils.insertIntoJson(body, "priority", Challenge.PRIORITY_HIGH)(IntWrites)
+    updatedBody = Utils.insertIntoJson(updatedBody, "errorTags", "")
+    // We need to update the geometries to make sure that we handle all the different types of
+    // geometries that you can deal with like WKB or GeoJSON
+    this.updateGeometryData(super.updateCreateBody(updatedBody, user))
+  }
+
+  /**
+    * In the case where you need to update the update body, usually you would not update it, but
+    * just in case.
+    *
+    * @param body The request body
+    * @return The updated request body
+    */
+  override def updateUpdateBody(body: JsValue, user: User): JsValue =
+    this.updateGeometryData(super.updateUpdateBody(body, user))
+
+  private def updateGeometryData(body: JsValue): JsValue = {
+    // Detect JsValues that are strings containing embedded JSON objects,
+    // and parse them to real JsValues instead. This is so that old clients
+    // which submit task geometries, location, etc as stringified JSON instead
+    // of proper nested objects still work.
+    def normalize(json: JsValue, key: String): JsValue =
+      (json \ key).toOption match {
+        case Some(JsString(value)) if value.nonEmpty && value.charAt(0) == '{' =>
+          Utils.insertIntoJson(json, key, Json.parse(value), true)
+        case _ => json
+      }
+
+    val withGeometries      = normalize(body, "geometries")
+    val withLocation        = normalize(withGeometries, "location")
+    val withCooperativeWork = normalize(withLocation, "cooperativeWork")
+    withCooperativeWork
+  }
+
+  /**
+    * Function can be implemented to extract more information than just the default create data,
+    * to build other objects with the current object at the core. No data will be returned from this
+    * function, it purely does work in the background AFTER creating the current object
+    *
+    * @param body          The Json body of data
+    * @param createdObject The object that was created by the create function
+    * @param user          The user that is executing the function
+    */
+  override def extractAndCreate(body: JsValue, createdObject: Task, user: User)(
+      implicit c: Option[Connection] = None
+  ): Unit = {
+    //newly created tasks don't have locations until they're created in SQL.  After creation, we need to set
+    //priority based on location and parent priority rules.
+    updatePriority(createdObject);
+
+    //https://github.com/maproulette/maproulette3/issues/1733
+    //User request to have taskUploads update taskRefresh for challenge
+    this.dalManager.challenge.markTasksRefreshed()(createdObject.parent);
+
+    // If we have added a new task to a 'finished' challenge, we need to make
+    // sure to set challenge back to 'ready'
+    this.dalManager.challenge.updateReadyStatus()(createdObject.parent)
+    this.extractTags(body, createdObject, User.superUser, true)
+  }
+
+  /**
+    * This updates the priority of the task based on parent requirements.
+    *
+    * @param element The task that needs to be updated
+    * @return
+    */
+  private def updatePriority(
+      element: Task
+  ): Unit = {
+    if (element.location == None) {
+      val updatedTask = taskRepository.retrieve(element.id);
+      val parentChallenge = dalManager.challenge
+        .retrieveById(element.parent)
+        .getOrElse(Challenge.emptyChallenge(-1, -1));
+
+      if (parentChallenge.id > 0) {
+        val updatedPriority = element.getTaskPriority(parentChallenge, updatedTask)
+
+        taskRepository.updatePriority(updatedPriority, element.id);
+      }
+    }
+  }
+
+  /**
+    * Gets a json list of tags of the task
+    *
+    * @param id The id of the task containing the tags
+    * @return The html Result containing json array of tags
+    */
+  def getTagsForTask(implicit id: Long): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.userAwareRequest { implicit user =>
+      Ok(Json.toJson(this.getTags(id)))
+    }
+  }
+
+  /**
+    * Start on task (lock it). An error will be returned if someone else has the lock,
+    * or if the parent challenge is paused - no work can happen on a paused challenge, so
+    * there is nothing to hold a lock for. If the calling user already holds a lock on a
+    * different task, a 409 Conflict is returned describing that lock - the client should
+    * call the release endpoint on that task before retrying to lock this one.
+    *
+    * @param taskId     Id of task that you wish to start
+    * @return
+    */
+  def startOnTask(taskId: Long): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.authenticatedRequest { implicit user =>
+      val task = this.dal.retrieveById(taskId) match {
+        case Some(t) => t
+        case None =>
+          throw new NotFoundException(s"Task with $taskId not found, unable to lock.")
+      }
+
+      val challenge = this.serviceManager.challenge.retrieve(task.parent) match {
+        case Some(c) => c
+        case None =>
+          throw new NotFoundException(s"Challenge ${task.parent} not found, unable to lock.")
+      }
+
+      val project = this.serviceManager.project.retrieve(challenge.general.parent) match {
+        case Some(c) => c
+        case None =>
+          throw new NotFoundException(
+            s"Project ${challenge.general.parent} not found, unable to lock."
+          )
+      }
+
+      if (challenge.extra.paused) {
+        throw new InvalidException(
+          "This challenge is currently paused. Tasks cannot be locked until it is resumed."
+        )
+      }
+
+      try {
+        val lockerId = this.dal.lockItem(user, task)
+        if (lockerId != user.id) {
+          val lockHolder = this.serviceManager.user.retrieve(lockerId) match {
+            case Some(user) => user.osmProfile.displayName
+            case None       => lockerId
+          }
+          throw new IllegalAccessException(s"Task is currently locked by user ${lockHolder}")
+        }
+
+        webSocketProvider.sendMessage(
+          WebSocketMessages.taskClaimed(
+            task,
+            WebSocketMessages.challengeSummary(challenge),
+            WebSocketMessages.projectSummary(project),
+            WebSocketMessages.userSummary(user)
+          )
+        )
+        val (lockPrimaryTaskId, lockBundledTasks) =
+          this.dal.resolveLockBundle(task).getOrElse((task.id, List.empty[Long]))
+        // The lock, not the task_bundles table, is the live source of truth for "what's
+        // bundled with this task right now" - whenever locking/relocking resolves to a
+        // covering lock that has bundle members, broadcast the full membership so any
+        // other tab/session (even one that mounted before this bundle existed) can pick
+        // it up live, the same way a bundle create/update broadcasts it.
+        if (lockBundledTasks.nonEmpty) {
+          val primaryTask =
+            if (lockPrimaryTaskId == task.id) task
+            else this.dal.retrieveById(lockPrimaryTaskId).getOrElse(task)
+          val memberTasks =
+            this.dal.retrieveListById(-1, 0)(lockBundledTasks.filterNot(_ == lockPrimaryTaskId))
+          webSocketProvider.sendMessage(
+            WebSocketMessages.tasksClaimed(
+              primaryTask :: memberTasks,
+              WebSocketMessages.challengeSummary(challenge),
+              WebSocketMessages.projectSummary(project),
+              WebSocketMessages.userSummary(user)
+            )
+          )
+        }
+        Ok(
+          Json.toJson(task).as[JsObject] ++ Json.obj(
+            "lockPrimaryTaskId" -> lockPrimaryTaskId,
+            "lockBundledTasks"  -> lockBundledTasks
+          )
+        )
+      } catch {
+        case e: LockConflictException =>
+          val conflictingTaskId   = e.conflictingLock.itemId
+          val conflictingParentId = this.dal.retrieveById(conflictingTaskId).map(_.parent)
+          val conflictingParentName =
+            conflictingParentId.flatMap(this.serviceManager.challenge.retrieve).map(_.name)
+          Conflict(
+            Json.obj(
+              "status"       -> "Conflict",
+              "message"      -> e.getMessage,
+              "lockedTaskId" -> conflictingTaskId,
+              "parentId"     -> conflictingParentId,
+              "parentName"   -> conflictingParentName,
+              "bundledTasks" -> e.conflictingLock.bundledTasks,
+              "startedAt"    -> e.conflictingLock.lockedTime.map(_.toString)
+            )
+          )
+      }
+    }
+  }
+
+  /**
+    * Updates the caller's lock on the given primary task to cover exactly the given member
+    * task ids, without touching the persisted task_bundles record - the bundle itself is
+    * only created/updated when the task is actually submitted (see TaskBundleController).
+    * Used while interactively building up a bundle (e.g. lasso-select) so other tabs see the
+    * live working set without a stray task_bundles row surviving an abandoned/refreshed session.
+    *
+    * @param taskId  Id of the primary task (locks it first if the caller doesn't already)
+    * @param taskIds The full set of member task ids (excluding the primary) the lock should cover
+    */
+  def lockTaskBundle(taskId: Long, taskIds: List[Long]): Action[AnyContent] = Action.async {
+    implicit request =>
+      this.sessionManager.authenticatedRequest { implicit user =>
+        val task = this.dal.retrieveById(taskId) match {
+          case Some(t) => t
+          case None =>
+            throw new NotFoundException(s"Task with $taskId not found, unable to lock.")
+        }
+
+        val challenge = this.serviceManager.challenge.retrieve(task.parent) match {
+          case Some(c) => c
+          case None =>
+            throw new NotFoundException(s"Challenge ${task.parent} not found, unable to lock.")
+        }
+
+        val project = this.serviceManager.project.retrieve(challenge.general.parent) match {
+          case Some(c) => c
+          case None =>
+            throw new NotFoundException(
+              s"Project ${challenge.general.parent} not found, unable to lock."
+            )
+        }
+
+        if (challenge.extra.paused) {
+          throw new InvalidException(
+            "This challenge is currently paused. Tasks cannot be locked until it is resumed."
+          )
+        }
+
+        try {
+          val lockerId = this.dal.lockBundle(user, task, taskIds)
+          if (lockerId != user.id) {
+            val lockHolder = this.serviceManager.user.retrieve(lockerId) match {
+              case Some(u) => u.osmProfile.displayName
+              case None    => lockerId
+            }
+            throw new IllegalAccessException(s"Task is currently locked by user ${lockHolder}")
+          }
+
+          val memberTasks = this.dal.retrieveListById(-1, 0)(taskIds)
+          webSocketProvider.sendMessage(
+            WebSocketMessages.tasksClaimed(
+              task :: memberTasks,
+              WebSocketMessages.challengeSummary(challenge),
+              WebSocketMessages.projectSummary(project),
+              WebSocketMessages.userSummary(user)
+            )
+          )
+
+          Ok(
+            Json.obj(
+              "lockPrimaryTaskId" -> task.id,
+              "lockBundledTasks"  -> taskIds
+            )
+          )
+        } catch {
+          case e: LockConflictException =>
+            val conflictingTaskId   = e.conflictingLock.itemId
+            val conflictingParentId = this.dal.retrieveById(conflictingTaskId).map(_.parent)
+            val conflictingParentName =
+              conflictingParentId.flatMap(this.serviceManager.challenge.retrieve).map(_.name)
+            Conflict(
+              Json.obj(
+                "status"       -> "Conflict",
+                "message"      -> e.getMessage,
+                "lockedTaskId" -> conflictingTaskId,
+                "parentId"     -> conflictingParentId,
+                "parentName"   -> conflictingParentName,
+                "bundledTasks" -> e.conflictingLock.bundledTasks,
+                "startedAt"    -> e.conflictingLock.lockedTime.map(_.toString)
+              )
+            )
+        }
+      }
+  }
+
+  /**
+    * Retrieve cooperative change XML for task
+    *
+    * @param taskId     Id of task that you wish to start
+    * @return
+    */
+  def cooperativeWorkChangeXML(taskId: Long, filename: String): Action[AnyContent] = Action.async {
+    implicit request =>
+      val task = this.dal.retrieveById(taskId) match {
+        case Some(t) => t
+        case None    => throw new NotFoundException(s"Task with $taskId not found.")
+      }
+
+      val xml = task.cooperativeWork match {
+        case Some(cw) =>
+          (cw \ "file" \ "content").asOpt[String] match {
+            case Some(base64EncodedXML) =>
+              new String(java.util.Base64.getDecoder.decode(base64EncodedXML))
+            case None => throw new NotFoundException(s"Task $taskId does not offer change XML.")
+          }
+
+        case None => throw new NotFoundException(s"Task $taskId does not offer cooperative work.")
+      }
+
+      Future {
+        Result(
+          header = ResponseHeader(
+            OK,
+            Map(CONTENT_DISPOSITION -> s"attachment; filename=${filename}")
+          ),
+          body = HttpEntity.Strict(
+            ByteString.fromString(xml),
+            Some("text/xml")
+          )
+        )
+      }
+  }
+
+  /**
+    * Releases the task (unlock it).
+    *
+    * @param taskId    Id of task that you wish to release
+    * @return
+    */
+  def releaseTask(taskId: Long): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.authenticatedRequest { implicit user =>
+      val task = this.dal.retrieveById(taskId) match {
+        case Some(t) => t
+        case None    => throw new NotFoundException(s"Task with $taskId not found, unable to lock.")
+      }
+
+      try {
+        // Resolve the lock's bundle membership before releasing it - once unlocked, the
+        // covering row (and its bundled_tasks) is gone.
+        val (lockPrimaryTaskId, lockBundledTasks) =
+          this.dal.resolveLockBundle(task).getOrElse((task.id, List.empty[Long]))
+        this.dal.unlockItem(user, task)
+        if (lockBundledTasks.nonEmpty) {
+          val primaryTask =
+            if (lockPrimaryTaskId == task.id) task
+            else this.dal.retrieveById(lockPrimaryTaskId).getOrElse(task)
+          val memberTasks =
+            this.dal.retrieveListById(-1, 0)(lockBundledTasks.filterNot(_ == lockPrimaryTaskId))
+          webSocketProvider.sendMessage(
+            WebSocketMessages.tasksReleased(
+              primaryTask :: memberTasks,
+              Some(WebSocketMessages.userSummary(user))
+            )
+          )
+        } else {
+          webSocketProvider.sendMessage(
+            WebSocketMessages.taskReleased(task, Some(WebSocketMessages.userSummary(user)))
+          )
+        }
+      } catch {
+        case e: Exception => logger.warn(e.getMessage)
+      }
+
+      Ok(Json.toJson(task))
+    }
+  }
+
+  /**
+    * Refresh the active lock on the task, extending its allowed duration
+    *
+    * @param taskId    Id of the task on which the lock is to be refreshed
+    * @return
+    */
+  def refreshTaskLock(taskId: Long): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.authenticatedRequest { implicit user =>
+      this.dal.retrieveById(taskId) match {
+        case Some(t) =>
+          try {
+            this.dal.refreshItemLock(user, t)
+            val (lockPrimaryTaskId, lockBundledTasks) =
+              this.dal.resolveLockBundle(t).getOrElse((t.id, List.empty[Long]))
+            Ok(
+              Json.toJson(t).as[JsObject] ++ Json.obj(
+                "lockPrimaryTaskId" -> lockPrimaryTaskId,
+                "lockBundledTasks"  -> lockBundledTasks
+              )
+            )
+          } catch {
+            case e: LockedException => throw new IllegalAccessException(e.getMessage)
+          }
+        case None =>
+          throw new NotFoundException(s"Task with $taskId not found, unable to refresh lock.")
+      }
+    }
+  }
+
+  /**
+    * Retrieves multiple tasks by their IDs.
+    *
+    * @param taskIds Comma-separated string of task IDs to retrieve
+    * @return Array of Task objects
+    */
+  def getTasks(taskIds: String): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.userAwareRequest { implicit user =>
+      val taskIdsList = Utils.toLongList(taskIds).getOrElse(List.empty[Long])
+      if (taskIdsList.isEmpty) {
+        BadRequest(Json.toJson(StatusMessage("KO", JsString("taskIds array cannot be empty"))))
+      } else {
+        val tasks = taskIdsList.flatMap(taskId => this.dal.retrieveById(taskId))
+        // Inject extra data (tags, mapillary) for each task, similar to the read method
+        // inject returns JsValue, so we collect them into a JsArray
+        val tasksWithInjectedData = tasks.map(task => this.inject(task))
+        Ok(JsArray(tasksWithInjectedData))
+      }
+    }
+  }
+
+  /**
+    * Unlocks a bundle of tasks based on the provided task IDs. Bundles are locked as a
+    * single row on the bundle's primary task (see Locking.lockBundle), so this releases
+    * that covering lock if the calling user holds it via any of the given task ids.
+    * Ids the user doesn't currently hold a lock on are silently ignored rather than
+    * erroring, since the caller may not know which id is the bundle's primary.
+    *
+    * @param taskIds The IDs of the tasks to unlock
+    * @return
+    */
+  def unlockTaskBundle(taskIds: List[Long]): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.authenticatedRequest { implicit user =>
+      val tasks = taskIds.flatMap(taskId => this.dal.retrieveById(taskId))
+
+      tasks.foreach { task =>
+        try {
+          this.dal.unlockItem(user, task)
+        } catch {
+          case e: Exception => logger.warn(e.getMessage)
+        }
+      }
+
+      val tasksByChallenge = tasks.groupBy(_.parent)
+
+      Future {
+        tasksByChallenge.foreach {
+          case (challengeId, challengeTasks) =>
+            webSocketProvider.sendMessage(
+              WebSocketMessages
+                .tasksReleased(challengeTasks, Some(WebSocketMessages.userSummary(user)))
+            )
+        }
+      }
+
+      Ok(Json.toJson(tasks))
+    }
+  }
+
+  /**
+    * Gets a random task(s) given the provided tags.
+    *
+    * @param projectSearch   Filter on the name of the project
+    * @param challengeSearch Filter on the name of the challenge (Survey included)
+    * @param challengeTags   Filter on the tags of the challenge
+    * @param tags            A comma separated list of tags to match against
+    * @param taskSearch      Filter based on the name of the task
+    * @param limit           The number of tasks to return
+    * @param proximityId     Id of task that you wish to find the next task based on the proximity of that task
+    * @return
+    */
+  def getRandomTasks(
+      projectSearch: String,
+      challengeSearch: String,
+      challengeTags: String,
+      tags: String,
+      taskSearch: String,
+      limit: Int,
+      proximityId: Long
+  ): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.userAwareRequest { implicit user =>
+      val params = SearchParameters(
+        projectSearch = Some(projectSearch),
+        challengeParams = SearchChallengeParameters(
+          challengeSearch = Some(challengeSearch),
+          challengeTags = Some(challengeTags.split(",").toList)
+        ),
+        taskParams = SearchTaskParameters(
+          taskTags = Some(tags.split(",").toList),
+          taskSearch = Some(taskSearch)
+        )
+      )
+      val result = this.dal.getRandomTasks(
+        User.userOrMocked(user),
+        params,
+        limit,
+        None,
+        Utils.negativeToOption(proximityId)
+      )
+      result.map(task => {
+        this.actionManager.setAction(user, this.itemType.convertToItem(task.id), TaskViewed(), "")
+        this.inject(task)
+      })
+      Ok(Json.toJson(result))
+    }
+  }
+
+  /**
+    * This injection method will make a call to Mapillary to pull in any matching images that
+    * might be useful
+    *
+    * @param obj the object being sent in the response
+    * @return A Json representation of the object
+    */
+  override def inject(obj: Task)(implicit request: Request[Any]): JsValue = {
+    var taskToReturn = obj
+
+    val serverInfo = config.getMapillaryServerInfo
+    if (serverInfo.clientId.nonEmpty) {
+      if (request.getQueryString("mapillary").getOrElse("false").toBoolean) {
+        // build the envelope for the task geometries
+        val taskFeatureCollection =
+          GeoJSONFactory.create(Json.stringify(obj.geometries)).asInstanceOf[FeatureCollection]
+        val reader   = new GeoJSONReader()
+        val envelope = new Envelope()
+        taskFeatureCollection.getFeatures.foreach(f => {
+          val current = reader.read(f.getGeometry)
+          envelope.expandToInclude(current.getEnvelopeInternal)
+        })
+        // user can provide border information in the query string, so check there first before using the default
+        val borderExpansionSize =
+          request.getQueryString("border").getOrElse(serverInfo.border.toString).toDouble
+        envelope.expandBy(borderExpansionSize)
+        val apiReq =
+          s"https://${serverInfo.host}/v3/images/?&bbox=${envelope.getMinX},${envelope.getMinY},${envelope.getMaxX},${envelope.getMaxY}&client_id=${serverInfo.clientId}"
+        logger.debug(s"Requesting Mapillary image information for: $apiReq")
+        val mapFuture         = wsClient.url(apiReq).get()
+        val response          = Await.result(mapFuture, 5.seconds)
+        val featureCollection = response.json
+        val images = (featureCollection \ "features")
+          .as[List[JsValue]]
+          .map(feature => {
+            val key    = (feature \ "properties" \ "key").get.as[String]
+            val latlon = (feature \ "geometry" \ "coordinates").as[List[JsNumber]]
+            MapillaryImage(
+              key,
+              latlon.tail.head.as[Double],
+              latlon.head.as[Double],
+              s"https://d1cuyjsrcm0gby.cloudfront.net/$key/thumb-320.jpg",
+              s"https://d1cuyjsrcm0gby.cloudfront.net/$key/thumb-640.jpg",
+              s"https://d1cuyjsrcm0gby.cloudfront.net/$key/thumb-1024.jpg",
+              s"https://d1cuyjsrcm0gby.cloudfront.net/$key/thumb-2048.jpg"
+            )
+          })
+        taskToReturn = obj.copy(mapillaryImages = Some(images))
+      }
+    }
+
+    val tags = this.tagService.listByTask(taskToReturn.id)
+    Utils.insertIntoJson(Json.toJson(taskToReturn), Tag.TABLE, Json.toJson(tags.map(_.name)))
+  }
+
+  /**
+    * Reads a single task, augmenting the standard injected JSON with the current lock
+    * holder (`lockedBy`, null when unlocked) and, when locked, the covering bundle's member
+    * ids (`lockBundledTasks`). This lets a task the caller already holds - e.g. opened in a
+    * second tab - render as locked-by-me without that tab issuing its own /start. The lock
+    * lookup lives here rather than in inject() so it only runs for this single-task read, not
+    * for the batch/bounding-box paths that also call inject().
+    */
+  override def read(implicit id: Long): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.userAwareRequest { implicit user =>
+      this.dal.retrieveById match {
+        case Some(task) =>
+          val (lockedBy, lockBundledTasks) =
+            this.dal.resolveLockHolder(task) match {
+              case Some((holderId, _, bundled)) =>
+                (Some(holderId), bundled.filterNot(_ == task.id))
+              case None => (None, List.empty[Long])
+            }
+          Ok(
+            this.inject(task).as[JsObject] ++ Json.obj(
+              "lockedBy"         -> lockedBy,
+              "lockBundledTasks" -> lockBundledTasks
+            )
+          )
+        case None => NotFound
+      }
+    }
+  }
+
+  /**
+    * This is the generic function that is leveraged by all the specific functions above. So it
+    * sets the task status to the specific status ID's provided by those functions.
+    * Must be authenticated to perform operation
+    *
+    * @param id     The id of the task
+    * @param status The status id to set the task's status to
+    * @param tags Optional tags to add to the task
+    * @return 400 BadRequest if status id is invalid or task with supplied id not found.
+    *         If successful then 200 NoContent
+    */
+  def setTaskStatus(
+      id: Long,
+      status: Int,
+      tags: String = ""
+  ): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.authenticatedRequest { implicit user =>
+      val requestReview = request.getQueryString("requestReview") match {
+        case Some(v) => Some(v.toBoolean)
+        case None    => None
+      }
+
+      val completionResponses = request.body.asJson
+      this.customTaskStatus(
+        id,
+        TaskStatusSet(status),
+        user,
+        tags,
+        requestReview,
+        completionResponses
+      )
+
+      NoContent
+    }
+  }
+
+  /**
+    * Changes the status on tasks that meet the search criteria (SearchParameters)
+    *
+    * @param newStatus The status to change all the tasks to
+    * @return The number of tasks changed.
+    */
+  def bulkStatusChange(newStatus: Int): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.authenticatedRequest { implicit user =>
+      SearchParameters.withSearch { p =>
+        var params = p
+        params.location match {
+          case Some(l) => // do nothing, already have bounding box
+          case None    =>
+            // No bounding box, so search everything
+            params = p.copy(location = Some(SearchLocation(-180, -90, 180, 90)))
+        }
+        val (count, tasks) = this.taskClusterService.getTasksInBoundingBox(user, params, Paging(-1))
+        val challengeIds   = params.challengeParams.challengeIds.getOrElse(List()).distinct.sorted
+
+        // Update challenge status to building
+        challengeIds.foreach(challengeId => {
+          this.dalManager.challenge.update(
+            Json.obj(
+              "status"        -> Challenge.STATUS_BUILDING,
+              "statusMessage" -> Challenge.STATUS_MESSAGE_UPDATING_TASK_STATUSES
+            ),
+            user
+          )(challengeId)
+        })
+
+        def resetStatuses(): Unit = {
+          challengeIds.foreach(challengeId => {
+            val challenge = this.serviceManager.challenge.retrieve(challengeId).get
+
+            // We need to check if the Challenge status changed during the bulk task update
+            // and ensure we don't overwrite it.
+            // If it didn't get updated, change status to Ready.
+            if (challenge.status.get == Challenge.STATUS_BUILDING) {
+              this.dalManager.challenge.update(
+                Json.obj(
+                  "status"        -> Challenge.STATUS_READY,
+                  "statusMessage" -> Challenge.STATUS_MESSAGE_NONE
+                ),
+                user
+              )(challengeId)
+            } else {
+              this.dalManager.challenge.update(
+                Json.obj("statusMessage" -> Challenge.STATUS_MESSAGE_NONE),
+                user
+              )(challengeId)
+            }
+          })
+        }
+
+        val requestId     = request.id
+        val challengesStr = challengeIds.mkString(",")
+
+        Future {
+          logger.info(
+            "Starting bulkStatusChange for requestId={} challenges={} on {} tasks",
+            requestId,
+            challengesStr,
+            tasks.length
+          )
+          try {
+            Metrics.timer(s"bulkStatusChange_${requestId}_${challengesStr}") { () =>
+              tasks.foreach(task => {
+                val taskJson = Json.obj("id" -> task.id, "status" -> newStatus)
+                this.dal.update(taskJson, user)(task.id)
+              })
+            }
+          } finally {
+            logger.info(
+              "Finished running bulkStatusChange requestId={} challenges={} on {} tasks",
+              requestId,
+              challengesStr,
+              tasks.length
+            )
+            resetStatuses()
+          }
+        }.onComplete {
+          case Success(_) =>
+            logger.info(
+              "Successful bulkStatusChange update for requestId={} and challenges={} on {} tasks",
+              requestId,
+              challengesStr,
+              tasks.length
+            )
+          case Failure(e) =>
+            logger.warn(
+              "FAILED bulkStatusChange update for requestId={} and challenges={} on {} tasks",
+              requestId,
+              challengesStr,
+              tasks.length,
+              e
+            )
+        }
+
+        Ok(Json.toJson(tasks.length))
+      }
+    }
+  }
+
+  /**
+    * Matches the task to a OSM Changeset, this will only
+    *
+    * @param taskId the id for the task
+    * @return The new Task object
+    */
+  def matchToOSMChangeSet(taskId: Long): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.authenticatedFutureRequest { implicit user =>
+      this.dal.retrieveById(taskId) match {
+        case Some(t) =>
+          val promise = Promise[Result]()
+          this.dal.matchToOSMChangeSet(t, user, false) onComplete {
+            case Success(response) => promise success Ok(Json.toJson(t))
+            case Failure(error)    => promise failure error
+          }
+          promise.future
+        case None => throw new NotFoundException("Task not found to update taskId with")
+      }
+    }
+  }
+
+  def applyTagFix(taskId: Long, tags: String = ""): Action[JsValue] =
+    Action.async(bodyParsers.json) { implicit request =>
+      this.sessionManager.authenticatedFutureRequest { implicit user =>
+        val result = request.body.validate[TagChangeSubmission]
+        result.fold(
+          errors => {
+            Future {
+              BadRequest(Json.toJson(StatusMessage("KO", JsError.toJson(errors))))
+            }
+          },
+          element => {
+            val p = Promise[Result]()
+
+            val requestReview = request.getQueryString("requestReview") match {
+              case Some(v) => Some(v.toBoolean)
+              case None    => None
+            }
+
+            // Convert tag changes to OSMChange object
+            val updates = element.changes.map(tagChange => {
+              ElementUpdate(
+                tagChange.osmId,
+                tagChange.osmType,
+                tagChange.version,
+                ElementTagChange(tagChange.updates, tagChange.deletes)
+              )
+            })
+            val change = OSMChange(None, Some(updates))
+
+            config.skipOSMChangesetSubmission match {
+              // If we are skipping the OSM submission then we don't actually do the tag change on OSM
+              case true =>
+                this.customTaskStatus(
+                  taskId,
+                  TaskStatusSet(Task.STATUS_FIXED),
+                  user,
+                  tags,
+                  requestReview
+                )
+                p success Ok(Json.toJson(true))
+              case _ =>
+                // Get the parent challenge to retrieve the changeset source
+                this.dal.retrieveById(taskId) match {
+                  case Some(task) =>
+                    val challengeSource = this.dalManager.challenge
+                      .retrieveById(task.parent)
+                      .map(_.general.checkinSource)
+                      .getOrElse("")
+
+                    changeService.submitOsmChange(
+                      change,
+                      element.comment,
+                      user.osmProfile.requestToken,
+                      Some(taskId),
+                      Some(challengeSource)
+                    ) onComplete {
+                      case Success(res) => {
+                        this.customTaskStatus(
+                          taskId,
+                          TaskStatusSet(Task.STATUS_FIXED),
+                          user,
+                          tags,
+                          requestReview
+                        )
+                        p success Ok(res)
+                      }
+                      case Failure(f) => p failure f
+                    }
+                  case None =>
+                    p failure new NotFoundException(s"Task with $taskId not found")
+                }
+            }
+            p.future
+          }
+        )
+      }
+    }
+
+  def customTaskStatus(
+      taskId: Long,
+      actionType: ActionType,
+      user: User,
+      tags: String = "",
+      requestReview: Option[Boolean] = None,
+      completionResponses: Option[JsValue] = None
+  ) = {
+    val status = actionType match {
+      case t: TaskStatusSet    => t.status
+      case q: QuestionAnswered => Task.STATUS_ANSWERED
+      case _                   => Task.STATUS_CREATED
+    }
+
+    if (!Task.isValidStatus(status)) {
+      throw new InvalidException(s"Cannot set task [$taskId] to invalid status [$status]")
+    }
+    val task = this.dal.retrieveById(taskId) match {
+      case Some(t) => t
+      case None    => throw new NotFoundException(s"Task with $taskId not found, can not set status.")
+    }
+
+    // Resolve the lock's bundle membership before setTaskStatus releases it as a side
+    // effect (TaskDAL#setTaskStatus), so we can broadcast the release the same way
+    // releaseTask/skipTask do - otherwise other tabs/sessions never learn this task
+    // (and any bundle members) were unlocked and keep showing it as locked-by-you.
+    val releasedTasks = this.dal.resolveLockReleaseTasks(task)
+
+    this.dal.setTaskStatus(List(task), status, user, requestReview, completionResponses)
+
+    try {
+      if (releasedTasks.length > 1) {
+        webSocketProvider.sendMessage(
+          WebSocketMessages.tasksReleased(releasedTasks, Some(WebSocketMessages.userSummary(user)))
+        )
+      } else {
+        webSocketProvider.sendMessage(
+          WebSocketMessages
+            .taskReleased(releasedTasks.head, Some(WebSocketMessages.userSummary(user)))
+        )
+      }
+    } catch {
+      case e: Exception => logger.warn(e.getMessage)
+    }
+
+    val action =
+      this.actionManager.setAction(Some(user), new TaskItem(task.id), actionType, task.name)
+
+    val tagList = if (tags == "") List() else tags.split(",").toList
+    if (tagList.nonEmpty) {
+      this.addTagstoItem(taskId, tagList.map(new Tag(-1, _, tagType = this.dal.tableName)), user)
+    }
+  }
+
+  def search(
+      search: String,
+      limit: Int = 25
+  ): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.userAwareRequest { implicit user =>
+      val results = this.dal.search(search, limit)
+      Ok(Json.toJson(results))
+    }
+  }
+
+  /**
+    * Skip a task: increments skip_count, releases the caller's lock, and
+    * leaves status unchanged. Emits a task-released WebSocket event so
+    * map / table clients can update their lock view.
+    */
+  def skipTask(taskId: Long): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.authenticatedRequest { implicit user =>
+      val task = this.dal.retrieveById(taskId) match {
+        case Some(t) => t
+        case None    => throw new NotFoundException(s"Task with $taskId not found, unable to skip.")
+      }
+
+      taskRepository.incrementSkipCount(taskId)
+
+      try {
+        this.dal.unlockItem(user, task)
+        webSocketProvider.sendMessage(
+          WebSocketMessages.taskReleased(task, Some(WebSocketMessages.userSummary(user)))
+        )
+      } catch {
+        case e: Exception => logger.warn(s"Skip unlock failed for task $taskId: ${e.getMessage}")
+      }
+
+      NoContent
+    }
+  }
+
+  /**
+    * Bulk delete: removes every task in the supplied `taskIds` list.
+    * Fails with 403 if the caller lacks write access to any task's parent
+    * project, or 404 if any id is missing.
+    */
+  def bulkDelete: Action[JsValue] = Action.async(bodyParsers.json) { implicit request =>
+    this.sessionManager.authenticatedRequest { implicit user =>
+      val taskIds = (request.body \ "taskIds").asOpt[List[Long]].getOrElse(List.empty)
+      if (taskIds.isEmpty) {
+        BadRequest(Json.toJson(StatusMessage("KO", JsString("taskIds must be a non-empty array"))))
+      } else {
+        val tasks   = resolveTasksWithWriteAccess(taskIds, user)
+        val deleted = taskRepository.bulkDeleteTasks(tasks.map(_.id))
+        Ok(Json.obj("requested" -> taskIds.length, "deleted" -> deleted))
+      }
+    }
+  }
+
+  /**
+    * Bulk archive / unarchive tasks. Same access semantics as `bulkDelete`:
+    * 403 on any unauthorized task, 404 on any missing id.
+    */
+  def bulkArchive: Action[JsValue] = Action.async(bodyParsers.json) { implicit request =>
+    this.sessionManager.authenticatedRequest { implicit user =>
+      val taskIds  = (request.body \ "taskIds").asOpt[List[Long]].getOrElse(List.empty)
+      val archived = (request.body \ "archived").asOpt[Boolean].getOrElse(true)
+      if (taskIds.isEmpty) {
+        BadRequest(Json.toJson(StatusMessage("KO", JsString("taskIds must be a non-empty array"))))
+      } else {
+        val tasks = resolveTasksWithWriteAccess(taskIds, user)
+        taskRepository.bulkArchiveTasks(tasks.map(_.id), archived)
+        webSocketProvider.sendMessage(
+          WebSocketMessages.tasksUpdated(tasks, Some(WebSocketMessages.userSummary(user)))
+        )
+        NoContent
+      }
+    }
+  }
+
+  /**
+    * Bulk reassign the reviewer on each task in `taskIds` to `userId`.
+    * Only tasks whose reviews are still open (status 0 or 3) are updated.
+    */
+  def bulkReassign: Action[JsValue] = Action.async(bodyParsers.json) { implicit request =>
+    this.sessionManager.authenticatedRequest { implicit user =>
+      val taskIds = (request.body \ "taskIds").asOpt[List[Long]].getOrElse(List.empty)
+      val userId  = (request.body \ "userId").asOpt[Long].getOrElse(-1L)
+      if (taskIds.isEmpty || userId < 0) {
+        BadRequest(
+          Json.toJson(StatusMessage("KO", JsString("taskIds and userId are required")))
+        )
+      } else {
+        val tasks   = resolveTasksWithWriteAccess(taskIds, user)
+        val updated = taskRepository.bulkReassignReviewer(tasks.map(_.id), userId)
+        Ok(Json.obj("requested" -> taskIds.length, "updated" -> updated))
+      }
+    }
+  }
+
+  /**
+    * Resolve each id to a task and assert the caller has write access on its
+    * parent project. Throws `NotFoundException` for any missing task or
+    * orphaned challenge, and `IllegalAccessException` from the first denial
+    * — both are mapped to 404/403 by the framework's exception handler.
+    */
+  private def resolveTasksWithWriteAccess(taskIds: List[Long], user: User): List[Task] =
+    taskIds.distinct.map { taskId =>
+      val task = this.dal
+        .retrieveById(taskId)
+        .getOrElse(throw new NotFoundException(s"Task $taskId not found"))
+      val challenge = dalManager.challenge
+        .retrieveById(task.parent)
+        .getOrElse(
+          throw new NotFoundException(s"Parent challenge ${task.parent} for task $taskId not found")
+        )
+      permission.hasWriteAccess(ProjectType(), user)(challenge.general.parent)
+      task
+    }
+}

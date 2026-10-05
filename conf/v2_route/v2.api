@@ -1,0 +1,10 @@
+### NoDocs ###
+POST    /*path                                      @org.maproulette.controllers.api.APIController.invalidAPIPath(path)
+### NoDocs ###
+PUT     /*path                                      @org.maproulette.controllers.api.APIController.invalidAPIPath(path)
+### NoDocs ###
+GET     /*path                                      @org.maproulette.controllers.api.APIController.invalidAPIPath(path)
+### NoDocs ###
+DELETE  /*path                                      @org.maproulette.controllers.api.APIController.invalidAPIPath(path)
+### NoDocs ###
+HEAD    /*path                                      @org.maproulette.controllers.api.APIController.invalidAPIPath(path)

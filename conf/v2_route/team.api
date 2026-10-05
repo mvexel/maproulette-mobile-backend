@@ -1,0 +1,589 @@
+###
+# tags: [ Team ]
+# operationId: team_create_a_new_team
+# summary: Create a new team
+# description: Creates a new team
+# responses:
+#   '201':
+#     description: The new team with unique id
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.Group'
+# requestBody:
+#   description: The JSON structure for the team (a group) body
+#   required: true
+#   content:
+#     application/json:
+#       schema:
+#         $ref: '#/components/schemas/org.maproulette.framework.model.Group'
+###
+POST    /team                                       @org.maproulette.framework.controller.TeamController.createTeam()
+###
+# tags: [ Team ]
+# operationId: team_update_a_team
+# summary: Update a team
+# description: Updates the team info (name, description, avatar URL)
+# responses:
+#   '200':
+#     description: The updated team
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.Group'
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID for the team
+# requestBody:
+#   description: The JSON structure for the team (a group) body
+#   required: true
+#   content:
+#     application/json:
+#       schema:
+#         $ref: '#/components/schemas/org.maproulette.framework.model.Group'
+###
+PUT    /team/:id                                    @org.maproulette.framework.controller.TeamController.updateTeam(id: Long)
+###
+# tags: [ Team ]
+# operationId: team_upload_avatar
+# summary: Upload a team avatar
+# description: Uploads an image to use as the team's avatar, replacing any avatar it already had, and points the team's avatar URL at it. Only a team admin may upload. Accepts PNG, JPEG, WebP and GIF up to 2MB. Unlike a team's challenge images this needs no review.
+# consumes: [ multipart/form-data ]
+# requestBody:
+#   required: true
+#   content:
+#     multipart/form-data:
+#       schema:
+#         type: object
+#         properties:
+#           image:
+#             type: string
+#             format: binary
+#             description: The image file to use as the team's avatar
+# responses:
+#   '200':
+#     description: The updated team
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.Group'
+#   '400':
+#     description: The file is missing, too large, or not a supported image
+#   '401':
+#     description: The user is not a team admin
+#   '404':
+#     description: The team was not found
+# parameters:
+#   - name: teamId
+#     in: path
+#     description: The id of the team whose avatar is being set
+#     required: true
+#     schema:
+#       type: integer
+###
+POST   /team/:teamId/avatar                         @org.maproulette.framework.controller.TeamController.uploadAvatar(teamId: Long)
+###
+# tags: [ Team ]
+# operationId: team_delete_avatar
+# summary: Remove a team's uploaded avatar
+# description: Deletes the team's uploaded avatar and clears the team's avatar URL if it was pointing at it. An external avatar URL the team set themselves is left untouched. Only a team admin may remove.
+# responses:
+#   '200':
+#     description: The updated team
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.Group'
+#   '401':
+#     description: The user is not a team admin
+#   '404':
+#     description: The team was not found
+# parameters:
+#   - name: teamId
+#     in: path
+#     description: The id of the team whose avatar is being removed
+#     required: true
+#     schema:
+#       type: integer
+###
+DELETE /team/:teamId/avatar                         @org.maproulette.framework.controller.TeamController.deleteAvatar(teamId: Long)
+###
+# tags: [ Team ]
+# operationId: team_get_avatar_file
+# summary: Serves a team's avatar
+# description: Returns the bytes of a team's uploaded avatar. Available anonymously, since the URL is consumed by plain img tags. The v query parameter is a cache-busting stamp written into the stored URL and is ignored by the server.
+# responses:
+#   '200':
+#     description: The avatar bytes
+#     content:
+#       image/*:
+#         schema:
+#           type: string
+#           format: binary
+#   '304':
+#     description: The caller's cached copy is still current
+#   '404':
+#     description: The team has no uploaded avatar
+# parameters:
+#   - name: teamId
+#     in: path
+#     description: The id of the team whose avatar to serve
+#     required: true
+#     schema:
+#       type: integer
+###
+GET    /team/:teamId/avatar/file                    @org.maproulette.framework.controller.TeamController.getAvatarFile(teamId: Long)
+###
+# tags: [ Team ]
+# operationId: team_retrieves_a_team
+# summary: Retrieves a team
+# description: Retrieves a team based on a specific ID.
+# responses:
+#   '200':
+#     description: The team
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.Group'
+#   '404':
+#     description: If the team is not found
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID for the team
+###
+GET     /team/:id                                   @org.maproulette.framework.controller.TeamController.retrieve(id:Long)
+###
+# tags: [ Team ]
+# operationId: team_find_teams_by_name
+# summary: Find teams by name
+# description: Search for teams by name
+# responses:
+#   '200':
+#     description: a list of matching teams
+#     content:
+#       application/json:
+#         schema:
+#           type: array
+#           items:
+#             $ref: '#/components/schemas/org.maproulette.framework.model.Group'
+#   '404':
+#     description: If the team is not found
+# parameters:
+#   - name: name
+#     in: query
+#     description: Name fragment to match
+#   - name: limit
+#     in: query
+#     description: Limit the number of results returned in the response. Default is 10 results
+#   - name: page
+#     in: query
+#     description: Used in conjunction with the limit parameter to page through X number of responses. Default value is 0, ie. first page.
+###
+GET     /teams/find                                 @org.maproulette.framework.controller.TeamController.find(name:String, limit:Int ?= 10, page:Int ?= 0)
+###
+# tags: [ Team ]
+# operationId: team_retrieves_users_who_are_members_of_a_team
+# summary: Retrieves users who are members of a team
+# description: Retrieves all the user members of a team
+# responses:
+#   '200':
+#     description: The users
+#     content:
+#       application/json:
+#         schema:
+#           type: array
+#           items:
+#             $ref: '#/components/schemas/org.maproulette.framework.model.TeamUser'
+#   '404':
+#     description: If the team is not found
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID for the team
+###
+GET     /team/:id/userMembers                       @org.maproulette.framework.controller.TeamController.teamUsers(id:Long)
+###
+# tags: [ Team ]
+# operationId: team_retrieves_all_team_memberships_for_a_user
+# summary: Retrieves all team memberships for a user
+# description: Retrieves all the given user's team memberships
+# responses:
+#   '200':
+#     description: The memberships
+#     content:
+#       application/json:
+#         schema:
+#           type: array
+#           items:
+#             $ref: '#/components/schemas/org.maproulette.framework.model.TeamUser'
+#   '404':
+#     description: If the team is not found
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID for the team
+###
+GET     /team/all/user/:userId/memberships          @org.maproulette.framework.controller.TeamController.userTeamMemberships(userId:Long)
+###
+# tags: [ Team ]
+# operationId: team_invites_a_user_to_join_a_team
+# summary: Invites a user to join a team
+# description: Invites a user to join a team with the given role
+# responses:
+#   '200':
+#     description: team user
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.TeamUser'
+#   '404':
+#     description: If the team or user is not found
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID for the team
+#   - name: userId
+#     in: path
+#     description: The ID for the user to invite
+#   - name: role
+#     in: path
+#     description: Either 1 - Admin, 2 - Write, 3 - Read
+###
+POST    /team/:id/user/:userId/invite/:role         @org.maproulette.framework.controller.TeamController.inviteUser(id:Long, userId:Long, role:Int)
+###
+# tags: [ Team ]
+# operationId: team_accept_an_invitation_to_join_a_team
+# summary: Accept an invitation to join a team
+# description: Accepts the logged-in user's invitation to join a team
+# responses:
+#   '200':
+#     description: Updated team user
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.TeamUser'
+#   '404':
+#     description: If the team is not found
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID for the team
+###
+PUT    /team/:id/invite/accept                      @org.maproulette.framework.controller.TeamController.acceptInvite(id:Long)
+###
+# tags: [ Team ]
+# operationId: team_decline_an_invitation_to_join_a_team
+# summary: Decline an invitation to join a team
+# description: Decline the logged-in user's invitation to join a team
+# responses:
+#   '200':
+#     description: A simple OK status message
+#   '404':
+#     description: If the team is not found
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID for the team
+###
+DELETE /team/:id/invite                             @org.maproulette.framework.controller.TeamController.declineInvite(id:Long)
+###
+# tags: [ Team ]
+# operationId: team_update_a_team_members_role
+# summary: Update a team member's role
+# description: Update a team member's granted role on the team
+# responses:
+#   '200':
+#     description: Updated team user
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.TeamUser'
+#   '404':
+#     description: If the team or user is not found
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID for the team
+#   - name: userId
+#     in: path
+#     description: The ID for the user to invite
+#   - name: role
+#     in: path
+#     description: Either 1 - Admin, 2 - Write, 3 - Read
+###
+PUT    /team/:id/user/:userId/role/:role            @org.maproulette.framework.controller.TeamController.updateMemberRole(id:Long, userId:Long, role:Int)
+###
+# tags: [ Team ]
+# operationId: team_remove_a_member_from_a_team
+# summary: Remove a member from a team
+# description: Remove a team member from a team
+# responses:
+#   '200':
+#     description: A simple OK status message
+#   '404':
+#     description: If the team or user is not found
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID for the team
+#   - name: userId
+#     in: path
+#     description: The ID for the user to remove
+###
+DELETE /team/:id/user/:userId/                      @org.maproulette.framework.controller.TeamController.removeTeamMember(id:Long, userId:Long)
+###
+# tags: [ Team ]
+# operationId: team_grant_role_to_team_on_project
+# summary: Grant role to team on project
+# description: Attaches a team to the project. What each member may then do follows the role they hold in the team -- owners and admins manage it, managers may edit, and plain members get nothing. The role in the path is retained for compatibility and is not read.
+# responses:
+#   '200':
+#     description: Ok with a standard message
+#   '401':
+#     description: The user is not authorized to make this request
+# parameters:
+#   - name: teamId
+#     in: path
+#     description: The id of the team to be granted the role
+#   - name: projectId
+#     in: path
+#     description: The id of the project on which the role is to be granted
+#   - name: role
+#     in: path
+#     description: Either 1 - Admin, 2 - Write, 3 - Read
+###
+POST     /team/:teamId/project/:projectId/:role  @org.maproulette.framework.controller.TeamController.addTeamToProject(teamId:Long, projectId:Long, role:Int)
+###
+# tags: [ Team ]
+# operationId: team_set_granted_role_of_team_on_project
+# summary: Set granted role of team on project
+# description: Attaches a team to the project, clearing any prior attachment. What each member may then do follows the role they hold in the team. The role in the path is retained for compatibility and is not read.
+# responses:
+#   '200':
+#     description: Ok with a standard message
+#   '401':
+#     description: The user is not authorized to make this request
+# parameters:
+#   - name: teamId
+#     in: path
+#     description: The id of the team to be granted the role
+#   - name: projectId
+#     in: path
+#     description: The id of the project on which the role is to be granted
+#   - name: role
+#     in: path
+#     description: Either 1 - Admin, 2 - Write, 3 - Read
+###
+PUT      /team/:teamId/project/:projectId/:role  @org.maproulette.framework.controller.TeamController.setTeamProjectRole(teamId:Long, projectId:Long, role:Int)
+###
+# tags: [ Team ]
+# operationId: team_remove_granted_roles_on_project_from_team
+# summary: Remove granted roles on project from team
+# description: Remove roles on a project from a team
+# responses:
+#   '200':
+#     description: Ok with a standard message
+#   '401':
+#     description: The user is not authorized to make this request
+# parameters:
+#   - name: teamId
+#     in: path
+#     description: The id of the team to be granted the role
+#   - name: projectId
+#     in: path
+#     description: The id of the project on which the role is to be granted
+###
+DELETE   /team/:teamId/project/:projectId        @org.maproulette.framework.controller.TeamController.removeTeamFromProject(teamId:Long, projectId:Long)
+###
+# tags: [ Team ]
+# operationId: team_add_team_to_challenge
+# summary: Add team to challenge
+# description: Attaches a team to a single challenge, which is how a team is let at one piece of work without being handed the whole project. What each member may then do follows the role they hold in the team. Distinct from a team owning the challenge, which additionally puts the team's image on its card. The role in the path is retained for symmetry with the project routes and is not read. Requires admin access to the challenge.
+# responses:
+#   '200':
+#     description: Ok with a standard message
+#   '401':
+#     description: The user is not authorized to make this request
+#   '404':
+#     description: The team or the challenge was not found
+# parameters:
+#   - name: teamId
+#     in: path
+#     description: The id of the team to be granted the role
+#   - name: challengeId
+#     in: path
+#     description: The id of the challenge on which the role is to be granted
+#   - name: role
+#     in: path
+#     description: Either 1 - Admin, 2 - Write, 3 - Read
+###
+POST     /team/:teamId/challenge/:challengeId/:role  @org.maproulette.framework.controller.TeamController.addTeamToChallenge(teamId:Long, challengeId:Long, role:Int)
+###
+# tags: [ Team ]
+# operationId: team_set_granted_role_of_team_on_challenge
+# summary: Set granted role of team on challenge
+# description: Attaches a team to a challenge, clearing any prior attachment. What each member may then do follows the role they hold in the team. The role in the path is not read. Requires admin access to the challenge.
+# responses:
+#   '200':
+#     description: Ok with a standard message
+#   '401':
+#     description: The user is not authorized to make this request
+#   '404':
+#     description: The team or the challenge was not found
+# parameters:
+#   - name: teamId
+#     in: path
+#     description: The id of the team to be granted the role
+#   - name: challengeId
+#     in: path
+#     description: The id of the challenge on which the role is to be granted
+#   - name: role
+#     in: path
+#     description: Either 1 - Admin, 2 - Write, 3 - Read
+###
+PUT      /team/:teamId/challenge/:challengeId/:role  @org.maproulette.framework.controller.TeamController.setTeamChallengeRole(teamId:Long, challengeId:Long, role:Int)
+###
+# tags: [ Team ]
+# operationId: team_remove_granted_roles_on_challenge_from_team
+# summary: Remove granted roles on challenge from team
+# description: Remove every role a team was granted on a challenge. Requires admin access to the challenge.
+# responses:
+#   '200':
+#     description: Ok with a standard message
+#   '401':
+#     description: The user is not authorized to make this request
+#   '404':
+#     description: The team or the challenge was not found
+# parameters:
+#   - name: teamId
+#     in: path
+#     description: The id of the team to be removed
+#   - name: challengeId
+#     in: path
+#     description: The id of the challenge from which the team is to be removed
+###
+DELETE   /team/:teamId/challenge/:challengeId        @org.maproulette.framework.controller.TeamController.removeTeamFromChallenge(teamId:Long, challengeId:Long)
+###
+# tags: [ Team ]
+# operationId: team_get_teams_managing_challenge
+# summary: Get teams managing challenge
+# description: Retrieve the teams granted a role on a challenge, each with the grants it holds there. Does not include the team that owns the challenge, which manages it by ownership rather than by grant.
+# responses:
+#   '200':
+#     description: The teams granted a role on the challenge
+#     content:
+#       application/json:
+#         schema:
+#           type: array
+#           items:
+#             $ref: '#/components/schemas/org.maproulette.framework.model.ManagingTeam'
+#   '401':
+#     description: The user is not authorized to make this request
+#   '404':
+#     description: The challenge was not found
+# parameters:
+#   - name: challengeId
+#     in: path
+#     description: The id of the challenge for which teams are desired
+###
+GET      /teams/challengeManagers/:challengeId   @org.maproulette.framework.controller.TeamController.getTeamsManagingChallenge(challengeId:Long)
+###
+# tags: [ Team ]
+# operationId: team_get_teams_granted_a_role_on_a_project
+# summary: Get teams granted a role on a project
+# description: Get teams granted an Admin, Write or Read role on a project
+# responses:
+#   '200':
+#     description: a list of teams
+#     content:
+#       application/json:
+#         schema:
+#           type: array
+#           items:
+#             $ref: '#/components/schemas/org.maproulette.framework.model.Group'
+#   '401':
+#     description: The user is not authorized to make this request
+# parameters:
+#   - name: projectId
+#     in: path
+#     description: The id of the project for which teams are desired
+###
+GET      /teams/projectManagers/:projectId        @org.maproulette.framework.controller.TeamController.getTeamsManagingProject(projectId:Long)
+###
+# tags: [ Team ]
+# operationId: team_get_team_projects
+# summary: Get the projects a team manages
+# description: Get the projects the team has been granted an Admin, Write or Read role on. Projects that are not enabled are only listed for a user granted a role on them
+# responses:
+#   '200':
+#     description: a list of projects
+#     content:
+#       application/json:
+#         schema:
+#           type: array
+#           items:
+#             $ref: '#/components/schemas/org.maproulette.framework.model.Project'
+#   '404':
+#     description: No team with the provided id was found
+# parameters:
+#   - name: id
+#     in: path
+#     description: The id of the team for which projects are desired
+###
+GET      /team/:id/projects                       @org.maproulette.framework.controller.TeamController.getTeamProjects(id:Long)
+###
+# tags: [ Team ]
+# operationId: team_get_team_challenges
+# summary: Get the challenges a team owns
+# description: Get the challenges that have been given to the team. A challenge is listed when both it and its parent project are enabled, or when the user is granted a role on that parent project
+# responses:
+#   '200':
+#     description: a list of challenges
+#     content:
+#       application/json:
+#         schema:
+#           type: array
+#           items:
+#             $ref: '#/components/schemas/org.maproulette.framework.model.Challenge'
+#   '404':
+#     description: No team with the provided id was found
+# parameters:
+#   - name: id
+#     in: path
+#     description: The id of the team for which challenges are desired
+###
+GET      /team/:id/challenges                     @org.maproulette.framework.controller.TeamController.getTeamChallenges(id:Long)
+###
+# tags: [ Team ]
+# operationId: team_delete_a_team
+# summary: Delete a team
+# description: Deletes a team with ID
+# responses:
+#   '200':
+#     description: A simple OK status message
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID for the team
+###
+DELETE /team/:id                                    @org.maproulette.framework.controller.TeamController.deleteTeam(id: Long)
+###
+# tags: [ Team ]
+# operationId: teams_managed
+# summary: List Teams the Current User Manages
+# description: Lists the teams the current user may give a challenge to, i.e. the ones whose content they run as owner, admin or manager. Teams they merely belong to are not included. Each team is paired with the role that qualified them and the url of the image that team puts on its challenges, when it has one.
+# responses:
+#   '200':
+#     description: The teams the user manages
+#     content:
+#       application/json:
+#         schema:
+#           type: array
+#           items:
+#             $ref: '#/components/schemas/org.maproulette.framework.model.ManagedTeam'
+#   '401':
+#     description: The user is not authorized to make this request
+###
+GET     /teams/managed                           @org.maproulette.framework.controller.TeamController.managedTeams()

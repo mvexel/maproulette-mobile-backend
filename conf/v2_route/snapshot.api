@@ -1,0 +1,73 @@
+###
+# tags: [ Snapshot ]
+# operationId: snapshot_records_a_snapshot_for_a_challenge
+# summary: Records a snapshot for a challenge
+# description: Creates a challenge snapshot.
+# responses:
+#   '200':
+#     description: Snapshot id of newly created snapshot
+# parameters:
+#   - name: challengeId
+#     in: path
+#     description: The id of the challenge to snapshot
+###
+GET     /snapshot/challenge/:challengeId/record     @org.maproulette.framework.controller.ChallengeSnapshotController.recordChallengeSnapshot(challengeId:Long)
+###
+# tags: [ Snapshot ]
+# operationId: snapshot_creates_a_csv_of_all_snapshots_for_a_challenge
+# summary: Creates a csv of all snapshots for a challenge.
+# description: Creates a csv export of all snaphshots for a challenge.
+# responses:
+#   '200':
+#     description: CSV of snapshot data for challenge
+# parameters:
+#   - name: challengeId
+#     in: path
+#     description: The id of the challenge
+###
+GET     /snapshot/challenge/:challengeId/export     @org.maproulette.framework.controller.ChallengeSnapshotController.exportChallengeSnapshots(challengeId:Long)
+###
+# tags: [ Snapshot ]
+# operationId: snapshot_gets_a_snapshot
+# summary: Gets a snapshot
+# description: Retrieves a challenge snapshot
+# responses:
+#   '200':
+#     description: Snapshot fetched
+# parameters:
+#   - name: id
+#     in: path
+#     description: The id of the snapshot to get
+###
+GET     /snapshot/:snapshotId                       @org.maproulette.framework.controller.ChallengeSnapshotController.retrieve(snapshotId:Long)
+###
+# tags: [ Snapshot ]
+# operationId: snapshot_deletes_a_snapshot
+# summary: Deletes a snapshot
+# description: Deletes a challenge snapshot
+# responses:
+#   '200':
+#     description: Snapshot deleted successfully
+# parameters:
+#   - name: id
+#     in: path
+#     description: The id of the snapshot to delete
+###
+DELETE  /snapshot/:snapshotId                       @org.maproulette.framework.controller.ChallengeSnapshotController.delete(snapshotId:Long)
+###
+# tags: [ Snapshot ]
+# operationId: snapshot_gets_the_list_of_snapshots_for_a_challenge
+# summary: Gets the list of snapshots for a challenge
+# description: Retrieves a list challenge snapshots
+# responses:
+#   '200':
+#     description: List of snapshots
+# parameters:
+#   - name: challengeId
+#     in: path
+#     description: The id of the challenge
+#   - name: includeAllData
+#     in: query
+#     description: Whether to include all the snapshot data or just a brief summary
+###
+GET     /snapshot/challenge/:challengeId/list       @org.maproulette.framework.controller.ChallengeSnapshotController.getSnapshotList(challengeId:Long, includeAllData:Boolean ?= false)

@@ -1,0 +1,24 @@
+.env
+.env.*
+conf/dev.conf
+conf/dev-*.conf
+conf/dev.conf.example
+conf/test.conf
+tmp/
+target/
+project/target/
+test/
+logs/
+dist/
+.bsp/
+.idea/
+*.iml
+*.keystore
+*.jks
+*.p12
+*.pem
+*.key
+RUNNING_PID
+
+# sbt-git and BuildInfo read the checkout metadata during `sbt dist`.
+# .git is used only in the builder stage; the runtime image copies the dist.

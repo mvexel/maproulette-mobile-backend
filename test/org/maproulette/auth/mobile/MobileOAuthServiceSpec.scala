@@ -1,0 +1,219 @@
+package org.maproulette.auth.mobile
+
+import akka.actor.ActorSystem
+import com.typesafe.config.ConfigFactory
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import java.time.Instant
+import java.util.Base64
+import org.mockito.ArgumentMatchers.{any, anyString, eq => eqM}
+import org.mockito.Mockito.{never, verify, when}
+import org.scalatest.BeforeAndAfterAll
+import org.scalatestplus.mockito.MockitoSugar
+import org.scalatestplus.play.PlaySpec
+import play.api.Configuration
+import scala.concurrent.Await
+import scala.concurrent.duration._
+
+class MobileOAuthServiceSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll {
+  private val actorSystem = ActorSystem(
+    "mobile-oauth-protocol-test",
+    ConfigFactory.parseString("""
+    mobile-oauth-dispatcher {
+      type = Dispatcher
+      executor = "thread-pool-executor"
+      thread-pool-executor.fixed-pool-size = 2
+    }
+  """)
+  )
+  private val settings = new MobileOAuthSettings(
+    Configuration(
+      ConfigFactory.parseString(
+        """
+    mobileOAuth {
+      enabled = true
+      callbackUri = "https://mr.example/oauth/mobile/callback"
+      clients = [
+        { id = "app", name = "Example", redirectUris = ["org.example.app:/callback"] },
+        { id = "other", name = "Other", redirectUris = ["org.example.other:/callback"] }
+      ]
+    }
+  """
+      )
+    )
+  )
+  private val verifier = "a" * 43
+  private val challenge = Base64.getUrlEncoder
+    .withoutPadding()
+    .encodeToString(
+      MessageDigest.getInstance("SHA-256").digest(verifier.getBytes(StandardCharsets.US_ASCII))
+    )
+  private val grant =
+    MobileGrant("family", 42L, "app", "tasks:read", "org.example.app:/callback", challenge)
+  private def params = Map(
+    "grant_type"    -> Seq("authorization_code"),
+    "client_id"     -> Seq("app"),
+    "redirect_uri"  -> Seq(grant.redirectUri),
+    "code_verifier" -> Seq(verifier),
+    "code"          -> Seq("code")
+  )
+  private def fixture(): (MobileOAuthService, MobileOAuthStore) = {
+    val store = mock[MobileOAuthStore]
+    when(store.findCode(anyString(), any[Instant])).thenReturn(Some(grant))
+    when(
+      store.redeemCode(
+        anyString(),
+        anyString(),
+        anyString(),
+        anyString(),
+        any[TokenHashes],
+        any[Instant]
+      )
+    ).thenReturn(Some(grant))
+    when(store.findRefresh(anyString(), any[Instant])).thenReturn(Some(grant))
+    when(store.rotate(anyString(), anyString(), any[TokenHashes], any[Instant]))
+      .thenReturn(Some(grant))
+    (new MobileOAuthService(store, settings, actorSystem), store)
+  }
+  override protected def afterAll(): Unit = {
+    Await.result(actorSystem.terminate(), 5.seconds)
+    super.afterAll()
+  }
+
+  "The mobile OAuth grant adapter" should {
+    "initialize disabled without requiring a new dispatcher in an existing deployment config" in {
+      val legacySystem = ActorSystem(
+        "disabled-mobile-oauth-test",
+        ConfigFactory
+          .parseString("akka.actor.provider=local")
+          .withFallback(ConfigFactory.load().withoutPath("mobile-oauth-dispatcher"))
+      )
+      try {
+        legacySystem.settings.config.hasPath("mobile-oauth-dispatcher") mustBe false
+        val store    = mock[MobileOAuthStore]
+        val disabled = new MobileOAuthSettings(Configuration.empty)
+        val service  = new MobileOAuthService(store, disabled, legacySystem)
+        Await.result(service.authenticate("A" * 43), 5.seconds) mustBe None
+        verify(store, never()).authenticate(anyString(), any[Instant])
+      } finally Await.result(legacySystem.terminate(), 5.seconds)
+    }
+
+    "use the library PKCE engine and issue opaque credentials through atomic storage" in {
+      val (service, store) = fixture()
+      val response         = Await.result(service.exchange(params, false), 5.seconds).toOption.get
+      response.accessToken.matches("[A-Za-z0-9_-]{43}") mustBe true
+      response.refreshToken.get.matches("[A-Za-z0-9_-]{43}") mustBe true
+      response.scope mustBe Some("tasks:read")
+      response.accessToken must not be response.refreshToken.get
+      verify(store).redeemCode(
+        eqM(MobileSecrets.hash("code")),
+        eqM("app"),
+        eqM(grant.redirectUri),
+        eqM(challenge),
+        any[TokenHashes],
+        any[Instant]
+      )
+    }
+
+    "reject incorrect PKCE, a different client, and mismatched redirects before issuing" in {
+      Seq(
+        params.updated("code_verifier", Seq("b" * 43)),
+        params
+          .updated("client_id", Seq("other"))
+          .updated("redirect_uri", Seq("org.example.other:/callback")),
+        params.updated("redirect_uri", Seq("org.example.app:/callback/extra")),
+        params - "code_verifier"
+      ).foreach { attempt =>
+        val (service, store) = fixture()
+        Await.result(service.exchange(attempt, false), 5.seconds).isLeft mustBe true
+        verify(store, never()).redeemCode(
+          anyString(),
+          anyString(),
+          anyString(),
+          anyString(),
+          any[TokenHashes],
+          any[Instant]
+        )
+      }
+    }
+
+    "reject duplicates, client secrets, alternate grants and scope escalation" in {
+      Seq(
+        params.updated("client_id", Seq("app", "other")),
+        params.updated("client_secret", Seq("embedded-secret")),
+        params.updated("grant_type", Seq("password")),
+        Map(
+          "grant_type"    -> Seq("refresh_token"),
+          "client_id"     -> Seq("app"),
+          "refresh_token" -> Seq("refresh"),
+          "scope"         -> Seq("tasks:write")
+        )
+      ).foreach { attempt =>
+        val (service, store) = fixture()
+        Await.result(service.exchange(attempt, false), 5.seconds).isLeft mustBe true
+        verify(store, never()).redeemCode(
+          anyString(),
+          anyString(),
+          anyString(),
+          anyString(),
+          any[TokenHashes],
+          any[Instant]
+        )
+        verify(store, never()).rotate(anyString(), anyString(), any[TokenHashes], any[Instant])
+      }
+      val (service, _) = fixture()
+      Await.result(service.exchange(params, true), 5.seconds).isLeft mustBe true
+    }
+
+    "delegate refresh to atomic rotation and convert committed replay failure to invalid_grant" in {
+      val (service, store) = fixture()
+      val refresh = Map(
+        "grant_type"    -> Seq("refresh_token"),
+        "client_id"     -> Seq("app"),
+        "refresh_token" -> Seq("refresh")
+      )
+      Await.result(service.exchange(refresh, false), 5.seconds).isRight mustBe true
+      verify(store).rotate(
+        eqM(MobileSecrets.hash("refresh")),
+        eqM("app"),
+        any[TokenHashes],
+        any[Instant]
+      )
+      when(store.rotate(anyString(), anyString(), any[TokenHashes], any[Instant])).thenReturn(None)
+      Await
+        .result(service.exchange(refresh, false), 5.seconds)
+        .left
+        .toOption
+        .get
+        .errorType mustBe "invalid_grant"
+    }
+
+    "require exact redirects, explicit scope, state and S256 at authorization" in {
+      val (service, _) = fixture()
+      val valid = Map(
+        "client_id"             -> Seq("app"),
+        "redirect_uri"          -> Seq(grant.redirectUri),
+        "response_type"         -> Seq("code"),
+        "scope"                 -> Seq("tasks:read"),
+        "state"                 -> Seq("native-state"),
+        "code_challenge"        -> Seq(challenge),
+        "code_challenge_method" -> Seq("S256")
+      )
+      service.authorization(valid).isRight mustBe true
+      Seq(
+        valid - "state",
+        valid - "scope",
+        valid.updated("code_challenge_method", Seq("plain")),
+        valid.updated("redirect_uri", Seq(grant.redirectUri + "?redirect=evil"))
+      ).foreach(attempt => service.authorization(attempt).isLeft mustBe true)
+    }
+
+    "remain disabled by default and reject removed clients at bearer validation" in {
+      new MobileOAuthSettings(Configuration.empty).enabled mustBe false
+      val (service, store) = fixture()
+      when(store.authenticate(anyString(), any[Instant]))
+        .thenReturn(Some(grant.copy(clientId = "removed")))
+      Await.result(service.authenticate(MobileSecrets.generate()), 5.seconds) mustBe None
+    }
+  }
+}

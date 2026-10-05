@@ -1,0 +1,61 @@
+name: maproulette-mobile-backend
+
+services:
+  db:
+    image: postgis/postgis:17-3.5
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: maproulette
+      POSTGRES_USER: maproulette
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the environment}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U maproulette -d maproulette"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  maproulette-mobile-api:
+    image: maproulette-mobile-backend:staging
+    build:
+      context: .
+      dockerfile: Dockerfile
+    pull_policy: build
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    command:
+      - /MapRouletteAPI/bin/maprouletteapi
+      - -Dhttp.port=80
+      - -Dpidfile.path=/dev/null
+      - -Dconfig.file=/MapRouletteAPI/conf/mobile-staging.conf
+    environment:
+      MR_DATABASE_URL: ${MR_DATABASE_URL:-jdbc:postgresql://db:5432/maproulette}
+      MR_DATABASE_USERNAME: ${MR_DATABASE_USERNAME:-maproulette}
+      MR_DATABASE_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the environment}
+      APPLICATION_SECRET: ${APPLICATION_SECRET:?Set APPLICATION_SECRET in the environment}
+      MAPROULETTE_SECRET_KEY: ${MAPROULETTE_SECRET_KEY:?Set MAPROULETTE_SECRET_KEY in the environment}
+      MR_OSM_SERVER: ${MR_OSM_SERVER:-https://master.apis.dev.openstreetmap.org}
+      MR_OAUTH_CONSUMER_KEY: ${MR_OAUTH_CONSUMER_KEY:?Set MR_OAUTH_CONSUMER_KEY in the environment}
+      MR_OAUTH_CONSUMER_SECRET: ${MR_OAUTH_CONSUMER_SECRET:?Set MR_OAUTH_CONSUMER_SECRET in the environment}
+      MR_OSM_OAUTH2SCOPE: read_prefs
+      MOBILE_OAUTH_CALLBACK_URI: ${MOBILE_OAUTH_CALLBACK_URI:-https://mr-api.osm.lol/oauth/mobile/callback}
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--max-time", "5", "http://127.0.0.1:80/ping"]
+      interval: 20s
+      timeout: 7s
+      start_period: 2m
+      retries: 3
+    networks:
+      - default
+      - ingress
+
+volumes:
+  postgres-data:
+
+networks:
+  ingress:
+    name: schaaltreinenhuis-ingress
+    external: true

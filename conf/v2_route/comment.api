@@ -1,0 +1,361 @@
+###
+# tags: [ Comment ]
+# operationId: comment_retrieves_a_comment
+# summary: Retrieves a comment
+# description: Retrieves a comment based on a specific ID.
+# responses:
+#   '200':
+#     description: The comment
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.Comment'
+#   '404':
+#     description: If the comment is not found
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID for the comment
+###
+GET     /comment/:id                                @org.maproulette.framework.controller.CommentController.retrieve(id:Long)
+###
+# tags: [ Comment ]
+# operationId: comment_retrieves_comments_for_a_task
+# summary: Retrieves comments for a Task
+# description: Retrieves all the comments for a specific Task
+# responses:
+#   '200':
+#     description: The comments
+#     content:
+#       application/json:
+#         schema:
+#           type: array
+#           items:
+#             $ref: '#/components/schemas/org.maproulette.framework.model.Comment'
+#   '404':
+#     description: If the Task is not found
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID for the Task
+###
+GET     /task/:id/comments                          @org.maproulette.framework.controller.CommentController.find(id:Long)
+###
+# tags: [ Comment ]
+# operationId: comment_retrieves_comments_sent_by_a_user
+# summary: Retrieves comments sent by a User
+# produces: [ application/json ]
+# description: Retrieves all the comments sent by a User
+# responses:
+#   '200':
+#     description: The comments
+#     schema:
+#       type: array
+#       items:
+#         type: object
+#         $ref: '#/definitions/org.maproulette.framework.model.Comment'
+#   '404':
+#     description: If the User is not found
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID of the User
+#   - name: searchTerm
+#     in: query
+#     description: An optional term to search within the comments
+#   - name: sort
+#     in: query
+#     description: The field by which to sort the comments (default is "created")
+#   - name: order
+#     in: query
+#     description: The order of sorting, either "ASC" or "DESC" (default is "DESC")
+#   - name: limit
+#     in: query
+#     description: The maximum number of comments to return (default is 25)
+#   - name: page
+#     in: query
+#     description: The page number for pagination (default is 0)
+###
+GET     /comments/user/:id                          @org.maproulette.framework.controller.CommentController.findUserComments(id:Long, searchTerm:Option[String], sort:String ?= "created", order:String ?= "DESC", limit:Int ?= 25, page:Int ?= 0)
+###
+# tags: [ Comment ]
+# operationId: comment_search_task_comments
+# summary: Search task comments
+# description: Searches all task comments by a text search term
+# responses:
+#   '200':
+#     description: A list of matching task comments
+#     content:
+#       application/json:
+#         schema:
+#           type: array
+#           items:
+#             $ref: '#/components/schemas/org.maproulette.framework.model.Comment'
+# parameters:
+#   - name: q
+#     in: query
+#     description: The search term to match against comment text
+#   - name: limit
+#     in: query
+#     description: The maximum number of comments to return (default is 25)
+#   - name: page
+#     in: query
+#     description: The page number for pagination (default is 0)
+###
+GET     /comments/search                            @org.maproulette.framework.controller.CommentController.searchComments(q:String, limit:Int ?= 25, page:Int ?= 0)
+###
+# tags: [ Comment ]
+# operationId: comment_retrieves_comments_sent_by_user_id
+# summary: Retrieves comments sent by a User
+# produces: [ application/json ]
+# description: Retrieves all the challenge comments sent by a User
+# responses:
+#   '200':
+#     description: The comments
+#     schema:
+#       type: array
+#       items:
+#         type: object
+#         $ref: '#/definitions/org.maproulette.framework.model.ChallengeComment'
+#   '404':
+#     description: If the User is not found
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID of the User
+#   - name: searchTerm
+#     in: query
+#     description: An optional term to search within the comments
+#   - name: sort
+#     in: query
+#     description: The field by which to sort the comments (default is "created")
+#   - name: order
+#     in: query
+#     description: The order of sorting, either "ASC" or "DESC" (default is "DESC")
+#   - name: limit
+#     in: query
+#     description: The maximum number of comments to return (default is 25)
+#   - name: page
+#     in: query
+#     description: The page number for pagination (default is 0)
+###
+GET     /challengeComments/user/:id                          @org.maproulette.framework.controller.CommentController.findUserChallengeComments(id:Long, searchTerm:Option[String], sort:String ?= "created", order:String ?= "DESC", limit:Int ?= 25, page:Int ?= 0)
+###
+# tags: [ Comment ]
+# operationId: comment_search_challenge_comments
+# summary: Search challenge comments
+# description: Searches all challenge comments by a text search term
+# responses:
+#   '200':
+#     description: A list of matching challenge comments
+#     content:
+#       application/json:
+#         schema:
+#           type: array
+#           items:
+#             $ref: '#/components/schemas/org.maproulette.framework.model.ChallengeComment'
+# parameters:
+#   - name: q
+#     in: query
+#     description: The search term to match against comment text
+#   - name: limit
+#     in: query
+#     description: The maximum number of comments to return (default is 25)
+#   - name: page
+#     in: query
+#     description: The page number for pagination (default is 0)
+###
+GET     /challengeComments/search                   @org.maproulette.framework.controller.CommentController.searchChallengeComments(q:String, limit:Int ?= 25, page:Int ?= 0)
+###
+# tags: [ Comment ]
+# operationId: comment_adds_comment_to_task
+# summary: Adds comment to Task
+# description: Adds a comment to a Task
+# responses:
+#   '201':
+#     description: The comment that was added with the new ID
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.Comment'
+#   '400':
+#     description: If the request lacks the comment or the comment is empty
+#   '404':
+#     description: If the Task is not found
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID for the Task
+#   - name: actionId
+#     in: query
+#     description: An optional action ID that may be associated with the comment
+# requestBody:
+#   description: The JSON structure for the Comments body
+#   required: true
+#   content:
+#     application/json:
+#       schema:
+#         type: object
+#         properties:
+#           comment:
+#             type: string
+#             description: User's comment.
+#             example: "This is an example comment."
+#         required:
+#           - comment
+###
+POST    /task/:id/comment                           @org.maproulette.framework.controller.CommentController.add(id:Long, actionId:Option[Long])
+###
+# tags: [ Comment ]
+# operationId: comment_adds_comment_to_each_task_in_a_task_bundle
+# summary: Adds comment to each Task in a Task Bundle
+# description: Adds a comment to each Task in Bundle
+# responses:
+#   '201':
+#     description: The task bundle
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/TaskBundle'
+#   '400':
+#     description: If the request lacks the comment or the comment is empty
+#   '404':
+#     description: If the bundle is not found
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID for the bundle
+#   - name: actionId
+#     in: query
+#     description: An optional action ID that may be associated with the comment
+# requestBody:
+#   description: The JSON structure for the Comments body
+#   required: true
+#   content:
+#     application/json:
+#       schema:
+#         type: object
+#         properties:
+#           comment:
+#             type: string
+#             description: User's comment.
+#             example: "This is an example comment."
+#         required:
+#           - comment
+###
+POST    /taskBundle/:id/comment                     @org.maproulette.framework.controller.CommentController.addToBundleTasks(id:Long, actionId:Option[Long])
+###
+# tags: [ Comment ]
+# operationId: comment_update_comment_on_task
+# summary: Update comment on Task
+# description: Updates an existing comment on a Task. Only the original user who made the comment or a SuperUser can update the comment
+# responses:
+#   '200':
+#     description: The comment that was added with the new ID
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.Comment'
+#   '400':
+#     description: If the request lacks the comment or the comment is empty
+#   '401':
+#     description: If the user is not the original user who made the comment or a super user
+#   '404':
+#     description: If the Task is not found
+# parameters:
+#   - name: commentId
+#     in: path
+#     description: The ID of the original comment
+# requestBody:
+#   description: The JSON structure for the Comments body
+#   required: true
+#   content:
+#     application/json:
+#       schema:
+#         type: object
+#         properties:
+#           comment:
+#             type: string
+#             description: User's comment.
+#             example: "This is an example comment."
+#         required:
+#           - comment
+###
+PUT    /comment/:commentId                          @org.maproulette.framework.controller.CommentController.update(commentId:Long)
+###
+# tags: [ Comment ]
+# operationId: comment_deletes_comment_from_task
+# summary: Deletes comment from Task
+# description: Deletes a comment from the specific Task
+# responses:
+#   '200':
+#     description: The deletion was successful
+#   '404':
+#     description: If the Task or Comment is not found
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID for the Task
+#   - name: commentId
+#     in: path
+#     description: The ID for the Comment
+###
+DELETE  /task/:id/comment/:commentId                @org.maproulette.framework.controller.CommentController.delete(id:Long, commentId:Long)
+###
+# tags: [ Comment ]
+# operationId: comment_adds_comment_to_challenge
+# summary: Adds comment to Challenge
+# description: Adds a comment to a Task
+# responses:
+#   '201':
+#     description: The comment that was added with the new ID
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.ChallengeComment'
+#   '400':
+#     description: If the request lacks the comment or the comment is empty
+#   '404':
+#     description: If the Challenge is not found
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID for the Challenge
+# requestBody:
+#   description: The JSON structure for the Comments body
+#   required: true
+#   content:
+#     application/json:
+#       schema:
+#         type: object
+#         properties:
+#           comment:
+#             type: string
+#             description: User's comment.
+#             example: "This is an example comment."
+#         required:
+#           - comment
+###
+POST    /challenge/:id/comment                           @org.maproulette.framework.controller.CommentController.addChallengeComment(id:Long)
+###
+# tags: [ Comment ]
+# operationId: comment_retrieves_comments_for_a_challenge
+# summary: Retrieves comments for a Challenge
+# description: Retrieves all the challenge comments for a specific Challenge
+# responses:
+#   '200':
+#     description: The comments
+#     content:
+#       application/json:
+#         schema:
+#           type: array
+#           items:
+#             $ref: '#/components/schemas/org.maproulette.framework.model.ChallengeComment'
+#   '404':
+#     description: If the Challenge is not found
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID for the Challenge
+###
+GET     /challenge/:id/challengeComments                          @org.maproulette.framework.controller.CommentController.findChallengeComments(id:Long)

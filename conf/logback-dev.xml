@@ -1,0 +1,58 @@
+<configuration debug="true" scan="true" scanPeriod="5 seconds">
+    <conversionRule conversionWord="coloredLevel" converterClass="play.api.libs.logback.ColoredLevel" />
+
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <Pattern>%date{"HH:mm:ss.SSS"} %coloredLevel[%marker][%thread] %logger{15}.%M\(%file:%line\) - %message%n%xException</Pattern>
+        </encoder>
+        <includeCallerData>true</includeCallerData>
+    </appender>
+
+    <!-- Appender for general logs. This will drop TRACE/DEBUG/INFO logs when the queue fills. -->
+    <appender name="ASYNC_GENERAL" class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="STDOUT" />
+        <queueSize>256</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <includeCallerData>true</includeCallerData>
+    </appender>
+
+    <!-- Appender for Access Logs, set to not drop TRACE/DEBUG/INFO logs when the queue fills -->
+    <appender name="ASYNC_ACCESS" class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="STDOUT" />
+        <queueSize>512</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <includeCallerData>true</includeCallerData>
+    </appender>
+
+    <!-- Logger for Access Logs written by HttpLoggingFilter -->
+    <logger name="AccessLogger" level="INFO" additivity="false">
+        <appender-ref ref="ASYNC_ACCESS" />
+    </logger>
+
+    <logger name="org.maproulette" level="DEBUG" />
+
+    <!-- Set this to TRACE to see the client's provided HTTP request headers -->
+    <!-- Do not use TRACE in a production environment since requests with apiKey header will have the key written to the log -->
+    <logger name="org.maproulette.filters" level="DEBUG" />
+
+    <!-- Set psql to DEBUG to see the sql statements sent to the db -->
+    <logger name="org.maproulette.framework.psql" level="INFO" />
+
+    <!-- Use DEBUG for play to see useful information and the HTTP requests to overpass. At TRACE level it dumps tcp transactions, so avoid trace level. -->
+    <logger name="play" level="DEBUG" />
+    <!-- Playframework database evolutions, DEBUG will log the SQL statements executed by evolutions -->
+    <logger name="play.api.db.evolutions" level="DEBUG" />
+    <!-- Use TRACE for play.api.mvc to see what is happening with the HTTP requests to the backend -->
+    <logger name="play.api.mvc" level="INFO" />
+
+    <!-- More akka logging tweaks can be made in the dev.conf, akka.actor.debug -->
+    <logger name="akka" level="INFO" />
+
+    <!-- Unknown if these actually do anything -->
+    <logger name="application" level="TRACE" />
+    <logger name="controllers" level="TRACE" />
+
+    <root level="INFO">
+        <appender-ref ref="ASYNC_GENERAL" />
+    </root>
+</configuration>

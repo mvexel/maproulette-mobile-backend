@@ -1,0 +1,2193 @@
+/*
+ * Copyright (C) 2020 MapRoulette contributors (see CONTRIBUTORS.md).
+ * Licensed under the Apache License, Version 2.0 (see LICENSE).
+ */
+package org.maproulette.controllers.api
+
+import java.io._
+import java.sql.Connection
+import java.util.zip.{ZipEntry, ZipOutputStream}
+import akka.util.ByteString
+
+import javax.inject.Inject
+import org.apache.commons.lang3.StringUtils
+import org.joda.time.{DateTime, DateTimeZone}
+import org.maproulette.Config
+import org.maproulette.controllers.ParentController
+import org.maproulette.data._
+import org.maproulette.exception.{
+  InvalidException,
+  MPExceptionUtil,
+  NotFoundException,
+  StatusMessage
+}
+import org.maproulette.framework.model._
+import org.maproulette.framework.psql.Paging
+import org.maproulette.framework.service.{ServiceManager, TagService}
+import org.maproulette.framework.mixins.{ParentMixin, TagsControllerMixin}
+import org.maproulette.models.dal._
+import org.maproulette.models.dal.mixin.TagDALMixin
+import org.maproulette.permissions.Permission
+import org.maproulette.provider.ChallengeProvider
+import org.maproulette.session.{SearchParameters, SessionManager}
+import org.maproulette.utils.Utils
+import org.maproulette.utils.CSVEncoder
+import play.api.http.HttpEntity
+import play.api.libs.Files
+import play.api.libs.json._
+import anorm._
+import anorm.SqlParser
+import play.api.libs.ws.WSClient
+import play.api.mvc._
+import play.shaded.oauth.oauth.signpost.exception.OAuthNotAuthorizedException
+
+import scala.concurrent.{Future, Promise}
+import scala.io.Source
+import scala.util.{Failure, Success}
+
+/**
+  * The challenge controller handles all operations for the Challenge objects.
+  * This includes CRUD operations and searching/listing.
+  * See ParentController for more details on parent object operations
+  * See CRUDController for more details on CRUD object operations
+  *
+  * @author cuthbertm
+  */
+class ChallengeController @Inject() (
+    override val childController: TaskController,
+    override val sessionManager: SessionManager,
+    override val actionManager: ActionManager,
+    override val dal: ChallengeDAL,
+    dalManager: DALManager,
+    override val tagService: TagService,
+    challengeProvider: ChallengeProvider,
+    val serviceManager: ServiceManager,
+    wsClient: WSClient,
+    permission: Permission,
+    override val config: Config,
+    components: ControllerComponents,
+    override val bodyParsers: PlayBodyParsers,
+    implicit val snapshotManager: SnapshotManager
+) extends AbstractController(components)
+    with ParentController[Challenge, Task]
+    with TagsControllerMixin[Challenge]
+    with ParentMixin {
+
+  import scala.concurrent.ExecutionContext.Implicits.global
+
+  // Upper bound on the place boundary POSTed to exploreChallenges. Generous
+  // next to the 100k default, since a county boundary alone runs to tens of
+  // kilobytes, but still bounded -- the endpoint takes unauthenticated calls.
+  private val maxPolygonBodyBytes = 2L * 1024 * 1024
+
+  // json reads for automatically reading Challenges from a posted json body
+  override implicit val tReads: Reads[Challenge] = Challenge.reads.challengeReads
+  // json writes for automatically writing Challenges to a json body response
+  override implicit val tWrites: Writes[Challenge] = Challenge.writes.challengeWrites
+  // json writes for automatically writing Tasks to a json body response
+  override protected val cWrites: Writes[Task] = Task.TaskFormat
+  // json reads for automatically reading tasks from a posted json body
+  override protected val cReads: Reads[Task] = Task.TaskFormat
+  // The type of object that this controller deals with.
+  override implicit val itemType: ItemType = ChallengeType()
+  override implicit val tagType: String    = Challenge.TABLE
+
+  // implicit writes used for various JSON responses
+  implicit val commentWrites                                    = Comment.writes
+  implicit val pointWrites                                      = ClusteredPoint.pointWrites
+  implicit val clusteredPointWrites                             = ClusteredPoint.clusteredPointWrites
+  implicit val taskClusterWrites                                = TaskCluster.taskClusterWrites
+  implicit val searchLocationWrites                             = SearchParameters.locationWrites
+  implicit val challengeListingWrites: Writes[ChallengeListing] = Json.writes[ChallengeListing]
+
+  override def dalWithTags: TagDALMixin[Challenge] = dal
+
+  /**
+    * Function can be implemented to extract more information than just the default create data,
+    * to build other objects with the current object at the core. No data will be returned from this
+    * function, it purely does work in the background AFTER creating the current object
+    *
+    * @param body          The Json body of data
+    * @param createdObject The object that was created by the create function
+    * @param user          The user that is executing the function
+    */
+  override def extractAndCreate(body: JsValue, createdObject: Challenge, user: User)(
+      implicit c: Option[Connection] = None
+  ): Unit = {
+    val localJson = (body \ "localGeoJSON").asOpt[JsValue] match {
+      case Some(local) => Some(Json.stringify(local))
+      case None        => None
+    }
+
+    if (!this.challengeProvider.buildTasks(user, createdObject, localJson)) {
+      super.extractAndCreate(body, createdObject, user)
+    }
+    // we need to elevate the user permissions to super users to extract and create the tags
+    this.extractTags(body, createdObject, User.superUser)
+  }
+
+  /**
+    * Overrides the default read method to return a BaseChallenge (flattened structure)
+    * instead of the nested Challenge structure
+    *
+    * @param id The id of the challenge to retrieve
+    * @return 200 Ok with BaseChallenge json, 404 if not found
+    */
+  override def read(implicit id: Long): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.userAwareRequest { implicit user =>
+      implicit val baseChallengeWrites = BaseChallenge.baseChallengeWrites
+      this.dal.retrieveBaseChallengeById match {
+        case Some(value) => Ok(Json.toJson(value))
+        case None        => NotFound
+      }
+    }
+  }
+
+  /**
+    * Gets a json list of tags of the challenge
+    *
+    * @param id The id of the challenge containing the tags
+    * @return The html Result containing json array of tags
+    */
+  def getTagsForChallenge(id: Long): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.userAwareRequest { implicit user =>
+      Ok(Json.toJson(this.getTags(id)))
+    }
+  }
+
+  /**
+    * Gets a json object of tags for a batch of challenges, keyed by challenge id.
+    * Allows clients (e.g. the map view) to fetch tags for many challenges in a single
+    * request instead of issuing one request per challenge.
+    *
+    * @param challengeIds A comma separated list of challenge ids
+    * @return The html Result containing a json object mapping challenge id to a json array of tags
+    */
+  def getTagsForChallenges(challengeIds: String): Action[AnyContent] = Action.async {
+    implicit request =>
+      this.sessionManager.userAwareRequest { implicit user =>
+        val ids               = Utils.toLongList(challengeIds).getOrElse(List.empty)
+        val tagsByChallengeId = this.serviceManager.tag.listByChallenges(ids)
+        Ok(Json.toJson(tagsByChallengeId.map { case (id, tags) => id.toString -> tags }))
+      }
+  }
+
+  /**
+    * Gets the geo json for all the tasks associated with the challenge
+    *
+    * @param challengeId  The challenge with the geojson
+    * @param statusFilter Filtering by status of the tasks
+    * @param reviewStatusFilter Filtering by review status of the tasks
+    * @param priorityFilter Filtering by priority of the tasks
+    * @param timezone Timezone offset for date formatting
+    * @param bbox Optional bounding box parameter (left,bottom,right,top)
+    * @param filename Optional filename for the export
+    * @return
+    */
+  def getChallengeGeoJSON(
+      challengeId: Long,
+      statusFilter: String,
+      reviewStatusFilter: String,
+      priorityFilter: String,
+      timezone: String,
+      bbox: String,
+      filename: String
+  ): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.userAwareRequest { implicit user =>
+      SearchParameters.withSearch { implicit params =>
+        this.dal.retrieveById(challengeId) match {
+          case Some(c) =>
+            val status = if (StringUtils.isEmpty(statusFilter)) {
+              None
+            } else {
+              Some(Utils.split(statusFilter).map(_.toInt))
+            }
+            val reviewStatus = if (StringUtils.isEmpty(reviewStatusFilter)) {
+              None
+            } else {
+              Some(Utils.split(reviewStatusFilter).map(_.toInt))
+            }
+            val priority = if (StringUtils.isEmpty(priorityFilter)) {
+              None
+            } else {
+              Some(Utils.split(priorityFilter).map(_.toInt))
+            }
+            val boundingBox = if (StringUtils.isEmpty(bbox)) {
+              None
+            } else {
+              val coordStrings = bbox.split(",").map(_.trim)
+              if (coordStrings.length != 4) {
+                throw new InvalidException(
+                  s"Invalid bbox '${bbox}'. Expected 4 comma-separated components: left,bottom,right,top"
+                )
+              }
+
+              val coords =
+                try {
+                  coordStrings.map(_.toDouble)
+                } catch {
+                  case _: NumberFormatException =>
+                    throw new InvalidException(
+                      s"Invalid bbox '${bbox}'. Found a non-numeric coordinate."
+                    )
+                }
+
+              Some((coords(0), coords(1), coords(2), coords(3))) // left, bottom, right, top
+            }
+
+            val attachmentFilename = if (StringUtils.isEmpty(filename)) {
+              "challenge_geojson.json"
+            } else {
+              filename
+            }
+
+            Result(
+              header = ResponseHeader(
+                OK,
+                Map(CONTENT_DISPOSITION -> s"attachment; filename=${attachmentFilename}")
+              ),
+              body = HttpEntity.Strict(
+                ByteString(
+                  this.dal
+                    .getChallengeGeometry(
+                      challengeId,
+                      status,
+                      reviewStatus,
+                      priority,
+                      Some(params),
+                      timezone,
+                      boundingBox
+                    )
+                ),
+                Some("application/json;charset=utf-8;header=present")
+              )
+            )
+          case None => throw new NotFoundException(s"No challenge with id $challengeId found.")
+        }
+      }
+    }
+  }
+
+  /**
+    * Gets the tasks in the form of ClusteredPoints, which is just a task with limited information,
+    * and the geometry associated with it is just the centroid of the task geometry
+    *
+    * @param challengeId  The challenge id, ie. the parent of the tasks
+    * @param statusFilter Filter by status of the task (@deprecated - please use search paramter tStatus)
+    * @param limit        limit the number of tasks returned
+    * @param excludeLocked Don't cluster locked tasks
+    * @return A list of ClusteredPoint's
+    */
+  def getClusteredPoints(
+      challengeId: Long,
+      statusFilter: String,
+      limit: Int,
+      excludeLocked: Boolean
+  ): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.userAwareRequest { implicit user =>
+      SearchParameters.withSearch { implicit params =>
+        var searchParams = params
+
+        // For Backward compatibility
+        val filter = if (StringUtils.isEmpty(statusFilter)) {
+          None
+        } else {
+          searchParams = params.copy(taskParams =
+            params.taskParams.copy(taskStatus = Some(Utils.split(statusFilter).map(_.toInt)))
+          )
+        }
+
+        val result = this.dal.getClusteredPoints(
+          User.userOrMocked(user),
+          challengeId,
+          searchParams,
+          limit,
+          excludeLocked
+        )
+        Ok(_insertReviewJSON(result))
+      }
+    }
+  }
+
+  /**
+    * Fetches and inserts usernames for 'reviewRequestedBy' and 'reviewBy'
+    */
+  private def _insertReviewJSON(tasks: List[ClusteredPoint]): JsValue = {
+    if (tasks.isEmpty) {
+      Json.toJson(List[JsValue]())
+    } else {
+      val mappers = Some(
+        this.serviceManager.user
+          .retrieveListById(tasks.map(t => t.pointReview.reviewRequestedBy.getOrElse(0L)), Paging())
+          .map(u => u.id -> Json.obj("username" -> u.name, "id" -> u.id))
+          .toMap
+      )
+
+      val reviewers = Some(
+        this.serviceManager.user
+          .retrieveListById(tasks.map(t => t.pointReview.reviewedBy.getOrElse(0L)), Paging())
+          .map(u => u.id -> Json.obj("username" -> u.name, "id" -> u.id))
+          .toMap
+      )
+
+      val metaReviewers = Some(
+        this.serviceManager.user
+          .retrieveListById(tasks.map(t => t.pointReview.metaReviewedBy.getOrElse(0L)), Paging())
+          .map(u => u.id -> Json.obj("username" -> u.name, "id" -> u.id))
+          .toMap
+      )
+
+      val jsonList = tasks.map { task =>
+        var updated = Json.toJson(task)
+        if (task.pointReview.reviewRequestedBy.getOrElse(0) != 0) {
+          val mapperJson =
+            Json.toJson(mappers.get(task.pointReview.reviewRequestedBy.get)).as[JsObject]
+          updated = Utils.insertIntoJson(updated, "reviewRequestedBy", mapperJson, true)
+        }
+        if (task.pointReview.reviewedBy.getOrElse(0) != 0) {
+          val reviewerJson =
+            Json.toJson(reviewers.get(task.pointReview.reviewedBy.get)).as[JsObject]
+          updated = Utils.insertIntoJson(updated, "reviewedBy", reviewerJson, true)
+        }
+        if (task.pointReview.metaReviewedBy.getOrElse(0) != 0) {
+          val metaReviewerJson =
+            Json.toJson(metaReviewers.get(task.pointReview.metaReviewedBy.get)).as[JsObject]
+          updated = Utils.insertIntoJson(updated, "metaReviewedBy", metaReviewerJson, true)
+        }
+
+        updated
+      }
+      Json.toJson(jsonList)
+    }
+  }
+
+  /**
+    * Gets a random task that is a child of the challenge, includes the notion of priority
+    *
+    * @param challengeId The challenge id that is the parent of the tasks that you would be searching for.
+    * @param taskSearch  Filter based on the name of the task
+    * @param tags        A comma separated list of tags that optionally can be used to further filter the tasks
+    * @param limit       Limit of how many tasks should be returned
+    * @param proximityId Id of task that you wish to find the next task based on the proximity of that task
+    * @return A list of Tasks that match the supplied filters
+    */
+  def getRandomTasksWithPriority(
+      challengeId: Long,
+      taskSearch: String,
+      tags: String,
+      limit: Int,
+      proximityId: Long
+  ): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.userAwareRequest { implicit user =>
+      SearchParameters.withSearch { p =>
+        val params = p.copy(
+          challengeParams = p.challengeParams.copy(challengeIds = Some(List(challengeId))),
+          taskParams = p.taskParams.copy(
+            taskSearch = Some(taskSearch),
+            taskTags = Some(Utils.split(tags))
+          )
+        )
+        val result = this.dalManager.task.getRandomTasksWithPriority(
+          User.userOrMocked(user),
+          params,
+          limit,
+          Utils.negativeToOption(proximityId)
+        )
+        result.foreach(task =>
+          this.actionManager.setAction(user, this.itemType.convertToItem(task.id), TaskViewed(), "")
+        )
+        Ok(Json.toJson(result))
+      }
+    }
+  }
+
+  /**
+    * Gets a random task that is a child of the challenge.
+    *
+    * @param challengeId The challenge id that is the parent of the tasks that you would be searching for.
+    * @param taskSearch  Filter based on the name of the task
+    * @param tags        A comma separated list of tags that optionally can be used to further filter the tasks
+    * @param limit       Limit of how many tasks should be returned
+    * @param proximityId Id of task that you wish to find the next task based on the proximity of that task
+    * @return A list of Tasks that match the supplied filters
+    */
+  def getRandomTasks(
+      challengeId: Long,
+      taskSearch: String,
+      tags: String,
+      limit: Int,
+      proximityId: Long
+  ): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.userAwareRequest { implicit user =>
+      SearchParameters.withSearch { p =>
+        val params = p.copy(
+          challengeParams = p.challengeParams.copy(challengeIds = Some(List(challengeId))),
+          taskParams = p.taskParams.copy(
+            taskSearch = Some(taskSearch),
+            taskTags = Some(Utils.split(tags))
+          )
+        )
+        val result = this.dalManager.task.getRandomTasks(
+          User.userOrMocked(user),
+          params,
+          limit,
+          None,
+          Utils.negativeToOption(proximityId)
+        )
+        result.foreach(task =>
+          this.actionManager.setAction(user, this.itemType.convertToItem(task.id), TaskViewed(), "")
+        )
+        Ok(Json.toJson(result))
+      }
+    }
+  }
+
+  /**
+    * Gets tasks near the given task id within the given challenge
+    *
+    * @param challengeId  The challenge id that is the parent of the tasks that you would be searching for
+    * @param proximityId  Id of task for which nearby tasks are desired
+    * @param excludeSelfLocked Also exclude tasks locked by requesting user
+    * @param limit        The maximum number of nearby tasks to return
+    * @return
+    */
+  def getNearbyTasks(
+      challengeId: Long,
+      proximityId: Long,
+      excludeSelfLocked: Boolean,
+      limit: Int
+  ): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.userAwareRequest { implicit user =>
+      val results = this.dalManager.task
+        .getNearbyTasks(User.userOrMocked(user), challengeId, proximityId, excludeSelfLocked, limit)
+      Ok(Json.toJson(results))
+    }
+  }
+
+  /**
+    * Gets available tasks within a bounding box
+    *
+    * @param challengeId  The challenge id that is the parent of the tasks that you would be searching for
+    * @param left         The left edge of the bounding box
+    * @param bottom       The bottom edge of the bounding box
+    * @param right        The right edge of the bounding box
+    * @param top          The top edge of the bounding box
+    * @param limit        The maximum number of nearby tasks to return
+    * @return
+    */
+  def getNearbyTasksWithinBoundingBox(
+      challengeId: Long,
+      left: Double,
+      bottom: Double,
+      right: Double,
+      top: Double,
+      limit: Int
+  ): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.userAwareRequest { implicit user =>
+      val results = this.dal
+        .getNearbyTasksWithinBoundingBox(
+          User.userOrMocked(user),
+          challengeId,
+          left,
+          bottom,
+          right,
+          top,
+          limit
+        )
+      Ok(Json.toJson(results))
+    }
+  }
+
+  /**
+    * Archive or unarchive a list of challenges
+    *
+    * @body ids  The list of challengeIds
+    * @body isArchived  boolean determining if challenges should be archived(true) or unarchived(false)
+    * @return
+    */
+  def bulkArchive(): Action[JsValue] = Action.async(bodyParsers.json) { implicit request =>
+    this.sessionManager.authenticatedRequest { implicit user =>
+      try {
+        val body         = request.body;
+        val challengeIds = (body \ "ids").as[List[Long]]
+        val archiving    = (body \ "isArchived").asOpt[Boolean].getOrElse(true);
+
+        dalManager.challenge.bulkArchive(challengeIds, archiving);
+
+        Ok(Json.toJson(archiving))
+      } catch {
+        case e: Exception =>
+          logger.error(e.getMessage, e)
+          BadRequest(Json.toJson(StatusMessage("KO", JsString(e.getMessage))))
+      }
+    }
+  }
+
+  /**
+    * Gets the next task in sequential order for the specified challenge
+    *
+    * @param challengeId   The current challenge id
+    * @param currentTaskId The current task id that is being viewed
+    * @param statusList    Filter by task status
+    * @return The next task in the list
+    */
+  def getSequentialNextTask(
+      challengeId: Long,
+      currentTaskId: Long,
+      statusList: String
+  ): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.userAwareRequest { implicit user =>
+      Ok(
+        Utils.getResponseJSON(
+          this.dalManager.task
+            .getNextTaskInSequence(challengeId, currentTaskId, Utils.toIntList(statusList)),
+          this.dalManager.task.getLastModifiedUser
+        )
+      );
+    }
+  }
+
+  /**
+    * Gets the previous task in sequential order for the specified challenge
+    *
+    * @param challengeId   The current challenge id
+    * @param currentTaskId The current task id that is being viewed
+    * @param statusList    Filter by task status
+    * @return The previous task in the list
+    */
+  def getSequentialPreviousTask(
+      challengeId: Long,
+      currentTaskId: Long,
+      statusList: String
+  ): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.userAwareRequest { implicit user =>
+      Ok(
+        Utils.getResponseJSON(
+          this.dalManager.task
+            .getPreviousTaskInSequence(challengeId, currentTaskId, Utils.toIntList(statusList)),
+          this.dalManager.task.getLastModifiedUser
+        )
+      );
+    }
+  }
+
+  /**
+    * Gets the featured challenges
+    *
+    * @param limit  The number of challenges to get
+    * @param offset The offset
+    * @return A Json array with the featured challenges
+    */
+  def getFeaturedChallenges(limit: Int, offset: Int): Action[AnyContent] = Action.async {
+    implicit request =>
+      this.sessionManager.userAwareRequest { implicit user =>
+        Ok(Json.toJson(this.dal.getFeaturedChallenges(limit, offset)))
+      }
+  }
+
+  /**
+    * Gets the hot (recently popular) challenges
+    *
+    * @param limit  The number of challenges to get
+    * @param offset The offset
+    * @return A Json array with the hot challenges
+    */
+  def getHotChallenges(limit: Int, offset: Int): Action[AnyContent] = Action.async {
+    implicit request =>
+      this.sessionManager.userAwareRequest { implicit user =>
+        Ok(Json.toJson(this.dal.getHotChallenges(limit, offset)))
+      }
+  }
+
+  def getChallengeTaskMarkers(id: Long): Action[AnyContent] =
+    Action.async { implicit request =>
+      this.sessionManager.userAwareRequest { implicit user =>
+        Ok(Json.toJson(this.dal.getChallengeTaskMarkers(id)))
+      }
+    }
+
+  /**
+    * Gets the preferred challenges (hottest, newest, featured)
+    *
+    * @param limit  The number of challenges to get
+    * @return A Json array with the hot challenges
+    */
+  def getPreferredChallenges(limit: Int): Action[AnyContent] = Action.async { implicit request =>
+    val all = Map(
+      "popular"  -> insertProjectJSON(this.dal.getHotChallenges(limit, 0)),
+      "newest"   -> insertProjectJSON(this.dal.getNewChallenges(limit, 0)),
+      "featured" -> insertProjectJSON(this.dal.getFeaturedChallenges(limit, 0))
+    )
+
+    Future(Ok(Json.toJson(all)))
+  }
+
+  def updateTaskPriorities(challengeId: Long): Action[AnyContent] = Action.async {
+    implicit request =>
+      implicit val requireSuperUser = true
+      this.sessionManager.authenticatedRequest { implicit user =>
+        val challengeIds = if (challengeId < 0) {
+          val challengeList = this.dal.find("%", -1)
+          challengeList.foreach { challenge =>
+            this.dal.updateTaskPriorities(user)(challenge.id)
+          }
+          challengeList.map(_.id)
+        } else {
+          this.dal.updateTaskPriorities(user)(challengeId)
+          List(challengeId)
+        }
+        Ok(
+          Json.toJson(
+            StatusMessage(
+              "OK",
+              JsString(s"Priorities updated for challenges ${challengeIds.mkString(",")}")
+            )
+          )
+        )
+      }
+  }
+
+  /**
+    * Resets the task instructions for all the children tasks of the supplied challenge
+    *
+    * @param challengeId id of the parent challenge
+    * @return 200 empty Ok
+    */
+  def resetTaskInstructions(challengeId: Long): Action[AnyContent] = Action.async {
+    implicit request =>
+      this.sessionManager.authenticatedRequest { implicit user =>
+        this.dal.resetTaskInstructions(user, challengeId)
+        Ok
+      }
+  }
+
+  /**
+    * Deletes all the tasks under a challenge based on the status of the task. If no filter for the
+    * status is supplied, then will delete all the tasks
+    *
+    * @param challengeId   The id of the challenge
+    * @param statusFilters A comma separated list of status' to filter the deletion by.
+    * @return
+    */
+  def deleteTasks(challengeId: Long, statusFilters: String = ""): Action[AnyContent] =
+    Action.async { implicit request =>
+      this.sessionManager.authenticatedRequest { implicit user =>
+        dalManager.challenge.retrieveById(challengeId) match {
+          case Some(c) =>
+            permission.hasWriteAccess(ProjectType(), user)(c.general.parent)
+            if (c.status.getOrElse(Challenge.STATUS_NA) == Challenge.STATUS_DELETING_TASKS) {
+              throw new InvalidException("Task deletion already in-progress for this challenge")
+            } else if (c.status.getOrElse(Challenge.STATUS_NA) == Challenge.STATUS_BUILDING) {
+              throw new InvalidException("Tasks cannot be deleted while challenge is building")
+            }
+
+            val originalStatus = c.status
+            dalManager.challenge
+              .update(Json.obj("status" -> Challenge.STATUS_DELETING_TASKS), user)(challengeId)
+            // Deleting a lot of tasks can be time consuming, so perform this asynchronously
+            Future {
+              try {
+                this.dal.deleteTasks(user, challengeId, Utils.split(statusFilters).map(_.toInt))
+              } finally {
+                // Check if original status is defined before reverting
+                originalStatus match {
+                  case Some(status) =>
+                    dalManager.challenge.update(Json.obj("status" -> status), user)(challengeId)
+                  case None =>
+                    throw new InvalidException(
+                      "Original status is not defined, cannot revert status."
+                    )
+                }
+              }
+            }
+            Ok
+          case None => throw new NotFoundException(s"No challenge found with id $challengeId")
+        }
+      }
+    }
+
+  /**
+    * Retrieve all the comments for a specific challenge
+    *
+    * @param challengeId The id of the challenge
+    * @return A list of comments that exist for a specific challenge
+    */
+  def retrieveComments(challengeId: Long, limit: Int, page: Int): Action[AnyContent] =
+    Action.async { implicit request =>
+      this.sessionManager.authenticatedRequest { implicit user =>
+        Ok(
+          Json.toJson(
+            this.serviceManager.comment
+              .find(List.empty, List(challengeId), List.empty, Paging(limit, page))
+          )
+        )
+      }
+    }
+
+  /**
+    * Extracts all the comments and returns them in a nice format like csv.
+    *
+    * @param challengeId The id of the challenge
+    * @param limit       limit the number of results
+    * @param page        Used for paging
+    * @return A csv list of comments for the challenge
+    */
+  def extractComments(challengeId: Long, limit: Int, page: Int): Action[AnyContent] = Action.async {
+    implicit request =>
+      this.sessionManager.authenticatedRequest { implicit user =>
+        Result(
+          header = ResponseHeader(
+            OK,
+            Map(
+              CONTENT_DISPOSITION -> s"attachment; filename=challenge_${challengeId}_comments.csv"
+            )
+          ),
+          body = HttpEntity.Strict(
+            ByteString(
+              "ProjectID,ChallengeID,TaskID,OSM_UserID,OSM_Username,Comment,TaskLink\n"
+            ).concat(
+              ByteString(extractComments(challengeId, limit, page, request.host).mkString("\n"))
+            ),
+            Some("text/csv; header=present")
+          )
+        )
+      }
+  }
+
+  /**
+    * Extracts all the tasks belonging to the challenges in the project and
+    * returns them in a nice format like csv.
+    *
+    * @param projectId    The id of the project
+    * @param cId          Optional list of challenges
+    * @param timezone     The timezone offset (ie. -07:00)
+    * @return A csv list of tasks for the project
+    */
+  def extractAllTaskSummaries(
+      projectId: Long,
+      cId: Option[String],
+      timezone: String = Utils.UTC_TIMEZONE
+  ): Action[AnyContent] = {
+    var challengeIds: List[Long] = cId match {
+      case Some(c) => Utils.toLongList(c).getOrElse(List())
+      case None    => List()
+    }
+    if (challengeIds.isEmpty) {
+      challengeIds = this.serviceManager.project.retrieve(projectId) match {
+        case Some(p) => this.serviceManager.project.children(projectId).map(c => c.id)
+        case None    => throw new NotFoundException(s"Project with id $projectId not found")
+      }
+    }
+    this._extractTaskSummaries(
+      challengeIds,
+      -1,
+      0,
+      "-1",
+      "",
+      "",
+      s"project_${projectId}_tasks.csv",
+      timezone = timezone
+    )
+  }
+
+  /**
+    * Extracts all the tasks and returns them in a nice format like csv.
+    *
+    * @param challengeId The id of the challenge
+    * @param limit       limit the number of results
+    * @param page        Used for paging
+    * @param timezone    The timezone offset (ie. -07:00)
+    * @return A csv list of tasks for the challenge
+    */
+  def extractTaskSummaries(
+      challengeId: Long,
+      limit: Int,
+      page: Int,
+      statusFilter: String,
+      reviewStatusFilter: String,
+      priorityFilter: String,
+      exportProperties: String = "",
+      timezone: String = Utils.UTC_TIMEZONE
+  ): Action[AnyContent] = {
+    this._extractTaskSummaries(
+      List(challengeId),
+      limit,
+      page,
+      statusFilter,
+      reviewStatusFilter,
+      priorityFilter,
+      s"challenge_${challengeId}_tasks.csv",
+      exportProperties,
+      timezone
+    )
+  }
+
+  def _extractTaskSummaries(
+      challengeIds: List[Long],
+      limit: Int,
+      page: Int,
+      statusFilter: String,
+      reviewStatusFilter: String,
+      priorityFilter: String,
+      filename: String,
+      exportProperties: String = "",
+      timezone: String
+  ): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.authenticatedRequest { implicit user =>
+      SearchParameters.withSearch { implicit params =>
+        // Verify timzone offset is valid (eg. -10:00 or +04:00 or 06:30:00)
+        val tzRegex = "^[\\+]?([\\-]?[\\d]?\\d)\\:([\\d]?\\d)(\\:\\d\\d)?$".r
+        val dateTimeZone =
+          timezone match {
+            case tzRegex(hours, minutes, seconds) =>
+              DateTimeZone.forOffsetHoursMinutes(hours.toInt, minutes.toInt)
+            case _ =>
+              if (timezone.isEmpty())
+                DateTimeZone.getDefault
+              else
+                throw new InvalidException("Timezone is not a valid time zone. [" + timezone + "]")
+          }
+
+        val status = if (StringUtils.isEmpty(statusFilter)) {
+          None
+        } else {
+          Some(Utils.split(statusFilter).map(_.toInt))
+        }
+        val reviewStatus = if (StringUtils.isEmpty(reviewStatusFilter)) {
+          None
+        } else {
+          Some(Utils.split(reviewStatusFilter).map(_.toInt))
+        }
+        val priority = if (StringUtils.isEmpty(priorityFilter)) {
+          None
+        } else {
+          Some(Utils.split(priorityFilter).map(_.toInt))
+        }
+
+        val allParams =
+          params.copy(
+            challengeParams = params.challengeParams.copy(challengeIds = Some(challengeIds)),
+            taskParams = params.taskParams
+              .copy(taskStatus = status, taskReviewStatus = reviewStatus, taskPriorities = priority)
+          )
+
+        val (tasks, allComments) =
+          this.dalManager.task.retrieveTaskSummaries(challengeIds, limit, page, allParams)
+
+        // Setup all exportable properties
+        var propsToExportHeaders = Set[String]()
+
+        // For setting up challenge and task links
+        val urlPrefix = config.getPublicOrigin match {
+          case Some(origin) => s"${origin}/"
+          case None         => s"http://${request.host}/"
+        }
+
+        challengeIds.foreach(cId => {
+          val challenge = this.dal.retrieveById(cId) match {
+            case Some(c) => c
+            case None    => throw new NotFoundException(s"Challenge with id $cId not found")
+          }
+
+          // Include any properties requested in the csv
+          if (!exportProperties.isEmpty) {
+            var propsToExport = exportProperties.replaceAll("\\s", "").split(",")
+            propsToExport.foreach(pe => propsToExportHeaders += pe)
+          }
+
+          // Include properties from the challenge configuration
+          challenge.extra.exportableProperties match {
+            case Some(ex) =>
+              if (!ex.isEmpty) {
+                var propsToExport = ex.split(",")
+                propsToExport.foreach(pe => propsToExportHeaders += pe.trim)
+              }
+            case None => // do nothing
+          }
+        })
+
+        // Find all response property names
+        var responseProperties = Set[String]()
+        tasks.foreach(
+          _.completionResponses match {
+            case Some(responses) =>
+              Json.parse(responses) match {
+                case o: JsObject =>
+                  o.keys
+                  for (key <- o.keys) {
+                    responseProperties += key.toString()
+                  }
+                case _ => // do nothing
+              }
+            case None => // do nothing
+          }
+        )
+        var responseHeaders = ""
+        for (p <- responseProperties) {
+          responseHeaders += "," + "Recorded_" + p
+        }
+
+        val seqString = tasks.map(task => {
+          var mapper = task.completedBy.getOrElse("")
+          if (mapper == "") {
+            mapper = task.username.getOrElse("")
+          }
+
+          val reviewTimeSeconds = task.reviewStartedAt match {
+            case Some(startTime) =>
+              task.reviewedAt match {
+                case Some(endTime) => (endTime.getMillis() - startTime.getMillis()) / 1000
+                case _             => ""
+              }
+            case _ => ""
+          }
+
+          // Find matching geojson feature properties
+          var propData    = ""
+          var featureType = ""
+          task.geojson match {
+            case Some(g) =>
+              val parsedFeature = Json.parse(g)
+              featureType = (parsedFeature \\ "geometry")(0) \ "type" match {
+                case JsDefined(value) => value.as[String]
+                case JsUndefined()    => "Unknown"
+              }
+              val taskProps = (parsedFeature \\ "properties")(0).as[JsObject]
+              for (key <- propsToExportHeaders) {
+                (taskProps \ key) match {
+                  case value: JsDefined =>
+                    var propValue = value.get.toString()
+                    propValue = propValue.substring(1, propValue.length() - 1)
+                    propData += "," + propValue.replaceAll("\"", "\"\"")
+                  case value: JsUndefined => propData += "," + "\"\"" // empty value
+                }
+              }
+            case None => // do nothing
+          }
+
+          // Find matching response values to each response property name
+          var responseData = ""
+          task.completionResponses match {
+            case Some(responses) =>
+              val responseMap = Json.parse(responses)
+              for (key <- responseProperties) {
+                (responseMap \ key) match {
+                  case value: JsDefined =>
+                    var propValue = value.get.toString()
+                    if (propValue != "true" && propValue != "false") {
+                      // Strip off quotes
+                      propValue = propValue.substring(1, propValue.length() - 1)
+                    }
+                    responseData += "," + propValue.replaceAll("\"", "\"\"")
+                  case vaue: JsUndefined =>
+                    responseData += "," + "\"\"" // empty value
+                }
+              }
+            case None => // No responses, all empty values
+              for (key <- responseProperties) {
+                responseData += "," + "\"\""
+              }
+          }
+
+          var comments      = allComments(task.taskId).replaceAll("\"", "\"\"")
+          var challengeLink = s"[[hyperlink URL link=${urlPrefix}browse/challenges/${task.parent}]]"
+          val mappedOn = task.mappedOn match {
+            case Some(m) => m.withZone(dateTimeZone)
+            case _       => ""
+          }
+
+          val reviewedAt = task.reviewedAt match {
+            case Some(d) => d.withZone(dateTimeZone)
+            case _       => ""
+          }
+
+          var taskLink =
+            s"[[hyperlink URL link=${urlPrefix}challenge/${task.parent}/task/${task.taskId}]]"
+
+          // Create a CSV row with more meaningful column names and data
+          val csvRow = List(
+            task.taskId,
+            taskLink,
+            task.parent,
+            challengeLink,
+            task.name,
+            featureType,
+            Task.statusMap.get(task.status).getOrElse(""),
+            Challenge.priorityMap.get(task.priority).getOrElse(""),
+            mappedOn,
+            task.completedTimeSpent.getOrElse(""),
+            mapper,
+            Task.reviewStatusMap.get(task.reviewStatus.getOrElse(-1)).get,
+            task.reviewedBy.getOrElse(""),
+            reviewedAt,
+            reviewTimeSeconds,
+            task.additionalReviewers.getOrElse(List()).mkString(", "),
+            comments,
+            task.bundleId.getOrElse(""),
+            task.isBundlePrimary.getOrElse(""),
+            task.tags.getOrElse("")
+          )
+
+          CSVEncoder.encodeRow(csvRow)
+        })
+
+        var propsToExportHeaderString = propsToExportHeaders.mkString(",")
+        if (!propsToExportHeaderString.isEmpty) {
+          propsToExportHeaderString = "," + propsToExportHeaderString
+        }
+        Result(
+          header =
+            ResponseHeader(OK, Map(CONTENT_DISPOSITION -> s"attachment; filename=${filename}")),
+          body = HttpEntity.Strict(
+            ByteString(
+              s"""TaskID,TaskLink,ChallengeID,ChallengeLink,TaskName,GeometryType,TaskStatus,TaskPriority,MappedOn,CompletionTime,Mapper,ReviewStatus,Reviewer,ReviewedAt,ReviewTimeSeconds,AdditionalReviewers,Comments,BundleId,IsBundlePrimary,Tags${propsToExportHeaderString}${responseHeaders}\n"""
+            ).concat(ByteString(seqString.mkString("\n"))),
+            Some("text/csv; header=present")
+          )
+        )
+      }
+    }
+  }
+
+  /**
+    * Extracts task review history in csv format.
+    *
+    * @param challengeId The id of the challenge
+    * @return A csv list of tasks for the challenge
+    */
+  def extractChallengeReviewHistory(
+      challengeId: Long
+  ): Action[AnyContent] = {
+    this._extractChallengeReviewHistory(
+      challengeId
+    )
+  }
+
+  def formatErrorTagNames(
+      errorTagIds: String
+  ): String = {
+    if (!errorTagIds.isEmpty) {
+      val arr = errorTagIds.split(",")
+      val statement = arr.map(id => {
+        val errorTagId = id.toInt;
+        this.tagService.retrieve(errorTagId).getOrElse(Tag(-1, "null")).name
+      })
+
+      return s""""${statement.mkString("\n")}"""";
+    }
+
+    ""
+  }
+
+  def _extractChallengeReviewHistory(
+      challengeId: Long
+  ): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.authenticatedRequest { implicit user =>
+      SearchParameters.withSearch { implicit params =>
+        val challengeTasks    = this.serviceManager.challenge.getTasksByParentId(challengeId);
+        val taskReviewHistory = this.serviceManager.taskHistory.getTaskReviewHistory(challengeTasks);
+
+        val seqString = taskReviewHistory.map(taskReviewLog => {
+          val errorTagNames = formatErrorTagNames(taskReviewLog.errorTags);
+
+          s"""${taskReviewLog.id},${taskReviewLog.taskId},${taskReviewLog.reviewRequestedByUsername
+            .getOrElse("")},${taskReviewLog.reviewedByUsername.getOrElse("")},""" +
+            s"""${Task.reviewStatusMap.get(taskReviewLog.reviewStatus.getOrElse(-1)).get},""" +
+            s"""${taskReviewLog.reviewedAt.getOrElse("")},${taskReviewLog.reviewStartedAt
+              .getOrElse("")},""" +
+            s"""${taskReviewLog.metaReviewStatus
+                 .getOrElse("")},${taskReviewLog.metaReviewedByUsername
+                 .getOrElse("")},${taskReviewLog.metaReviewedAt
+                 .getOrElse("")},${errorTagNames}""".stripMargin
+        })
+
+        Result(
+          header = ResponseHeader(
+            OK,
+            Map(
+              CONTENT_DISPOSITION -> s"attachment; filename=challenge_${challengeId}_review_history.csv"
+            )
+          ),
+          body = HttpEntity.Strict(
+            ByteString(
+              s"""ID,TaskID,RequestedBy,ReviewedBy,ReviewStatus,ReviewedAt,ReviewStartedAt,MetaReviewStatus,MetaReviewedBy,MetaReviewedAt,ErrorTags\n"""
+            ).concat(ByteString(seqString.mkString("\n"))),
+            Some("text/csv; header=present")
+          )
+        )
+      }
+    }
+  }
+
+  /**
+    * Uses the search parameters from the query string to find challenges
+    *
+    * @param limit limits the amount of results returned
+    * @param page  paging mechanism for limited results
+    * @return A list of challenges matching the query string parameters
+    */
+  def extendedFind(limit: Int, page: Int, sort: String, order: String): Action[AnyContent] =
+    Action.async { implicit request =>
+      this.sessionManager.userAwareRequest { implicit user =>
+        SearchParameters.withSearch { implicit params =>
+          val challenges = this.dal.extendedFind(params, limit, page, sort, order)
+          Ok(insertProjectJSON(challenges))
+        }
+      }
+    }
+
+  /**
+    * Efficient endpoint for exploring challenges with specific parameters
+    * Uses an optimized query path specifically designed for the explore challenges feature.
+    * Finished challenges are excluded, since they have no remaining work.
+    *
+    * Served on both GET and POST. The POST form additionally accepts a GeoJSON
+    * geometry as `polygon` in the body, which narrows the results the same way
+    * `bounds` does: a challenge matches only when one of its tasks sits inside
+    * both. The geometry cannot ride along in the query string -- a city
+    * boundary from Nominatim is routinely tens of kilobytes, well past the
+    * request line limit -- which is also why the existing `boundingGeometries`
+    * search parameter is read from the body.
+    *
+    * @param global Whether to include global challenges (default: false)
+    * @param bounds Bounding box as [left,bottom,right,top] to filter challenges by location
+    * @param sortBy Column to sort by (name, created, modified, popularity, difficulty,
+    *               featured, tag_fix, cooperative)
+    * @param limit Maximum number of results to return
+    * @param offset Number of results to skip for pagination
+    * @return A list of challenges matching the criteria
+    */
+  def exploreChallenges(
+      global: Boolean,
+      bounds: Option[String],
+      sortBy: String,
+      limit: Int,
+      offset: Int,
+      keywords: Option[String],
+      difficulty: Option[Int]
+  ): Action[AnyContent] =
+    // Parsed with its own body limit: the default (100k) is smaller than a
+    // real place boundary.
+    Action.async(parse.default(Some(maxPolygonBodyBytes))) { implicit request =>
+      this.sessionManager.userAwareRequest { implicit user =>
+        val boundingBox = bounds.flatMap { b =>
+          b.split(",").map(_.trim).filter(_.nonEmpty).toList match {
+            case List(left, bottom, right, top) =>
+              Some((left.toDouble, bottom.toDouble, right.toDouble, top.toDouble))
+            case _ => None
+          }
+        }
+
+        val challenges = this.dal.exploreChallenges(
+          includeGlobal = global,
+          boundingBox = boundingBox,
+          sortBy = sortBy,
+          limit = limit,
+          offset = offset,
+          keywords = keywords,
+          difficulty = difficulty,
+          locationPolygon = this.locationPolygon(request)
+        )
+
+        Ok(insertProjectJSON(challenges))
+      }
+    }
+
+  /**
+    * Reads the optional `polygon` GeoJSON geometry from an exploreChallenges
+    * request body, rejecting anything PostGIS could not use as an area.
+    */
+  private def locationPolygon(request: Request[AnyContent]): Option[String] =
+    request.body.asJson.flatMap(json => (json \ "polygon").asOpt[JsObject]).map { geometry =>
+      (geometry \ "type").asOpt[String] match {
+        case Some("Polygon") | Some("MultiPolygon") => Json.stringify(geometry)
+        case other =>
+          throw new InvalidException(
+            s"polygon must be a GeoJSON Polygon or MultiPolygon, got ${other.getOrElse("no type")}"
+          )
+      }
+    }
+
+  /**
+    * Fuzzy search for challenges by ID or name
+    * Returns a single challenge if found (first match)
+    * Searches by ID if the search string is numeric, otherwise searches by name using fuzzy matching
+    *
+    * @param search The search string (can be ID or name)
+    * @param onlyEnabled Only include enabled challenges
+    * @param limit Maximum number of results to return
+    * @return A single challenge matching the search criteria, or empty list if not found
+    */
+  def search(
+      search: String,
+      onlyEnabled: Boolean = false,
+      limit: Int = 25
+  ): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.userAwareRequest { implicit user =>
+      val results = this.dal.search(search, limit, onlyEnabled)
+      Ok(Json.toJson(results))
+    }
+  }
+
+  def healthCheck(): Action[AnyContent] =
+    Action { implicit request =>
+      Ok(Json.toJson(StatusMessage("OK", JsString("We good"))))
+    }
+
+  /**
+    * Retrieves a lightweight listing of the challenges in the given project(s).
+    *
+    * @param projectIds  comma-separated list of projects
+    * @param limit       limits the amount of results returned
+    * @param page        paging mechanism for limited results
+    * @param onlyEnabled determines if results are restricted to enabled challenges projects
+    * @return A list of challenges
+    */
+  def listing(projectIds: String, limit: Int, page: Int, onlyEnabled: Boolean): Action[AnyContent] =
+    Action.async { implicit request =>
+      this.sessionManager.authenticatedRequest { implicit user =>
+        Ok(Json.toJson(this.dal.listing(Utils.toLongList(projectIds), limit, page, onlyEnabled)))
+      }
+    }
+
+  /**
+    * Matches all the tasks to their specific changesets
+    *
+    * @param challengeId The challenge id
+    * @param skipSet     Whether to skip tasks that have already been set
+    * @return Just a 200 OK
+    */
+  def matchChangeSets(challengeId: Long, skipSet: Boolean): Action[AnyContent] = Action.async {
+    implicit request =>
+      this.sessionManager.authenticatedRequest { implicit user =>
+        val challenge = this.dal.retrieveById(challengeId)
+        challenge match {
+          case Some(c) if permission.isSuperUser(user) || c.general.owner == user.osmProfile.id =>
+            // TODO might need to loop through the tasks in batches. Pulling every single task could be very expensive
+            this.dal
+              .listChildren(-1)(challengeId)
+              .filter(t =>
+                t.status.get == Task.STATUS_FIXED && (!skipSet || t.changesetId.isEmpty || t.changesetId.get != -1)
+              )
+              .foreach(t => {
+                this.dalManager.task.matchToOSMChangeSet(t, user, false)
+              })
+            // todo might need to respond only once everything has updated or handle this better
+            Ok
+          case Some(_) =>
+            throw new OAuthNotAuthorizedException(
+              "Only owners of the challenge or super users can make this request"
+            )
+          case _ => throw new NotFoundException(s"Challenge with id $challengeId not found")
+        }
+      }
+  }
+
+  /**
+    * Creates or updates a challenge directly from Github. It uses the following files:
+    * ${name}_create.json - The json file containing all the information to generate the file
+    * ${name}_geojson.json - The geojson used to build the challenge tasks, can be used to update later
+    * ${name}_info.md - An information file that will be used to display information about the challenge
+    *
+    * @param projectId The project that you are building the challenge under
+    * @param username  The github username of where the challenge information exists
+    * @param repo      The repo that the challenge information exists in
+    * @param name      The name of the challenge files.
+    * @return A response with the newly created challenge
+    */
+  def createFromGithub(
+      projectId: Long,
+      username: String,
+      repo: String,
+      name: String,
+      rebuild: Boolean
+  ): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.authenticatedFutureRequest { implicit user =>
+      val result  = Promise[Result]()
+      val baseURL = s"https://raw.githubusercontent.com/$username/$repo/master/${name}_";
+      this.wsClient.url(s"${baseURL}create.json").get() onComplete {
+        case Success(response) =>
+          try {
+            // inject the info link into the challenge
+            val challengeJson = Utils.insertIntoJson(
+              Utils.insertIntoJson(response.json, "infoLink", s"${baseURL}info.md", false),
+              "remoteGeoJson",
+              s"${baseURL}geojson_{x}.json",
+              true
+            )
+            val challengeName = (challengeJson \ "name").asOpt[String].getOrElse(name)
+            // look for the challenge, if the name exists we will attempt to update the challenge
+            val challengeID = this.dal.retrieveByName(challengeName, projectId) match {
+              case Some(c) => c.id
+              case None    => -1
+            }
+            val updatedBody =
+              this.updateCreateBody(Utils.insertIntoJson(challengeJson, "parent", projectId), user)
+            if (challengeID > 0) {
+              // if rebuild set to true, remove all the tasks first from the challenge before recreating them
+              this.dal.deleteTasks(user, challengeID)
+              // if you provide the ID in the post method we will send you to the update path
+              this.internalUpdate(updatedBody, user)(challengeID.toString, -1) match {
+                case Some(value) => result success Ok(this.inject(value))
+                case None        => result success NotModified
+              }
+            } else {
+              this.internalCreate(updatedBody, updatedBody.validate[Challenge].get, user) match {
+                case Some(value) => result success Ok(this.inject(value))
+                case None        => result success NotModified
+              }
+            }
+          } catch {
+            case e: Throwable => result success MPExceptionUtil.manageException(e)
+          }
+        case Failure(error) => throw error
+      }
+      result.future
+    }
+  }
+
+  override def internalCreate(requestBody: JsValue, element: Challenge, user: User)(
+      implicit c: Option[Connection] = None
+  ): Option[Challenge] = {
+    var created = super.internalCreate(requestBody, element, user)
+    // Fetch challenge fresh from database. There are some fields that are set after creating
+    // children (ie. cooperativeType) and our cached copy does not reflect those changes
+    created match {
+      case Some(value) => this.dal._retrieveById(false)(value.id)
+      case None        => created
+    }
+  }
+
+  /**
+    * Classes can override this function to inject values into the object before it is sent along
+    * with the response
+    *
+    * @param obj the object being sent in the response
+    * @return A Json representation of the object
+    */
+  override def inject(obj: Challenge)(implicit request: Request[Any]): JsValue = {
+    val tags = this.tagService.listByChallenge(obj.id)
+    Utils.insertIntoJson(Json.toJson(obj), Tag.TABLE, Json.toJson(tags.map(_.name)))
+  }
+
+  /**
+    * Checks that any team the request wants to hand the challenge to is one
+    * the user is actually entitled to hand it to. Team ids are just numbers on
+    * the wire, so without this anyone could park a challenge under another
+    * team - taking that team's image onto the card and handing its managers a
+    * challenge they never asked for - simply by guessing an id.
+    *
+    * @param body The incoming challenge json
+    * @param user The user making the request
+    */
+  private def validateTeamAssignment(body: JsValue, user: User): Unit =
+    (body \ "ownerTeamId").toOption match {
+      case None | Some(JsNull) => // nothing to check; ownership is left alone
+      case Some(value) =>
+        val teamId = value
+          .asOpt[Long]
+          .getOrElse(throw new InvalidException("ownerTeamId must be a number"))
+        this.serviceManager.team.requireTeamManager(teamId, user, "challenges")
+    }
+
+  override def updateUpdateBody(body: JsValue, user: User): JsValue = {
+    val jsonBody = super.updateUpdateBody(body, user)
+    this.validateTeamAssignment(jsonBody, user)
+    jsonBody
+  }
+
+  /**
+    * This function allows sub classes to modify the body, primarily this would be used for inserting
+    * default elements into the body that shouldn't have to be required to create an object.
+    *
+    * @param body The incoming body from the request
+    * @return
+    */
+  override def updateCreateBody(body: JsValue, user: User): JsValue = {
+    var jsonBody = super.updateCreateBody(body, user)
+    this.validateTeamAssignment(jsonBody, user)
+    jsonBody = Utils.insertIntoJson(jsonBody, "owner", user.osmProfile.id, true)(LongWrites)
+    jsonBody = Utils.insertIntoJson(jsonBody, "enabled", true)(BooleanWrites)
+    jsonBody = Utils.insertIntoJson(jsonBody, "deleted", false)(BooleanWrites)
+    jsonBody = Utils.insertIntoJson(jsonBody, "isGlobal", false)(BooleanWrites)
+    jsonBody =
+      Utils.insertIntoJson(jsonBody, "challengeType", Actions.ITEM_TYPE_CHALLENGE)(IntWrites)
+    jsonBody = Utils.insertIntoJson(jsonBody, "difficulty", Challenge.DIFFICULTY_NORMAL)(IntWrites)
+    jsonBody = Utils.insertIntoJson(jsonBody, "featured", false)(BooleanWrites)
+    jsonBody =
+      Utils.insertIntoJson(jsonBody, "cooperativeType", Challenge.COOPERATIVE_NONE)(IntWrites)
+    jsonBody = Utils.insertIntoJson(jsonBody, "checkinComment", "")(StringWrites)
+    jsonBody = Utils.insertIntoJson(jsonBody, "checkinSource", "")(StringWrites)
+    jsonBody = Utils.insertIntoJson(jsonBody, "requiresLocal", false)(BooleanWrites)
+    jsonBody = Utils.insertIntoJson(jsonBody, "defaultPriority", Challenge.PRIORITY_HIGH)(IntWrites)
+    jsonBody = Utils.insertIntoJson(jsonBody, "defaultZoom", Challenge.DEFAULT_ZOOM)(IntWrites)
+    jsonBody = Utils.insertIntoJson(jsonBody, "minZoom", Challenge.MIN_ZOOM)(IntWrites)
+    jsonBody = Utils.insertIntoJson(jsonBody, "maxZoom", Challenge.MAX_ZOOM)(IntWrites)
+    jsonBody =
+      Utils.insertIntoJson(jsonBody, "reviewSetting", Challenge.REVIEW_SETTING_NOT_REQUIRED)(
+        IntWrites
+      )
+    jsonBody = Utils.insertIntoJson(jsonBody, "taskWidgetLayout", JsObject.empty)(jsValueWrites)
+    jsonBody = Utils.insertIntoJson(jsonBody, "updateTasks", false)(BooleanWrites)
+    jsonBody = Utils.insertIntoJson(jsonBody, "changesetUrl", false)(BooleanWrites)
+    jsonBody = Utils.insertIntoJson(jsonBody, "requireConfirmation", false)(BooleanWrites)
+    jsonBody = Utils.insertIntoJson(jsonBody, "requireRejectReason", false)(BooleanWrites)
+    // if we can't find the parent ID, just use the user's default project instead
+    (jsonBody \ "parent").asOpt[Long] match {
+      case Some(v) => jsonBody
+      case None =>
+        Utils.insertIntoJson(jsonBody, "parent", this.serviceManager.user.getHomeProject(user).id)
+    }
+  }
+
+  /**
+    * Creates a challenge gzipped package that contains the JSON to recreate the challenge, geojson to
+    * recreate all the tasks, challenge info md file, metrics file at the time this function is executed,
+    * and all comments that have currently been made against tasks in this challenge.
+    *
+    * @param challengeId The id of the challenge to extract
+    * @return The
+    */
+  def extractPackage(challengeId: Long): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.authenticatedFutureRequest { implicit user =>
+      this.dal.retrieveById(challengeId) match {
+        case Some(c) =>
+          implicit val actionSummaryWrites    = Json.writes[ActionSummary]
+          implicit val challengeSummaryWrites = Json.writes[ChallengeSummary]
+          val files: Map[String, String] = Map(
+            "challenge.json" -> Json.prettyPrint(Json.toJson(c)),
+            "lineByLine.geojson" -> this.dal
+              .getLineByLineChallengeGeometry(challengeId)
+              .values
+              .mkString("\n"),
+            "geometry.geojson" -> this.dal.getChallengeGeometry(challengeId),
+            "comments.csv"     -> this.extractComments(challengeId, -1, 0, request.host).mkString("\n"),
+            "metrics.csv" -> Json.prettyPrint(
+              Json.toJson(this.dalManager.data.getChallengeSummary(challengeId = Some(challengeId)))
+            )
+          )
+          val out = new ByteArrayOutputStream()
+
+          val zip = new ZipOutputStream(out)
+          files.foreach { f =>
+            zip.putNextEntry(new ZipEntry(f._1))
+            val in = new BufferedInputStream(new ByteArrayInputStream(f._2.getBytes))
+            var b  = in.read
+            while (b > -1) {
+              zip.write(b)
+              b = in.read
+            }
+            in.close()
+            zip.closeEntry()
+          }
+          zip.close()
+          val response = ByteString(out.toByteArray)
+          out.close()
+          Future {
+            Result(
+              header = ResponseHeader(OK, Map.empty),
+              body = HttpEntity.Strict(response, Some("application/gzip"))
+            )
+          }
+        case None =>
+          Future {
+            NotFound
+          }
+      }
+    }
+  }
+
+  private def extractComments(
+      challengeId: Long,
+      limit: Int,
+      page: Int,
+      host: String
+  ): Seq[String] = {
+    val comments = this.serviceManager.comment.find(
+      List.empty,
+      List(challengeId),
+      List.empty,
+      Paging(limit, page)
+    )
+    val urlPrefix = config.getPublicOrigin match {
+      case Some(origin) => s"${origin}/"
+      case None         => s"http://$host/"
+    }
+    comments.map(comment =>
+      s"""${comment.projectId},$challengeId,${comment.taskId},${comment.osm_id},""" +
+        s"""${comment.osm_username},"${comment.comment}",${urlPrefix}challenge/$challengeId/task/${comment.taskId}""".stripMargin
+    )
+  }
+
+  /**
+    * Clones a challenge with a new name, optionally into a different project
+    *
+    * @param itemId    The item id of the challenge you want to clone
+    * @param newName   The new name of the cloned challenge
+    * @param projectId The project to clone the challenge into. Anything less than 1 clones
+    *                  the challenge into the same project as the original.
+    * @return The newly created cloned challenge
+    */
+  def cloneChallenge(itemId: Long, newName: String, projectId: Long): Action[AnyContent] =
+    Action.async { implicit request =>
+      sessionManager.authenticatedRequest { implicit user =>
+        dalManager.challenge.retrieveById(itemId) match {
+          case Some(c) =>
+            permission.hasWriteAccess(ProjectType(), user)(c.general.parent)
+            val targetProjectId = if (projectId > 0) projectId else c.general.parent
+            if (targetProjectId != c.general.parent) {
+              permission.hasWriteAccess(ProjectType(), user)(targetProjectId)
+            }
+            val clonedChallenge = c.copy(
+              id = -1,
+              name = newName,
+              general = c.general.copy(parent = targetProjectId)
+            )
+            Ok(Json.toJson(this.dal.insert(clonedChallenge, user)))
+          case None =>
+            throw new NotFoundException(
+              s"No challenge found to clone matching the given id [$itemId]"
+            )
+        }
+      }
+    }
+
+  /**
+    * Rebuilds a challenge if it uses a remote geojson or overpass query to generate it's tasks
+    *
+    * @param challengeId     The id of the challenge
+    * @param removeUnmatched Whether to first remove incomplete tasks prior to processing
+    *                        updated source data
+    * @return A 200 status OK
+    */
+  def rebuildChallenge(
+      challengeId: Long,
+      removeUnmatched: Boolean,
+      skipSnapshot: Boolean
+  ): Action[AnyContent] = Action.async { implicit request =>
+    sessionManager.authenticatedRequest { implicit user =>
+      dalManager.challenge.retrieveById(challengeId) match {
+        case Some(c) =>
+          permission.hasWriteAccess(ProjectType(), user)(c.general.parent)
+          c.status match {
+            case Some(Challenge.STATUS_DELETING_TASKS) =>
+              throw new InvalidException(
+                "Challenge cannot be rebuilt while undergoing bulk task deletion"
+              )
+            case Some(Challenge.STATUS_BUILDING) =>
+              throw new InvalidException("Task build is already in progress for this challenge")
+            case _ => // just ignore
+          }
+
+          if (!skipSnapshot) {
+            // First create a snapshot of the challenge before we rebuild.
+            this.snapshotManager.recordChallengeSnapshot(challengeId)
+          }
+
+          challengeProvider.rebuildTasks(user, c, removeUnmatched)
+          Ok
+        case None => throw new NotFoundException(s"No challenge found with id $challengeId")
+      }
+    }
+  }
+
+  def addTasksToChallenge(challengeId: Long): Action[AnyContent] = Action.async {
+    implicit request =>
+      sessionManager.authenticatedRequest { implicit user =>
+        dalManager.challenge.retrieveById(challengeId) match {
+          case Some(challenge) =>
+            permission.hasObjectWriteAccess(challenge, user)
+            challenge.status match {
+              case Some(Challenge.STATUS_DELETING_TASKS) =>
+                throw new InvalidException(
+                  "Tasks cannot be added while challenge is undergoing bulk task deletion"
+                )
+              case Some(Challenge.STATUS_BUILDING) =>
+                throw new InvalidException("Tasks cannot be added while challenge is being built")
+              case _ => // just ignore
+            }
+
+            request.body.asText match {
+              case Some(bodyText) =>
+                challengeProvider.createTasksFromJson(user, challenge, bodyText)
+                NoContent
+              case None =>
+                request.body.asJson match {
+                  case Some(bodyJson) =>
+                    challengeProvider.createTasksFromJson(user, challenge, bodyJson.toString())
+                    NoContent
+                  case None =>
+                    throw new InvalidException("No json data provided to create new tasks from")
+                }
+            }
+          case None =>
+            throw new NotFoundException(s"No challenge found with id $challengeId")
+        }
+      }
+  }
+
+  def addTasksToChallengeFromFile(
+      challengeId: Long,
+      lineByLine: Boolean,
+      removeUnmatched: Boolean,
+      dataOriginDate: Option[String] = None,
+      skipSnapshot: Boolean = false
+  ): Action[MultipartFormData[Files.TemporaryFile]] =
+    Action.async(parse.multipartFormData) { implicit request =>
+      {
+        sessionManager.authenticatedRequest { implicit user =>
+          dalManager.challenge.retrieveById(challengeId) match {
+            case Some(c) =>
+              permission.hasObjectWriteAccess(c, user)
+              c.status match {
+                case Some(Challenge.STATUS_DELETING_TASKS) =>
+                  throw new InvalidException(
+                    "Tasks cannot be added while challenge is undergoing bulk task deletion"
+                  )
+                case Some(Challenge.STATUS_BUILDING) =>
+                  throw new InvalidException("Tasks cannot be added while challenge is being built")
+                case _ => // just ignore
+              }
+
+              val currentTaskCount = dalManager.challenge.getTaskCount(challengeId);
+
+              if (!skipSnapshot) {
+                // First create a snapshot of the challenge before we add tasks.
+                this.snapshotManager.recordChallengeSnapshot(challengeId)
+              }
+
+              request.body.file("json") match {
+                case Some(f) if StringUtils.isNotEmpty(f.filename) =>
+                  if (removeUnmatched) {
+                    dalManager.challenge.removeIncompleteTasks(user)(challengeId)
+                  }
+
+                  // todo this should probably be streamed instead of all pulled into memory
+                  val sourceData       = Source.fromFile(f.ref.getAbsoluteFile).getLines()
+                  val sourceDataLength = Source.fromFile(f.ref.getAbsoluteFile).getLines().length
+                  if (lineByLine) {
+                    val total = currentTaskCount + sourceDataLength;
+                    if (total > config.maxTasksPerChallenge) {
+                      logger.warn(
+                        "Cannot add {} tasks to challengeId='{}' because it would exceed the maximum tasks per challenge (count={} max={})",
+                        sourceDataLength,
+                        challengeId,
+                        currentTaskCount,
+                        config.maxTasksPerChallenge
+                      )
+
+                      if (currentTaskCount == 0) {
+                        val statusMessage =
+                          s"Tasks were not accepted. Your total challenge tasks would exceed the ${config.maxTasksPerChallenge} cap."
+                        dalManager.challenge.update(
+                          Json.obj(
+                            "status"        -> Challenge.STATUS_FAILED,
+                            "statusMessage" -> statusMessage
+                          ),
+                          user
+                        )(challengeId)
+                        logger.error(
+                          s"${sourceDataLength} tasks failed to be created from json file.",
+                          statusMessage
+                        )
+                      } else {
+                        throw new InvalidException(
+                          s"Total challenge tasks would exceed cap of ${config.maxTasksPerChallenge}"
+                        )
+                      }
+                    } else {
+                      sourceData.foreach(challengeProvider.createTaskFromJson(user, c, _))
+                    }
+                  } else {
+                    challengeProvider.createTasksFromJson(
+                      user,
+                      c,
+                      sourceData.mkString,
+                      currentTaskCount
+                    )
+                  }
+                  dataOriginDate match {
+                    case Some(d) =>
+                      dalManager.challenge.markTasksRefreshed(true, Some(new DateTime(d)))(
+                        challengeId
+                      )
+                    case _ => // do nothing
+                  }
+                  NoContent
+                case _ =>
+                  throw new InvalidException(s"No json uploaded with request to add tasks from")
+              }
+            case None =>
+              throw new NotFoundException(s"No challenge found with id $challengeId")
+          }
+        }
+      }
+    }
+
+  /**
+    * Moves a challenge from one project to another. This requires admin access on both projects
+    *
+    * @param newProjectId The new project to move the challenge to
+    * @param challengeId  The challenge that you are moving
+    * @return Ok with no message
+    */
+  def moveChallenge(newProjectId: Long, challengeId: Long): Action[AnyContent] = Action.async {
+    implicit request =>
+      sessionManager.authenticatedRequest { implicit user =>
+        Ok(Json.toJson(dalManager.challenge.moveChallenge(newProjectId, challengeId, user)))
+      }
+  }
+
+  /**
+    * Moves a list of challenges from one project to another. This requires admin access on both projects
+    *
+    * @param newProjectId The new project to move the challenge to
+    * @return Ok with no message
+    */
+  def moveChallenges(newProjectId: Long): Action[JsValue] = Action.async(bodyParsers.json) {
+    implicit request =>
+      sessionManager.authenticatedRequest { implicit user =>
+        val body         = request.body;
+        val challengeIds = (body \ "challenges").as[List[Long]]
+
+        Ok(Json.toJson(dalManager.challenge.moveChallenges(newProjectId, challengeIds, user)))
+      }
+  }
+
+  /**
+    * Archives a challenge
+    *
+    * @param challengeId  The challenge id
+    * @body isArchived  boolean indicating whether you are archiving or unarchiving
+    */
+  def archiveChallenge(challengeId: Long): Action[JsValue] = Action.async(bodyParsers.json) {
+    implicit request =>
+      this.sessionManager.authenticatedRequest { implicit user =>
+        try {
+          val body      = request.body;
+          val archiving = (body \ "isArchived").asOpt[Boolean].getOrElse(true);
+          val result    = serviceManager.challenge.archiveChallenge(challengeId, archiving)
+
+          Ok(Json.toJson(result))
+        } catch {
+          case e: Exception =>
+            logger.error(e.getMessage, e)
+            BadRequest(Json.toJson(StatusMessage("KO", JsString(e.getMessage))))
+        }
+      }
+  }
+
+  /**
+    * Gets the tag metrics for a challenge
+    *
+    * @param id The id of the challenge
+    * @param limit The number of top tags to return (default 3)
+    * @return The tag metrics as JSON
+    */
+  def getTagMetrics(id: Long, limit: Int = 3): Action[AnyContent] = Action.async {
+    implicit request =>
+      this.sessionManager.authenticatedRequest { implicit user =>
+        this.dal.retrieveById(id) match {
+          case Some(challenge) =>
+            permission.hasReadAccess(ChallengeType(), user)(id)
+            this.dal.withMRConnection { implicit c =>
+              val metricsParser = SqlParser.get[Option[String]]("mr_tag_metrics")
+              val metricsOpt =
+                SQL"SELECT mr_tag_metrics::text as mr_tag_metrics FROM challenges WHERE id = $id"
+                  .as(metricsParser.singleOpt)
+                  .flatten
+
+              val result = metricsOpt match {
+                case Some(metricsStr) if metricsStr.nonEmpty =>
+                  val jsValue = Json.parse(metricsStr)
+
+                  val topTagIds = jsValue
+                    .as[JsObject]
+                    .fields
+                    .map {
+                      case (tagId, countValue) =>
+                        val count = countValue.asOpt[Int].getOrElse(0)
+                        (tagId, count)
+                    }
+                    .sortBy(-_._2)
+                    .take(limit)
+
+                  val tagParser = for {
+                    id   <- SqlParser.long("id")
+                    name <- SqlParser.str("name")
+                  } yield (id.toString, name)
+
+                  val tagNames = if (topTagIds.nonEmpty) {
+
+                    val numericTagIds = topTagIds
+                      .map(_._1)
+                      .flatMap(id =>
+                        try {
+                          Some(id.toLong)
+                        } catch {
+                          case _: NumberFormatException => None
+                        }
+                      )
+
+                    if (numericTagIds.nonEmpty) {
+                      val idList = numericTagIds.mkString(",")
+                      SQL(s"SELECT id, name FROM tags WHERE id IN ($idList)")
+                        .as(tagParser.*)
+                        .toMap
+                    } else {
+                      Map.empty[String, String]
+                    }
+                  } else {
+                    Map.empty[String, String]
+                  }
+
+                  JsArray(topTagIds.map {
+                    case (tagId, count) =>
+                      JsObject(
+                        Seq(
+                          "id"    -> JsString(tagId),
+                          "name"  -> JsString(tagNames.getOrElse(tagId, tagId)),
+                          "count" -> JsNumber(count)
+                        )
+                      )
+                  })
+                case _ =>
+                  Json.obj()
+              }
+
+              Ok(result)
+            }
+          case None =>
+            throw new NotFoundException(s"No challenge found with id $id")
+        }
+      }
+  }
+
+  /**
+    * Favorites (saves) a challenge for the current user
+    *
+    * @param challengeId The id of the challenge to favorite
+    * @return 200 OK with success message
+    */
+  def favoriteChallenge(challengeId: Long): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.authenticatedRequest { implicit user =>
+      this.serviceManager.user.saveChallenge(user.id, challengeId, user)
+      Ok(
+        Json.toJson(
+          StatusMessage("OK", JsString(s"Challenge $challengeId favorited"))
+        )
+      )
+    }
+  }
+
+  /**
+    * Unfavorites (unsaves) a challenge for the current user
+    *
+    * @param challengeId The id of the challenge to unfavorite
+    * @return 200 OK with success message
+    */
+  def unfavoriteChallenge(challengeId: Long): Action[AnyContent] = Action.async {
+    implicit request =>
+      this.sessionManager.authenticatedRequest { implicit user =>
+        this.serviceManager.user.unsaveChallenge(user.id, challengeId, user)
+        Ok(
+          Json.toJson(
+            StatusMessage("OK", JsString(s"Challenge $challengeId unfavorited"))
+          )
+        )
+      }
+  }
+
+  /**
+    * Checks if a challenge is favorited by the current user
+    *
+    * @param challengeId The id of the challenge to check
+    * @return 200 OK with boolean indicating if favorited
+    */
+  def isChallengeFavorited(challengeId: Long): Action[AnyContent] = Action.async {
+    implicit request =>
+      this.sessionManager.userAwareRequest { implicit user =>
+        user match {
+          case Some(u) =>
+            val isFavorited = this.serviceManager.user.isChallengeSaved(u.id, challengeId, u)
+            Ok(Json.toJson(Json.obj("isFavorited" -> isFavorited)))
+          case None =>
+            Ok(Json.toJson(Json.obj("isFavorited" -> false)))
+        }
+      }
+  }
+
+  /**
+    * Likes a challenge for the current user
+    *
+    * @param challengeId The id of the challenge to like
+    * @return 200 OK with success message
+    */
+  def likeChallenge(challengeId: Long): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.authenticatedRequest { implicit user =>
+      this.serviceManager.user.likeChallenge(user.id, challengeId, user)
+      Ok(
+        Json.toJson(
+          StatusMessage("OK", JsString(s"Challenge $challengeId liked"))
+        )
+      )
+    }
+  }
+
+  /**
+    * Unlikes a challenge for the current user
+    *
+    * @param challengeId The id of the challenge to unlike
+    * @return 200 OK with success message
+    */
+  def unlikeChallenge(challengeId: Long): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.authenticatedRequest { implicit user =>
+      this.serviceManager.user.unlikeChallenge(user.id, challengeId, user)
+      Ok(
+        Json.toJson(
+          StatusMessage("OK", JsString(s"Challenge $challengeId unliked"))
+        )
+      )
+    }
+  }
+
+  /**
+    * Checks if a challenge is liked by the current user
+    *
+    * @param challengeId The id of the challenge to check
+    * @return 200 OK with boolean indicating if liked
+    */
+  def isChallengeLiked(challengeId: Long): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.userAwareRequest { implicit user =>
+      user match {
+        case Some(u) =>
+          val isLiked = this.serviceManager.user.isChallengeLiked(u.id, challengeId, u)
+          Ok(Json.toJson(Json.obj("isLiked" -> isLiked)))
+        case None =>
+          Ok(Json.toJson(Json.obj("isLiked" -> false)))
+      }
+    }
+  }
+
+  /**
+    * Gets the total like count for a challenge
+    *
+    * @param challengeId The id of the challenge
+    * @return 200 OK with the like count
+    */
+  def getChallengeLikeCount(challengeId: Long): Action[AnyContent] = Action.async {
+    implicit request =>
+      this.sessionManager.userAwareRequest { implicit user =>
+        val likeCount = this.serviceManager.user.getChallengeLikeCount(challengeId)
+        Ok(Json.toJson(Json.obj("likeCount" -> likeCount)))
+      }
+  }
+
+  /**
+    * Create-or-update: if the JSON body includes a numeric `id`, delegate to
+    * update; otherwise delegate to create. Keeps clients from needing to pick
+    * between POST /challenge and PUT /challenge/:id based on whether they
+    * have a persisted id yet.
+    */
+  def saveOrUpdate: Action[JsValue] = Action.async(bodyParsers.json) { implicit request =>
+    val rawId = (request.body \ "id").asOpt[Long].getOrElse(-1L)
+    if (rawId > 0) {
+      this.update(rawId).apply(request)
+    } else {
+      this.create.apply(request)
+    }
+  }
+
+  /**
+    * Narrow update endpoint that accepts just the priority-related fields on
+    * a challenge and nothing else. Avoids the side effects (re-validation,
+    * task-rebuild triggers) that the full PUT /challenge/:id performs when
+    * unrelated fields are absent or differ.
+    */
+  def updatePriorities(id: Long): Action[JsValue] = Action.async(bodyParsers.json) {
+    implicit request =>
+      this.sessionManager.authenticatedRequest { implicit user =>
+        val challenge = this.dal.retrieveById(id) match {
+          case Some(c) => c
+          case None =>
+            throw new NotFoundException(s"Challenge with id $id not found, unable to update.")
+        }
+        permission.hasWriteAccess(ProjectType(), user)(challenge.general.parent)
+
+        val allowedKeys = Set(
+          "defaultPriority",
+          "highPriorityRule",
+          "highPriorityBounds",
+          "mediumPriorityRule",
+          "mediumPriorityBounds",
+          "lowPriorityRule",
+          "lowPriorityBounds"
+        )
+        val body = request.body.asOpt[JsObject].getOrElse(Json.obj())
+        val filtered = JsObject(
+          body.fields.filter { case (k, _) => allowedKeys.contains(k) }
+        )
+
+        if (filtered.fields.isEmpty) {
+          BadRequest(
+            Json.toJson(
+              StatusMessage(
+                "KO",
+                JsString(
+                  s"Body must include at least one of: ${allowedKeys.mkString(", ")}"
+                )
+              )
+            )
+          )
+        } else {
+          this.dal.update(filtered, user)(id) match {
+            case Some(updated) =>
+              this.dal.updateTaskPriorities(user, overrideValidation = true)(id)
+              this.dalManager.task.clearCaches
+              this.dal.clearCaches
+              // Surface the post-recompute priority distribution so the editor
+              // can confirm what landed in the DB. All zeros means either no
+              // tasks matched any tier (default priority covers everything) or
+              // the recompute short-circuited.
+              val postCounts: Map[Int, Long] = this.dal.countTasksByPriority(id)
+              val highCount: Long            = postCounts.getOrElse(Challenge.PRIORITY_HIGH, 0L)
+              val mediumCount: Long          = postCounts.getOrElse(Challenge.PRIORITY_MEDIUM, 0L)
+              val lowCount: Long             = postCounts.getOrElse(Challenge.PRIORITY_LOW, 0L)
+              val receipt = Json.obj(
+                "tasksByPriority" -> Json.obj(
+                  "high"   -> highCount,
+                  "medium" -> mediumCount,
+                  "low"    -> lowCount
+                )
+              )
+              Ok(Json.toJson(updated).as[JsObject] ++ Json.obj("priorityRecompute" -> receipt))
+            case None =>
+              InternalServerError(Json.toJson(StatusMessage("KO", JsString("Update failed"))))
+          }
+        }
+      }
+  }
+
+  /**
+    * Dry-run sibling of `updatePriorities`. Accepts the same body shape but
+    * does not persist anything — instead, it returns the priority each task
+    * WOULD receive under the supplied draft config. The editor uses this to
+    * power its live preview (pin colors, match counts), so what the user sees
+    * on the map is byte-for-byte what a subsequent save would write.
+    */
+  def previewPriorities(id: Long): Action[JsValue] = Action.async(bodyParsers.json) {
+    implicit request =>
+      this.sessionManager.authenticatedRequest { implicit user =>
+        val challenge = this.dal.retrieveById(id) match {
+          case Some(c) => c
+          case None =>
+            throw new NotFoundException(s"Challenge with id $id not found.")
+        }
+        permission.hasWriteAccess(ProjectType(), user)(challenge.general.parent)
+
+        val body     = request.body
+        val existing = challenge.priority
+        // `filter(_.nonEmpty)` collapses empty-string/empty-array sentinels the
+        // frontend omits — matches the DAL's save-path interpretation so a rule
+        // cleared in the editor previews as a rule cleared in the DB.
+        val draft = ChallengePriority(
+          defaultPriority =
+            (body \ "defaultPriority").asOpt[Int].getOrElse(existing.defaultPriority),
+          highPriorityRule = (body \ "highPriorityRule")
+            .asOpt[String]
+            .map(_.trim)
+            .filter(s => s.nonEmpty && s != "{}"),
+          mediumPriorityRule = (body \ "mediumPriorityRule")
+            .asOpt[String]
+            .map(_.trim)
+            .filter(s => s.nonEmpty && s != "{}"),
+          lowPriorityRule = (body \ "lowPriorityRule")
+            .asOpt[String]
+            .map(_.trim)
+            .filter(s => s.nonEmpty && s != "{}"),
+          highPriorityBounds = (body \ "highPriorityBounds")
+            .asOpt[String]
+            .map(_.trim)
+            .filter(s => s.nonEmpty && s != "[]"),
+          mediumPriorityBounds = (body \ "mediumPriorityBounds")
+            .asOpt[String]
+            .map(_.trim)
+            .filter(s => s.nonEmpty && s != "[]"),
+          lowPriorityBounds = (body \ "lowPriorityBounds")
+            .asOpt[String]
+            .map(_.trim)
+            .filter(s => s.nonEmpty && s != "[]")
+        )
+
+        val priorities = this.dal.previewTaskPriorities(user, draft)(id)
+        // Aggregate counts once on the server so the client doesn't have to
+        // walk the per-task map just to populate the badges.
+        var high   = 0
+        var medium = 0
+        var low    = 0
+        priorities.foreach {
+          case (_, Challenge.PRIORITY_HIGH)   => high += 1
+          case (_, Challenge.PRIORITY_MEDIUM) => medium += 1
+          case (_, Challenge.PRIORITY_LOW)    => low += 1
+          case _                              => ()
+        }
+        Ok(
+          Json.obj(
+            "priorities" -> JsObject(priorities.map {
+              case (taskId, p) =>
+                taskId.toString -> JsNumber(p)
+            }),
+            "counts" -> Json.obj(
+              "high"   -> high,
+              "medium" -> medium,
+              "low"    -> low
+            )
+          )
+        )
+      }
+  }
+
+  /**
+    * Gets the users granted a role on this challenge directly, as opposed to
+    * those who reach it through the parent project or an owning team
+    *
+    * @param id The id of the challenge whose managers are desired
+    */
+  def getChallengeManagers(id: Long): Action[AnyContent] = Action.async { implicit request =>
+    this.sessionManager.authenticatedRequest { implicit user =>
+      Ok(Json.toJson(this.serviceManager.challenge.challengeManagers(id, user)))
+    }
+  }
+
+  /**
+    * Grants a user a role on this challenge, reaching where the parent
+    * project's grants do not. Replaces any role they already held on it
+    *
+    * @param id     The id of the challenge to grant the role on
+    * @param userId The id of the user receiving the role
+    * @param role   The role to grant
+    */
+  def addUserToChallenge(id: Long, userId: Long, role: Int): Action[AnyContent] = Action.async {
+    implicit request =>
+      this.sessionManager.authenticatedRequest { implicit user =>
+        this.serviceManager.challenge.addUserToChallenge(id, userId, role, user)
+        Ok(Json.toJson(this.serviceManager.challenge.challengeManagers(id, user)))
+      }
+  }
+
+  /**
+    * Clears any role a user was granted on this challenge directly. Roles they
+    * hold through the parent project or an owning team are untouched
+    *
+    * @param id     The id of the challenge to revoke the role on
+    * @param userId The id of the user losing the role
+    */
+  def removeUserFromChallenge(id: Long, userId: Long): Action[AnyContent] = Action.async {
+    implicit request =>
+      this.sessionManager.authenticatedRequest { implicit user =>
+        this.serviceManager.challenge.removeUserFromChallenge(id, userId, user)
+        Ok(Json.toJson(this.serviceManager.challenge.challengeManagers(id, user)))
+      }
+  }
+
+}

@@ -1,0 +1,1290 @@
+###
+# tags: [ Task ]
+# operationId: task_retrieves_a_history_for_the_task
+# summary: Retrieves a history for the task
+# description: Retrieves list of task history log entries. This includes comments,
+#              status actions, and review actions.
+# responses:
+#   '200':
+#     description: List of log entries
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.Task'
+# parameters:
+#   - name: id
+#     in: path
+#     description: The id of the task
+###
+GET     /task/:id/history                       @org.maproulette.framework.controller.TaskHistoryController.getTaskHistoryLog(id:Long)
+###
+# tags: [ Task ]
+# operationId: task_create_a_task
+# summary: Create a Task
+# description: Will create a new Task from the supplied JSON in the body. When creating the Task, leave the ID field
+#               out of the body json, if updating (generally use the PUT method) include the ID field.
+# responses:
+#   '200':
+#     description: The newly created Task with a unique id.
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.Task'
+#   '304':
+#     description: Not updated responding with empty payload if Task already exists and nothing to update
+#   '400':
+#     description: Invalid json payload for Task
+#   '401':
+#     description: The user is not authorized to make this request
+# requestBody:
+#   description: The JSON structure for the Task body.
+#   required: true
+#   content:
+#     application/json:
+#       schema:
+#         $ref: '#/components/schemas/org.maproulette.framework.model.Task'
+###
+POST    /task                                       @org.maproulette.controllers.api.TaskController.create
+###
+# tags: [ Task ]
+# operationId: task_create_a_batch_of_tasks
+# summary: Create a batch of Tasks
+# description: Will create multiple new Tasks from the JSONArray supplied in the body. Each JSON object
+#               is basically a Task object that is processed similarly to the singular /sask POST. If
+#               Tasks already exist with the name, they will simply be skipped, ie. not updated.
+# responses:
+#   '200':
+#     description: A simple OK status message
+#   '304':
+#     description: Not updated responding with empty payload if Task already exists and nothing to update
+#   '400':
+#     description: Invalid json payload for Task
+#   '401':
+#     description: The user is not authorized to make this request
+# requestBody:
+#   description: The JSON structure for the Task body.
+#   required: true
+#   content:
+#     application/json:
+#       schema:
+#         type: array
+#         items:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.Task'
+###
+POST    /tasks                                      @org.maproulette.controllers.api.TaskController.batchUploadPost
+###
+# tags: [ Task ]
+# operationId: task_updates_a_task
+# summary: Updates a Task
+# description: Will update an already existing Task from the supplied JSON in the body.
+# responses:
+#   '200':
+#     description: The updated JSON Task
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.Task'
+#   '304':
+#     description: Not updated responding with empty payload if Task already exists and nothing to update
+#   '400':
+#     description: Invalid json payload for Task
+#   '401':
+#     description: The user is not authorized to make this request
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID of the Task that is being updated
+# requestBody:
+#   description: The JSON structure for the Task body.
+#   required: true
+#   content:
+#     application/json:
+#       schema:
+#         $ref: '#/components/schemas/org.maproulette.framework.model.Task'
+###
+PUT     /task/:id                                   @org.maproulette.controllers.api.TaskController.update(id:Long)
+###
+# tags: [ Task ]
+# operationId: task_update_a_batch_of_tasks
+# summary: Update a batch of Tasks
+# description: Will update multiple already existing Tasks from the JSONArray supplied in the body. Each JSON object
+#               is basically a Task object that is processed similarly to the singular /task POST. If a Task
+#               does not exist it will be created from scratch
+# responses:
+#   '200':
+#     description: A simple OK status message
+#   '304':
+#     description: Not updated responding with empty payload if Task already exists and nothing to update
+#   '400':
+#     description: Invalid json payload for Task
+#   '401':
+#     description: The user is not authorized to make this request
+# requestBody:
+#   description: The JSON structure for the Task body.
+#   required: true
+#   content:
+#     application/json:
+#       schema:
+#         type: array
+#         items:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.Task'
+###
+PUT     /tasks                                      @org.maproulette.controllers.api.TaskController.batchUploadPut
+###
+# tags: [ Task ]
+# operationId: task_changes_status_on_tasks_matching_criteria
+# summary: Changes status on tasks matching criteria
+# description: Will changes status on tasks that match the given search parameters.
+# responses:
+#   '200':
+#     description: A simple OK status message with number of tasks updated.
+#   '401':
+#     description: The user is not authorized to make this request
+###
+PUT     /tasks/changeStatus                        @org.maproulette.controllers.api.TaskController.bulkStatusChange(newStatus:Int)
+###
+# tags: [ Task ]
+# operationId: task_bulk_delete_tasks
+# summary: Bulk delete tasks by id list
+# description: Deletes every task in the supplied `taskIds` array. Callers must
+#              have write access on the parent project for each affected task;
+#              any task for which access is denied is skipped and reported in
+#              the response.
+# responses:
+#   '200':
+#     description: Deletion summary
+# requestBody:
+#   description: JSON body containing taskIds
+#   required: true
+#   content:
+#     application/json:
+#       schema:
+#         type: object
+#         properties:
+#           taskIds:
+#             type: array
+#             items:
+#               type: integer
+#               format: int64
+###
+DELETE  /tasks                                     @org.maproulette.controllers.api.TaskController.bulkDelete
+###
+# tags: [ Task ]
+# operationId: task_bulk_archive_tasks
+# summary: Bulk archive/unarchive tasks by id list
+# description: Toggles the archived flag on every task in `taskIds`. Archived
+#              tasks are excluded from task selection for mappers but remain in
+#              the database.
+# responses:
+#   '204':
+#     description: All tasks updated
+# requestBody:
+#   description: JSON body containing taskIds + archived
+#   required: true
+#   content:
+#     application/json:
+#       schema:
+#         type: object
+#         properties:
+#           taskIds:
+#             type: array
+#             items:
+#               type: integer
+#               format: int64
+#           archived:
+#             type: boolean
+###
+PUT     /tasks/archive                             @org.maproulette.controllers.api.TaskController.bulkArchive
+###
+# tags: [ Task ]
+# operationId: task_bulk_reassign_tasks
+# summary: Bulk reassign task review to a different user
+# description: Reassigns the review of every task in `taskIds` to the supplied
+#              `userId`. Tasks without an active review remain unchanged.
+# responses:
+#   '204':
+#     description: All tasks updated
+# requestBody:
+#   description: JSON body containing taskIds + userId
+#   required: true
+#   content:
+#     application/json:
+#       schema:
+#         type: object
+#         properties:
+#           taskIds:
+#             type: array
+#             items:
+#               type: integer
+#               format: int64
+#           userId:
+#             type: integer
+#             format: int64
+###
+PUT     /tasks/reassign                            @org.maproulette.controllers.api.TaskController.bulkReassign
+###
+# tags: [ Task ]
+# operationId: task_retrieves_an_already_existing_task
+# summary: Retrieves an already existing Task
+# description: Retrieves an already existing Task based on the supplied ID in the URL.
+# responses:
+#   '200':
+#     description: The retrieved Task
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.Task'
+#   '404':
+#     description: ID field supplied but no Task found matching the id
+# parameters:
+#   - name: id
+#     in: path
+#     description: The id of the Task to retrieve
+###
+GET     /task/:id                                   @org.maproulette.controllers.api.TaskController.read(id:Long)
+###
+# tags: [ Task ]
+# operationId: task_retrieves_multiple_tasks
+# summary: Retrieves multiple Tasks by their IDs
+# description: Retrieves multiple Tasks based on the supplied array of task IDs as query parameters (comma-separated).
+# responses:
+#   '200':
+#     description: Array of retrieved Tasks
+#     content:
+#       application/json:
+#         schema:
+#           type: array
+#           items:
+#             $ref: '#/components/schemas/org.maproulette.framework.model.Task'
+#   '400':
+#     description: Invalid request parameters
+# parameters:
+#   - name: taskIds
+#     in: query
+#     description: Comma-separated list of task IDs to retrieve
+#     required: true
+#     schema:
+#       type: string
+###
+GET     /tasks                                      @org.maproulette.controllers.api.TaskController.getTasks(taskIds:String)
+###
+# tags: [ Task ]
+# operationId: task_start_working_on_a_task_locks_it_for_the_user
+# summary: Start working on a Task (locks it for the user)
+# description: |
+#   Locks a Task based on the supplied ID in the URL. A user may only hold one active
+#   edit lock at a time - if the user already holds a lock on a different task, this
+#   returns 409 Conflict describing that lock. The client should release that lock
+#   (GET /task/:id/release) before retrying to lock this one.
+# responses:
+#   '200':
+#     description: The locked Task
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.Task'
+#   '404':
+#     description: ID field supplied but no Task found matching the id
+#   '409':
+#     description: The user already holds a lock on a different task
+# parameters:
+#   - name: id
+#     in: path
+#     description: The id of the Task to retrieve
+###
+GET     /task/:id/start                               @org.maproulette.controllers.api.TaskController.startOnTask(id:Long)
+
+###
+# tags: [ Task ]
+# operationId: task_retrieve_any_change_xml_that_is_part_of_this_tasks
+# summary: Retrieve any change XML that is part of this task's cooperative work
+# description: Retrieve change XML that is part of this task's cooperative work.
+#              The cooperative work on the task should be consulted to determine
+#              if any change exists for the task, and which change format was
+#              used (i.e. JOSM, OSMChange, etc).
+#
+# responses:
+#   '200':
+#     description: The change XML data
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.Task'
+#   '404':
+#     description: No Task found matching the id, or no change data found on the task
+# parameters:
+#   - name: id
+#     in: path
+#     description: The id of the Task for which change XML is desired
+#   - name: filename
+#     in: path
+#     description: A filename to use. Some editors will use this as a hint as
+#                  to the change format of the XML. Must be alphanumeric with optional
+#                  underscores, dashes, and dots.
+###
+GET     /task/:id/cooperative/change/$filename<\w[\w\d-_\.]*>            @org.maproulette.controllers.api.TaskController.cooperativeWorkChangeXML(id:Long, filename:String)
+
+###
+# tags: [ Task ]
+# operationId: task_retrieve_task_attachment
+# summary: Retrieve task attachment
+# description: Retrieve attachment identified by attachmentId on specified task
+#
+# responses:
+#   '200':
+#     description: The attachment data
+#   '404':
+#     description: No Task found matching the id, or no attachment found matching attachmentId
+# parameters:
+#   - name: id
+#     in: path
+#     description: The id of the Task for which attachment is desired
+#   - name: attachmentId
+#     in: path
+#     description: The id of the desired task attachment
+###
+GET     /task/:id/attachment/$attachmentId<[\w\d-_~\.]+>                 @org.maproulette.framework.controller.TaskController.attachment(id:Long, attachmentId:String)
+
+###
+# tags: [ Task ]
+# operationId: task_download_task_attachment_data_as_file
+# summary: Download task attachment data as file
+# description: Download attachment attachment data as file
+#
+# responses:
+#   '200':
+#     description: The attachment data
+#   '404':
+#     description: No Task found matching the id, or no attachment found matching attachmentId
+# parameters:
+#   - name: id
+#     in: path
+#     description: The id of the Task for which attachment is desired
+#   - name: attachmentId
+#     in: path
+#     description: The id of the desired task attachment
+#   - name: filename
+#     in: path
+#     description: A filename to use. Some editors will use this as a hint as
+#                  to the format of the data. Must be alphanumeric with optional
+#                  underscores, dashes, and dots.
+###
+GET     /task/:id/attachment/$attachmentId<[\w\d-_~\.]+>/data/$filename<[\w\d-_\.]+>           @org.maproulette.framework.controller.TaskController.attachmentData(id:Long, attachmentId:String, filename:String)
+
+
+###
+# tags: [ Task ]
+# operationId: task_release_a_task_unlocks_it
+# summary: Release a Task (unlocks it)
+# description: Unlocks a Task based on the supplied ID in the URL.
+# responses:
+#   '200':
+#     description: The unlocked Task
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.Task'
+#   '404':
+#     description: ID field supplied but no Task found matching the id
+# parameters:
+#   - name: id
+#     in: path
+#     description: The id of the Task to retrieve
+###
+GET     /task/:id/release                               @org.maproulette.controllers.api.TaskController.releaseTask(id:Long)
+###
+# tags: [ Task ]
+# operationId: task_skip_a_task
+# summary: Skip a Task (increments skip count, releases lock, preserves status)
+# description: Records a skip event for the task (incrementing skip_count),
+#              releases any lock the caller owns, and leaves the task's status
+#              unchanged. Use this instead of transitioning the task to the
+#              Skipped status when the user does not want to act on the task
+#              right now.
+# responses:
+#   '204':
+#     description: The skip event was recorded and the lock was released
+#   '404':
+#     description: ID field supplied but no Task found matching the id
+# parameters:
+#   - name: id
+#     in: path
+#     description: The id of the Task to skip
+###
+POST    /task/:id/skip                                  @org.maproulette.controllers.api.TaskController.skipTask(id:Long)
+###
+# tags: [ Task ]
+# operationId: task_refresh_an_existing_lock_on_a_task
+# summary: Refresh an existing lock on a Task
+# description: Refreshes an existing lock, extending its allowed duration, on the
+#              task with the supplied ID. The requesting user must already own an
+#              active lock on the task (i.e. via the task/:id/start API) or a 403
+#              will be raised
+# responses:
+#   '200':
+#     description: The lock was successfully refreshed
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.Task'
+#   '403':
+#     description: The user does not own a lock on the task
+#   '404':
+#     description: ID field supplied but no Task found matching the id
+# parameters:
+#   - name: id
+#     in: path
+#     description: The id of the Task on which the lock is to be refreshed
+###
+GET     /task/:id/refreshLock                           @org.maproulette.controllers.api.TaskController.refreshTaskLock(id:Long)
+###
+# tags: [ Task ]
+# operationId: task_lock_a_bundle_of_tasks
+# summary: Updates the lock on a task to cover a given set of bundle member tasks
+# description: |
+#   Updates the caller's existing lock on the primary task (locking it first if not
+#   already locked) to cover exactly the given member task ids, without creating or
+#   updating a persisted task_bundles record - that only happens when the bundle is
+#   actually submitted (see the taskBundle endpoints). Intended for interactively
+#   building up a bundle (e.g. lasso-select) so other tabs see the live working set.
+# responses:
+#   '200':
+#     description: The lock now covers the given member tasks
+#   '404':
+#     description: The primary task, its challenge, or its project was not found
+#   '409':
+#     description: The user already holds a lock on a different, unrelated task
+# parameters:
+#   - name: taskId
+#     in: path
+#     description: The id of the primary task to lock
+#   - name: taskIds
+#     in: query
+#     description: Comma-separated ids of the member tasks the lock should cover
+###
+PUT     /task/:taskId/lockBundle                        @org.maproulette.controllers.api.TaskController.lockTaskBundle(taskId:Long, taskIds:List[Long] ?= List())
+###
+# tags: [ Task ]
+# operationId: task_retrieves_task_by_name
+# summary: Retrieves an already existing Task
+# description: Retrieves an already existing Task based on the name of the Task rather than an ID
+# responses:
+#   '200':
+#     description: The retrieved Task
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.Task'
+#   '404':
+#     description: No Task found matching the provided name
+# parameters:
+#   - name: id
+#     in: path
+#     description: The id of the parent Challenge of the Task
+#   - name: name
+#     in: path
+#     description: The name of the Task being retrieved
+###
+GET     /challenge/:id/task/:name                   @org.maproulette.controllers.api.TaskController.readByName(id:Long, name:String)
+###
+# tags: [ Task ]
+# operationId: task_deletes_an_existing_task
+# summary: Deletes an existing Task
+# description: Deletes an existing Task based on the supplied ID.
+# responses:
+#   '200':
+#     description: A status message containing the ID of the Task that was just deleted
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.exception.StatusMessage'
+#   '401':
+#     description: The user is not authorized to make this request
+#   '404':
+#     description: No Task found matching the provided name
+# parameters:
+#   - name: id
+#     in: path
+#     description: The id of the Task being deleted
+###
+DELETE  /task/:id                                   @org.maproulette.controllers.api.TaskController.delete(id:Long, immediate:Boolean ?= true)
+###
+# tags: [ Task ]
+# operationId: task_find_task_matching_search_criteria
+# summary: Find Task matching search criteria
+# description: Finds a list of Tasks that match a specific search criteria. The search criteria is simply a string that is contained in the Task name. String case sensitivity is ignored.
+# responses:
+#   '200':
+#     description: A list of Tasks found
+#     content:
+#       application/json:
+#         schema:
+#           type: array
+#           items:
+#             $ref: '#/components/schemas/org.maproulette.framework.model.Task'
+# parameters:
+#   - name: q
+#     in: query
+#     description: The search string used to match the Task names. Default value is empty string, ie. will match everything.
+#   - name: parentId
+#     in: query
+#     description: This limits the search to the provided challenge and no tasks outside of the provided challenge ID.
+#   - name: limit
+#     in: query
+#     description: Limit the number of results returned in the response. Default value is 10.
+#   - name: page
+#     in: query
+#     description: Used in conjunction with the limit parameter to page through X number of responses. Default value is 0, ie. first page.
+#   - name: onlyEnabled
+#     in: query
+#     description: Flag to set if only want to see Tasks from enabled Challenges returned. Default value is true.
+###
+GET     /tasks/find                                 @org.maproulette.controllers.api.TaskController.find(q:String ?= "", parentId:Long ?= -1, limit:Int ?= 10, page:Int ?= 0, onlyEnabled:Boolean ?= true)
+###
+# tags: [ Task ]
+# operationId: task_search
+# summary: Search for tasks by name
+# responses:
+#   '200':
+#     description: A list of tasks matching the search string
+###
+GET     /tasks/search                               @org.maproulette.controllers.api.TaskController.search(q:String, limit:Int ?= 25)
+###
+# tags: [ Task ]
+# operationId: task_retrieve_tags_for_task
+# summary: Retrieve tags for Task
+# description: Retrieves all the Tags that have been added to the specified Task
+# responses:
+#   '200':
+#     description: A list of Tags associated with the Task. Empty array if not found.
+#     content:
+#       application/json:
+#         schema:
+#           type: array
+#           items:
+#             $ref: '#/components/schemas/org.maproulette.framework.model.Tag'
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID of the Task
+###
+GET     /task/:id/tags                              @org.maproulette.controllers.api.TaskController.getTagsForTask(id:Long)
+###
+# tags: [ Task ]
+# operationId: task_retrieve_tasks_based_on_provided_tags
+# summary: Retrieve Tasks based on provided tags
+# description: Retrieves all the Tasks that contain at least one of the supplied tags.
+# responses:
+#   '200':
+#     description: A list of Tasks that contain at least one of the supplied tags. An empty list otherwise.
+#     content:
+#       application/json:
+#         schema:
+#           type: array
+#           items:
+#             $ref: '#/components/schemas/org.maproulette.framework.model.Task'
+#   '400':
+#     description: If no tags are supplied a BadRequest response will be returned
+# parameters:
+#   - name: tags
+#     in: query
+#     description: A comma separated list of tags
+#   - name: limit
+#     in: query
+#     description: Limit the number of results returned in the response. Default value is 10.
+#   - name: page
+#     in: query
+#     description: Used in conjunction with the limit parameter to page through X number of responses. Default value is 0, ie. first page.
+###
+GET     /tasks/tags                                 @org.maproulette.controllers.api.TaskController.getItemsBasedOnTags(tags:String ?= "", limit:Int ?= 10, page:Int ?= 0)
+###
+# tags: [ Task ]
+# operationId: task_updates_task_tags
+# summary: Updates Task Tags
+# description: Updates the tags on the Task
+# responses:
+#   '304':
+#     description: A basic 304 with NoContent will be returned on a successful delete
+#   '400':
+#     description: If no tags are supplied a BadRequest response will be returned
+#   '401':
+#     description: The user is not authorized to make this request
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID of the Task
+#   - name: tags
+#     in: query
+#     description: A complete comma separated list of tags. If empty, then all tags will be removed.
+#     required: true
+###
+GET  /task/:id/tags/update                              @org.maproulette.controllers.api.TaskController.updateItemTags(id:Long, tags:String ?= "")
+###
+# tags: [ Task ]
+# operationId: task_delete_task_tags
+# summary: Delete Task Tags
+# description: Deletes all the supplied tags from the Task
+# responses:
+#   '304':
+#     description: A basic 304 with NoContent will be returned on a successful delete
+#   '400':
+#     description: If no tags are supplied a BadRequest response will be returned
+#   '401':
+#     description: The user is not authorized to make this request
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID of the Task
+#   - name: tags
+#     in: query
+#     description: A comma separated list of tags
+#     required: true
+###
+DELETE  /task/:id/tags                              @org.maproulette.controllers.api.TaskController.deleteTagsFromItem(id:Long, tags:String ?= "")
+###
+# tags: [ Task ]
+# operationId: task_retrieves_random_task
+# summary: Retrieves random Task
+# description: Retrieves a random Task based on the search criteria.
+# responses:
+#   '200':
+#     description: The list of tasks that match the search criteria
+#     content:
+#       application/json:
+#         schema:
+#           type: array
+#           items:
+#             $ref: '#/components/schemas/org.maproulette.framework.model.Task'
+# parameters:
+#   - name: ps
+#     in: query
+#     description: The search string to match the names of projects to limit the Task pool from. The string is case insensitive.
+#   - name: cs
+#     in: query
+#     description: The search string to match the names of challenges to limit the Task pool from. The string is case insensitive.
+#   - name: ct
+#     in: query
+#     description: The challenge tags to limit the parent challenges that will limit the Task pool.
+#   - name: tags
+#     in: query
+#     description: A comma separated list of task tags. The search will only retrieve random tasks that contain those tags
+#   - name: ts
+#     in: query
+#     description: The task search string. Retrieve only tasks that contain the search string in the task name. Match is case insensitive.
+#   - name: limit
+#     in: query
+#     description: Limit the number of results returned in the response. Default value is 1.
+#   - name: proximity
+#     in: query
+#     description: Id of task that you wish to find the next task based on the proximity of that task
+###
+GET     /tasks/random                               @org.maproulette.controllers.api.TaskController.getRandomTasks(ps:String ?= "", cs:String ?= "", ct:String ?= "", tags:String ?= "", ts:String ?= "", limit:Int ?= 1, proximity:Long ?= -1)
+###
+# tags: [ Task ]
+# operationId: task_retrieves_tasks_within_a_bounding_box
+# summary: Retrieves Tasks within a bounding box
+# description: Retrieves tasks within a given bounding box.
+# responses:
+#   '200':
+#     description: The list of clusteredPoints representing Tasks that match the search criteria within the bounding box.
+#     content:
+#       application/json:
+#         schema:
+#           type: array
+#           items:
+#             $ref: '#/components/schemas/org.maproulette.framework.model.ClusteredPoint'
+# parameters:
+#   - name: left
+#     in: path
+#     description: The minimum longitude for the bounding box.
+#   - name: bottom
+#     in: path
+#     description: The minimum latitude for the bounding box.
+#   - name: right
+#     in: path
+#     description: The maximum longitude for the bounding box.
+#   - name: top
+#     in: path
+#     description: The maximum latitude for the bounding box.
+#   - name: limit
+#     in: query
+#     description: Limit the number of results returned in the response. Default value is 1.
+#   - name: page
+#     in: query
+#     description: Used in conjunction with the limit parameter to page through X number of responses. Default value is 0, ie. first page.
+#   - name: includeGeometries
+#     in: query
+#     description: Optional flag to have geometries data returned for each task.
+#   - name: includeTags
+#     in: query
+#     description: Optional flag to have tag data returned for each task.
+#   - name: excludeLocked
+#     in: query
+#     description: Ignore the lock status of the task. So true will include all tasks, including ones locked by another user.
+###
+PUT     /tasks/box/:left/:bottom/:right/:top        @org.maproulette.framework.controller.TaskController.getTasksInBoundingBox(left:Double, bottom:Double, right:Double, top:Double, limit:Int ?= 10000, page:Int ?= 0, excludeLocked:Boolean ?= false, sort:String ?= "", order:String ?= "ASC", includeTotal:Boolean ?= false, includeGeometries:Boolean ?=false, includeTags:Boolean ?= false)
+###
+# tags: [ Task ]
+# operationId: task_retrieves_task_marker_data_within_a_bounding_box
+# summary: Retrieves Task Marker Data within a bounding box
+# description: Retrieves task marker data within a given bounding box.
+# responses:
+#   '200':
+#     description: The list of markers representing Tasks that match the search criteria within the bounding box.
+#     content:
+#       application/json:
+#         schema:
+#           type: array
+#           items:
+#             $ref: '#/components/schemas/org.maproulette.framework.model.ClusteredPoint'
+# parameters:
+#   - name: left
+#     in: path
+#     description: The minimum longitude for the bounding box.
+#   - name: bottom
+#     in: path
+#     description: The minimum latitude for the bounding box.
+#   - name: right
+#     in: path
+#     description: The maximum longitude for the bounding box.
+#   - name: top
+#     in: path
+#     description: The maximum latitude for the bounding box.
+#   - name: limit
+#     in: query
+#     description: Limit the number of results returned in the response. Default value is 1.
+#   - name: excludeLocked
+#     in: query
+#     description: Ignore the lock status of the task. So true will include all tasks, including ones locked by another user.
+#   - name: includeGeometries
+#     in: query
+#     description: Optional flag to have geometries data returned for each task.
+###
+PUT     /markers/box/:left/:bottom/:right/:top        @org.maproulette.framework.controller.TaskController.getTaskMarkerDataInBoundingBox(left:Double, bottom:Double, right:Double, top:Double, limit:Int ?= 500, excludeLocked:Boolean ?= false, includeGeometries:Boolean ?= false, includeTags:Boolean ?= false)
+###
+# tags: [ Task ]
+# operationId: task_marker_Data
+# summary: Retrieves task markers for map display
+# description: Returns task markers, overlapping marker groups, or cluster summaries depending on the number of matching tasks. If totalCount exceeds 5000, neither tasks nor clusters are returned. Between 100 and 5000, clusters are returned. Under 100, individual markers and overlaps are returned.
+# responses:
+#   '200':
+#     description: Task marker response with totalCount and optional tasks/clusters
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.TaskMarkerResponse'
+# parameters:
+#   - name: statuses
+#     in: query
+#     description: Comma-separated task statuses to include (e.g. "0,3,6")
+#   - name: global
+#     in: query
+#     description: Whether to include only global challenges
+#   - name: cluster
+#     in: query
+#     description: Whether to force cluster mode
+#   - name: bounds
+#     in: query
+#     description: Comma-separated bounding box (left,bottom,right,top)
+#   - name: keywords
+#     in: query
+#     description: Optional keyword filter
+#   - name: difficulty
+#     in: query
+#     description: Optional difficulty filter (1=Easy, 2=Normal, 3=Expert)
+###
+GET     /taskMarkers                                  @org.maproulette.framework.controller.TaskController.getTaskMarkers(statuses:String ?= "", global:Boolean ?= false, cluster:Boolean ?= false, bounds:Option[String], keywords:Option[String], difficulty:Option[Int])
+###
+# tags: [ Task ]
+# operationId: task_get_task_tiles
+# summary: Get Task Tiles as MVT
+# description: Returns a Mapbox Vector Tile (MVT) for the given tile coordinates. Features include group_type (0=single, 1=overlap, 2=cluster), task_count, and task properties for singles. A tile covers all available work and takes no filters, so it is a pure function of its coordinates and is publicly cacheable.
+# responses:
+#   '200':
+#     description: Binary MVT data
+#     content:
+#       application/vnd.mapbox-vector-tile:
+#         schema:
+#           type: string
+#           format: binary
+# parameters:
+#   - name: z
+#     in: path
+#     required: true
+#     schema:
+#       type: integer
+#   - name: x
+#     in: path
+#     required: true
+#     schema:
+#       type: integer
+#   - name: y
+#     in: path
+#     required: true
+#     schema:
+#       type: integer
+###
+GET     /taskTilesMvt/:z/:x/:y  @org.maproulette.framework.controller.TaskController.getTaskTilesMvt(z: Int, x: Int, y: Int)
+###
+# tags: [ Task ]
+# operationId: task_update_task_changeset
+# summary: Update Task Changeset
+# description: Will update the changeset of the task. It will do this by attempting to match the OSM changeset to the Task based on the geometry and the time that the changeset was executed.
+# responses:
+#   '200':
+#     description: The task that was updated. With the updated changeset value
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.framework.model.Task'
+#   '401':
+#     description: The user is not authorized to make this request
+#   '404':
+#     description: The task with the supplied ID was not found.
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID of the task
+###
+PUT     /task/:id/changeset                         @org.maproulette.controllers.api.TaskController.matchToOSMChangeSet(id:Long)
+###
+# tags: [ Task ]
+# operationId: task_update_completion_responses
+# summary: Update Completion Responses
+# description: Will update the completion responses on the Task.
+# responses:
+#   '304':
+#     description: No Content, update successful
+#   '401':
+#     description: The user is not authorized to make this request
+#   '404':
+#     description: The task with the supplied ID was not found.
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID of the task
+# requestBody:
+#   description: key/value json to be stored with this task.
+#   content:
+#     application/json:
+#       schema:
+#         type: object
+###
+PUT     /task/:id/responses                           @org.maproulette.framework.controller.TaskController.updateCompletionResponses(id:Long)
+###
+# tags: [ Task ]
+# operationId: task_update_task_status
+# summary: Update Task Status
+# description: Will update a Tasks status to one of the following. 0 - Created, 1 - Fixed, 2 - False Positive, 3 - Skipped, 4 - Deleted, 5 - Already Fixed, 6 - Can't Complete
+# responses:
+#   '304':
+#     description: No Content, update successful
+#   '401':
+#     description: The user is not authorized to make this request
+#   '404':
+#     description: The task with the supplied ID was not found.
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID of the task
+#   - name: status
+#     in: path
+#     description: The status to update the Task too. Following status Integers can be used. 0 - Created, 1 - Fixed, 2 - False Positive, 3 - Skipped, 4 - Deleted, 5 - Already Fixed, 6 - Can't Complete
+#   - name: requestReview
+#     in: query
+#     description: Boolean indicating if a review is requested on this task. (Will override user settings if provided)
+#   - name: tags
+#     in: query
+#     description: Optional tags to associate with this task
+# requestBody:
+#   description: Optional key/value json to be stored with this task.
+#   required: false
+#   content:
+#     application/json:
+#       schema:
+#         type: object
+###
+PUT     /task/:id/:status                           @org.maproulette.controllers.api.TaskController.setTaskStatus(id:Long, status:Int, tags:String ?="")
+###
+# tags: [ Task ]
+# operationId: task_update_bundle_task_status
+# summary: Update Bundle Task Status
+# description: Will update a Bundled list of Tasks statuses to one of the following. 0 - Created, 1 - Fixed, 2 - False Positive, 3 - Skipped, 4 - Deleted, 5 - Already Fixed, 6 - Can't Complete
+# responses:
+#   '200':
+#     description: TaskBundle
+#   '401':
+#     description: The user is not authorized to make this request
+#   '404':
+#     description: The bundle or primary task was not found with the supplied Id.
+# parameters:
+#   - name: bundleId
+#     in: path
+#     description: The ID of the bundle
+#   - name: primaryId
+#     in: path
+#     description: The primary ID of the task for this bundle
+#   - name: status
+#     in: path
+#     description: The status to update the Task too. Following status Integers can be used. 0 - Created, 1 - Fixed, 2 - False Positive, 3 - Skipped, 4 - Deleted, 5 - Already Fixed, 6 - Can't Complete
+#   - name: requestReview
+#     in: query
+#     description: Boolean indicating if a review is requested on this task. (Will override user settings if provided)
+#   - name: tags
+#     description: Optional tags to associate with this task
+###
+PUT     /taskBundle/:bundleId/:status                           @org.maproulette.framework.controller.TaskBundleController.setBundleTaskStatus(bundleId:Long, primaryId:Long, status:Int, tags:String ?="")
+###
+# tags: [ Task ]
+# operationId: task_update_task_review_status
+# summary: Update Task Review Status
+# description: Will update a Tasks review status to one of the following. 0 - Requested, 1 - Approved, 2 - Rejected, 3 - Assisted
+# responses:
+#   '200':
+#     description: No Content, update successful
+#   '401':
+#     description: The user is not authorized to make this request
+#   '404':
+#     description: The task with the supplied ID was not found.
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID of the task
+#   - name: status
+#     in: path
+#     description: Will update a Tasks review status to one of the following. 0 - Requested, 1 - Approved, 2 - Rejected, 3 - Assisted, 4 - Disputed, 5 - Unnecessary, 6 - Approved With Revisions
+#   - name: tags
+#     description: Optional tags to associate with this task
+#   - name: newTaskStatus
+#     in: query
+#     description: Optional int taskStatus to change the task status on this task to
+#   - name: asMetaReview
+#     in: query
+#     description: Optional boolean to indicate the meta review status should be set to unecessary
+#   - name: errorTags
+#     in: query
+#     description: Optional string to provide error tags in the review history
+# requestBody:
+#   description: The JSON structure for the Comments body
+#   required: false
+#   content:
+#     application/json:
+#       schema:
+#         type: object
+#         properties:
+#           comment:
+#             type: string
+#             description: User's comment.
+#             example: "This is an example comment."
+###
+PUT     /task/:id/review/:status                           @org.maproulette.framework.controller.TaskReviewController.setTaskReviewStatus(id:Long, status:Int, tags:String ?="", newTaskStatus:String ?= "", errorTags:String ?= "")
+###
+# tags: [ Task ]
+# operationId: task_changes_review_status_to_unnecessary_on_tasks_matc
+# summary: Changes review status to "Unnecessary" on tasks matching criteria
+# description: Will change review status on tasks that match the given search parameters
+#              indicating the tasks do not need a review.
+# responses:
+#   '200':
+#     description: A simple OK status message with number of tasks updated.
+#   '401':
+#     description: The user is not authorized to make this request
+# parameters:
+#   - name: ids
+#     in: query
+#     description: Task ids to change (OR search parameters can be used instead)
+###
+PUT     /tasks/review/remove                               @org.maproulette.framework.controller.TaskReviewController.removeReviewRequest(ids:String?="", asMetaReview:Boolean ?= false)
+###
+# tags: [ Task ]
+# operationId: task_update_task_review_status_for_a_bundle
+# summary: Update Task Review Status for a Bundle
+# description: Will update a Tasks review status to one of the following. 0 - Requested, 1 - Approved, 2 - Rejected, 3 - Assisted
+# responses:
+#   '200':
+#     description: Task Bundle
+#   '401':
+#     description: The user is not authorized to make this request
+#   '404':
+#     description: The task with the supplied ID was not found.
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID of the bundle
+#   - name: status
+#     in: path
+#     description: The status to update the Task to. Following status Integers can be used. 0 - Requested, 1 - Approved, 2 - Rejected, 3 - Assisted
+#   - name: tags
+#     description: Optional tags to associate with this task
+#   - name: newTaskStatus
+#     in: query
+#     description: Optional int taskStatus to change the task status on all tasks in this bundle to
+#   - name: errorTags
+#     in: query
+#     description: Optional string to provide error tags in the review history
+# requestBody:
+#   description: The JSON structure for the Comments body & Optional key/value to be stored with this task.
+#   required: false
+#   content:
+#     application/json:
+#       schema:
+#         type: object
+#         properties:
+#           comment:
+#             type: string
+#             description: User's comment.
+#             example: "This is an example comment."
+###
+PUT     /taskBundle/:id/review/:status                     @org.maproulette.framework.controller.TaskBundleController.setBundleTaskReviewStatus(id:Long, status:Int, tags:String ?="", newTaskStatus:String ?= "", errorTags:String ?= "")
+###
+# tags: [ Task ]
+# operationId: task_update_task_meta_review_status
+# summary: Update Task Meta Review Status
+# description: Will update a Tasks meta review status to one of the following. 0 - (re)Requested, 1 - Approved, 2 - Rejected, 3 - Assisted
+# responses:
+#   '200':
+#     description: No Content, update successful
+#   '401':
+#     description: The user is not authorized to make this request
+#   '404':
+#     description: The task with the supplied ID was not found.
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID of the task
+#   - name: status
+#     in: path
+#     description: Will update a Tasks meta review status to one of the following. 0 - (re)Requested, 1 - Approved, 2 - Rejected, 3 - Assisted, 4 - Disputed, 5 - Unnecessary
+#   - name: tags
+#     description: Optional tags to associate with this task
+#   - name: errorTags
+#     in: query
+#     description: Optional string to provide reject tags in the review history
+# requestBody:
+#   description: The JSON structure for the Comments body
+#   required: false
+#   content:
+#     application/json:
+#       schema:
+#         type: object
+#         properties:
+#           comment:
+#             type: string
+#             description: User's comment.
+#             example: "This is an example comment."
+#         required:
+#           - comment
+###
+PUT     /task/:id/metareview/:status                           @org.maproulette.framework.controller.TaskReviewController.setMetaReviewStatus(id:Long, status:Int, tags:String ?="", errorTags:String ?= "")
+###
+# tags: [ Task ]
+# operationId: task_update_meta_review_status_for_a_bundle
+# summary: Update Meta Review Status for a Bundle
+# description: Will update Tasks meta review status to one of the following. 0 - Requested, 1 - Approved, 2 - Rejected, 3 - Assisted
+# responses:
+#   '200':
+#     description: Task Bundle
+#   '401':
+#     description: The user is not authorized to make this request
+#   '404':
+#     description: The task with the supplied ID was not found.
+# parameters:
+#   - name: id
+#     in: path
+#     description: The ID of the bundle
+#   - name: status
+#     in: path
+#     description: The review status to update the meta review status to. Following status Integers can be used. 0 - Requested, 1 - Approved, 2 - Rejected, 3 - Assisted
+#   - name: tags
+#     description: Optional tags to associate with this task
+#   - name: errorTags
+#     in: query
+#     description: Optional string to provide error tags in the review history
+# requestBody:
+#   description: The JSON structure for the Comments body
+#   required: false
+#   content:
+#     application/json:
+#       schema:
+#         type: object
+#         properties:
+#           comment:
+#             type: string
+#             description: User's comment.
+#             example: "This is an example comment."
+#         required:
+#           - comment
+###
+PUT     /taskBundle/:id/metareview/:status                     @org.maproulette.framework.controller.TaskBundleController.setBundleMetaReviewStatus(id:Long, status:Int, tags:String ?="", errorTags:String ?= "")
+###
+# tags: [ Task ]
+# operationId: task_retrieves_task_clusters
+# summary: Retrieves task clusters.
+# description: Retrieves task clusters that contain the centroid location for a group of tasks
+# responses:
+#   '200':
+#     description: An array of task clusters that represents clusters of tasks for a challenge. If none found will return an empty list.
+#     content:
+#       application/json:
+#         schema:
+#           type: array
+#           items:
+#             $ref: '#/components/schemas/org.maproulette.framework.model.TaskCluster'
+# parameters:
+#   - name: points
+#     in: query
+#     description: The number of clusters that you want returned
+###
+PUT     /taskCluster                                @org.maproulette.framework.controller.TaskController.getTaskClusters(points:Int ?= 100)
+###
+# tags: [ Task ]
+# operationId: task_retrieves_tasks_in_a_cluster
+# summary: Retrieves tasks in a cluster
+# description: Retrieves tasks contained in a cluster retrieved from api /api/v2/challenge/:id/taskCluster
+# responses:
+#   '200':
+#     description: An array of tasks that are contained in a cluster. If none found will return an empty list.
+#     content:
+#       application/json:
+#         schema:
+#           type: array
+#           items:
+#             $ref: '#/components/schemas/org.maproulette.framework.model.ClusteredPoint'
+# parameters:
+#   - name: id
+#     in: path
+#     description: The id of the parent project.
+#   - name: clusterId
+#     in: path
+#     description: The id of the single cluster.
+#   - name: points
+#     in: query
+#     description: The number of clusters that you want returned
+###
+GET     /tasksInCluster/:clusterId                  @org.maproulette.framework.controller.TaskController.getTasksInCluster(clusterId:Int, points:Int ?= 100)
+###
+# tags: [ Task ]
+# operationId: task_retrieves_tasks_within_a_bounding_box_deprecated
+# summary: Retrieves Tasks within a bounding box
+# deprecated: true
+# responses:
+#   '200':
+#     description: Success
+###
+GET     /tasks/box/:left/:bottom/:right/:top        @org.maproulette.framework.controller.TaskController.getTasksInBoundingBox(left:Double, bottom:Double, right:Double, top:Double, limit:Int ?= 10000, page:Int ?= 0, excludeLocked:Boolean ?= false, sort:String ?= "", order:String ?= "ASC", includeTotal:Boolean ?= false, includeGeometries:Boolean ?=false, includeTags:Boolean ?= false)
+###
+# tags: [ Task ]
+# operationId: task_get_challenge_tasks_in_bounds
+# summary: Get challenge tasks in bounding box
+# description: Retrieves tasks within a bounding box for specified challenges. This is a simplified endpoint that returns paginated task data based on the visible map area. Useful for displaying tasks in a table or list view based on the current map viewport.
+# responses:
+#   '200':
+#     description: Paginated list of tasks within the bounding box
+#     content:
+#       application/json:
+#         schema:
+#           type: object
+#           properties:
+#             data:
+#               type: array
+#               items:
+#                 $ref: '#/components/schemas/org.maproulette.framework.model.Task'
+#             total:
+#               type: integer
+#               description: Total number of tasks matching the criteria
+#             page:
+#               type: integer
+#               description: Current page number
+#             limit:
+#               type: integer
+#               description: Number of items per page
+#   '400':
+#     description: Invalid parameters provided
+#   '401':
+#     description: The user is not authorized to make this request
+# parameters:
+#   - name: bounds
+#     in: query
+#     description: Comma-separated bounding box coordinates in format "left,bottom,right,top" (e.g., "-122.5,37.7,-122.3,37.9"). If not provided, returns tasks without geographic filtering.
+#     required: false
+#     schema:
+#       type: string
+#   - name: challengeIds
+#     in: query
+#     description: Comma-separated list of challenge IDs to filter tasks by (e.g., "123,456,789")
+#     required: false
+#     schema:
+#       type: string
+#   - name: limit
+#     in: query
+#     description: Maximum number of tasks to return per page
+#     required: false
+#     schema:
+#       type: integer
+#       default: 10
+#   - name: page
+#     in: query
+#     description: Page number for pagination (0-indexed)
+#     required: false
+#     schema:
+#       type: integer
+#       default: 0
+###
+GET     /tasks/bounds     @org.maproulette.framework.controller.TaskController.getChallengeTasksInBounds(bounds:String ?= "", challengeIds:String ?= "", limit:Int ?= 10, page:Int ?= 0)
+###
+# tags: [ Task ]
+# operationId: task_retrieves_task_clusters_use_put_method
+# summary: Retrieves task clusters. USE PUT METHOD
+# deprecated: true
+# responses:
+#   '200':
+#     description: Success
+###
+# tags: [ Task ]
+# operationId: task_request_task_unlock
+# summary: Request task unlock
+# description: Sends a notification to the user who has locked a task requesting them to unlock it
+# responses:
+#   '200':
+#     description: Ok with a standard message
+#     content:
+#       application/json:
+#         schema:
+#           $ref: '#/components/schemas/org.maproulette.exception.StatusMessage'
+#   '401':
+#     description: The user is not authorized to make this request
+#   '404':
+#     description: The task or user was not found
+# parameters:
+#   - name: taskId
+#     in: path
+#     description: The id of the task that is locked
+###
+PUT     /task/:taskId/unlock/request                @org.maproulette.framework.controller.TaskController.requestTaskUnlock(taskId:Long)
+###
+GET     /taskCluster                                @org.maproulette.framework.controller.TaskController.getTaskClusters(points:Int ?= 100)
+###
+# tags: [ Task ]
+# operationId: task_unlocks_a_bundle_of_tasks
+# summary: Unlocks a bundle of tasks
+# description: |
+#   Releases the calling user's lock covering any of the given task ids (bundles are
+#   now locked as a single row on the bundle's primary task, so this releases that
+#   covering lock if the user holds it - ids not currently locked by the user are
+#   ignored rather than erroring).
+# responses:
+#   '200':
+#     description: Success message
+#   '401':
+#     description: The user is not authorized to make this request
+# requestBody:
+#   description: A JSON array of task IDs to unlock.
+#   required: true
+#   content:
+#     application/json:
+#       schema:
+#         type: array
+#         items:
+#           type: integer
+###
+POST    /task/bundle/unlock                        @org.maproulette.controllers.api.TaskController.unlockTaskBundle(taskIds:List[Long])

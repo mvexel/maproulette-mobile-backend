@@ -1,0 +1,366 @@
+/*
+ * Copyright (C) 2020 MapRoulette contributors (see CONTRIBUTORS.md).
+ * Licensed under the Apache License, Version 2.0 (see LICENSE).
+ */
+
+package org.maproulette.framework.repository
+
+import org.slf4j.LoggerFactory
+
+import anorm.ToParameterValue
+import anorm.SqlParser.scalar
+import anorm._
+import javax.inject.{Inject, Singleton}
+import org.maproulette.exception.{InvalidException, LockConflictException}
+import org.maproulette.Config
+import org.maproulette.framework.psql.Query
+import org.maproulette.framework.psql.filter.BaseParameter
+import org.maproulette.framework.model.{Task, TaskBundle, User}
+import org.maproulette.framework.mixins.{TaskParserMixin, Locking}
+import org.maproulette.framework.model.Task.STATUS_CREATED
+import play.api.db.Database
+
+// deprecated and to be removed after conversion
+import org.maproulette.models.dal.TaskDAL
+
+@Singleton
+class TaskBundleRepository @Inject() (
+    override val db: Database,
+    config: Config,
+    taskRepository: TaskRepository,
+    taskDAL: TaskDAL
+) extends RepositoryMixin
+    with TaskParserMixin
+    with Locking[Task] {
+  protected val logger           = LoggerFactory.getLogger(this.getClass)
+  implicit val baseTable: String = Task.TABLE
+
+  /**
+    * Inserts a new task bundle with the given tasks, assigning ownership of
+    * the bundle to the given user
+    *
+    * @param user    The user who is to own the bundle
+    * @param name    The name of the task bundle
+    * @param lockedTasks The tasks to be added to the bundle
+    */
+  def insert(
+      user: User,
+      name: String,
+      primaryId: Option[Long],
+      taskIds: List[Long],
+      verifyTasks: (List[Task]) => Unit
+  ): TaskBundle = {
+    // First transaction: verify tasks and create bundle
+    val bundleId = this.withMRTransaction { implicit c =>
+      val tasks = this.taskDAL.retrieveListById(-1, 0)(taskIds)
+
+      val failedTaskIds = taskIds.diff(tasks.map(_.id))
+
+      // Checks to see if there where any tasks that were locked when the user tried to bundle them.
+      if (failedTaskIds.nonEmpty) {
+        throw new InvalidException(
+          s"Bundle creation failed because the following task IDs were not found: ${failedTaskIds.mkString(", ")}"
+        )
+      }
+
+      verifyTasks(tasks)
+
+      val rowId =
+        SQL"""INSERT INTO bundles (owner_id, name) VALUES (${user.id}, ${name})""".executeInsert()
+
+      rowId match {
+        case Some(id: Long) =>
+          // Set primary task if specified
+          primaryId.foreach { pid =>
+            SQL"""UPDATE tasks SET is_bundle_primary = true WHERE id = $pid""".executeUpdate()
+          }
+          id
+        case None =>
+          throw new Exception("Bundle creation failed")
+      }
+    }
+
+    // Second transaction: add tasks to bundle
+    this.bundleTasks(user, bundleId, taskIds)
+
+    try {
+      this.lockBundleTasks(user, bundleId)
+    } catch {
+      case e: LockConflictException =>
+        this.deleteTaskBundle(user, bundleId)
+        throw e
+    }
+
+    val tasks = this.taskDAL.retrieveListById(-1, 0)(taskIds)
+
+    // Return the created bundle
+    TaskBundle(bundleId, user.id, taskIds, Some(tasks))
+  }
+
+  /**
+    *  Sets the bundle to the tasks provided, and unlock all tasks removed from current bundle
+    *
+    * @param bundleId The id of the bundle
+    * @param taskIds The task ids the bundle will reset to
+    */
+  def updateTaskBundle(
+      user: User,
+      bundleId: Long,
+      taskIds: List[Long]
+  ): Unit = {
+    withMRTransaction { implicit c =>
+      // Retrieve all the task ids currently in the bundle
+      val currentTaskIds = this
+        .retrieveTasks(
+          Query.simple(List(BaseParameter("bundle_id", bundleId, table = Some("tb"))))
+        )
+        .map(_.id)
+
+      // Remove previous tasks from the bundle join table and unlock them if necessary
+      val tasksToRemove = currentTaskIds.filter(taskId => !taskIds.contains(taskId))
+
+      if (tasksToRemove.nonEmpty) {
+        this.unbundleTasks(user, bundleId, tasksToRemove)
+      }
+
+      // Filter for tasks that need to be added back to the bundle.
+      val tasksToAdd = taskIds.filterNot(currentTaskIds.contains)
+
+      if (tasksToAdd.nonEmpty) {
+        this.bundleTasks(user, bundleId, tasksToAdd)
+      }
+
+      // Refresh the bundle's lock so bundledTasks reflects the final membership
+      this.lockBundleTasks(user, bundleId)
+    }
+  }
+
+  /**
+    * Adds tasks to a bundle.
+    *
+    * @param bundleId The id of the bundle
+    */
+  def bundleTasks(
+      user: User,
+      bundleId: Long,
+      taskIds: List[Long]
+  ): Unit = {
+    this.withMRConnection { implicit c =>
+      val sqlQuery =
+        s"""INSERT INTO task_bundles (bundle_id, task_id) VALUES ($bundleId, {taskId})"""
+      val parameters = taskIds.map(taskId => Seq[NamedParameter]("taskId" -> taskId))
+
+      BatchSql(sqlQuery, parameters.head, parameters.tail: _*).execute()
+      val primaryTaskId = SQL(
+        """SELECT id FROM tasks WHERE bundle_id = {bundleId} AND is_bundle_primary = true"""
+      ).on("bundleId" -> bundleId)
+        .as(scalar[Int].singleOpt)
+        .getOrElse(0)
+
+      val primaryTaskStatus: Int = SQL("""SELECT status FROM tasks WHERE id = {primaryTaskId}""")
+        .on("primaryTaskId" -> primaryTaskId)
+        .as(scalar[Int].singleOpt)
+        .getOrElse(0)
+
+      SQL(
+        s"""UPDATE tasks SET bundle_id = {bundleId}, status = $primaryTaskStatus
+              WHERE bundle_id IS NULL AND id IN ({inList})"""
+      ).on(
+          "bundleId" -> bundleId,
+          "inList"   -> taskIds
+        )
+        .executeUpdate()
+
+      val taskReviewQuery = SQL(
+        """SELECT review_status, review_requested_by FROM task_review WHERE task_id = {primaryTaskId}"""
+      ).on("primaryTaskId" -> primaryTaskId)
+        .as((scalar[Int] ~ scalar[Int]).singleOpt)
+
+      taskReviewQuery match {
+        case Some((primaryTaskReviewStatus ~ primaryTaskReviewRequestedBy)) =>
+          SQL(
+            """INSERT INTO task_review (task_id, review_status, review_requested_by) 
+            SELECT id, {reviewStatus}, {reviewRequestedBy}
+            FROM tasks WHERE id IN ({inList})"""
+          ).on(
+              "reviewStatus"      -> primaryTaskReviewStatus,
+              "reviewRequestedBy" -> primaryTaskReviewRequestedBy,
+              "inList"            -> taskIds
+            )
+            .executeUpdate()
+        case None =>
+      }
+
+      val tasks = this.taskDAL.retrieveListById(-1, 0)(taskIds)
+
+      tasks.foreach { task =>
+        taskRepository.cacheManager.cache.remove(task.id)
+      }
+    }
+  }
+
+  /**
+    * Removes tasks from a bundle.
+    *
+    * @param bundleId The id of the bundle
+    */
+  def unbundleTasks(
+      user: User,
+      bundleId: Long,
+      taskIds: List[Long]
+  ): Unit = {
+    this.withMRConnection { implicit c =>
+      val tasks = this.retrieveTasks(
+        Query.simple(List(BaseParameter("bundle_id", bundleId, table = Some("tb"))))
+      )
+
+      // Unset any bundle_id on individual tasks (this is set when task is completed)
+      SQL(s"""UPDATE tasks SET bundle_id = NULL
+              WHERE bundle_id = {bundleId}
+              AND (is_bundle_primary != true OR is_bundle_primary is NULL)
+              AND id IN ({inList})""")
+        .on(
+          Symbol("bundleId") -> bundleId,
+          Symbol("inList")   -> ToParameterValue.apply[List[Long]].apply(taskIds)
+        )
+        .executeUpdate()
+
+      for (task <- tasks) {
+        if (!task.isBundlePrimary.getOrElse(false)) {
+          taskIds.find(_ == task.id) match {
+            case Some(_) =>
+              SQL(s"""DELETE FROM task_bundles
+                      WHERE bundle_id = $bundleId AND task_id = ${task.id}""").executeUpdate()
+              // This is in order to pass the filters so the task is displayed as "available" in task searching and maps.
+              SQL(s"DELETE FROM task_review tr WHERE tr.task_id = ${task.id}").executeUpdate()
+
+              SQL(
+                """UPDATE tasks 
+                      SET status = {status} 
+                      WHERE id = {taskId}
+                  """
+              ).on(
+                  "taskId" -> task.id,
+                  "status" -> STATUS_CREATED
+                )
+                .executeUpdate()
+
+              taskRepository.cacheManager.cache.remove(task.id)
+            case None => // do nothing
+          }
+        }
+      }
+
+      // Refresh the bundle's lock so bundledTasks no longer includes the removed tasks
+      try {
+        this.lockBundleTasks(user, bundleId)
+      } catch {
+        case e: Exception => this.logger.warn(e.getMessage)
+      }
+    }
+  }
+
+  /**
+    * Deletes a task bundle.
+    *
+    * @param bundleId The id of the bundle
+    */
+  def deleteTaskBundle(user: User, bundleId: Long): Unit = {
+    this.withMRConnection { implicit c =>
+      // Retrieve tasks
+      val tasks = this.retrieveTasks(
+        Query.simple(List(BaseParameter("bundle_id", bundleId, table = Some("tb"))))
+      )
+
+      if (tasks.nonEmpty) {
+        val primary = tasks.find(_.isBundlePrimary.getOrElse(false)).getOrElse(tasks.head)
+        try {
+          this.unlockItem(user, primary)
+        } catch {
+          case e: Exception => this.logger.warn(e.getMessage)
+        }
+      }
+
+      // Update tasks to set bundle_id and is_bundle_primary to NULL
+      SQL(
+        """UPDATE tasks 
+          SET bundle_id = NULL, 
+              is_bundle_primary = NULL 
+          WHERE bundle_id = {bundleId}"""
+      ).on("bundleId" -> bundleId)
+        .executeUpdate()
+
+      // Delete from task_bundles which will also cascade delete from bundles
+      SQL("DELETE FROM task_bundles WHERE bundle_id = {bundleId}")
+        .on("bundleId" -> bundleId)
+        .executeUpdate()
+
+      // Update cache for each task
+      tasks.foreach { task =>
+        if (!task.isBundlePrimary.getOrElse(false)) {
+          SQL(
+            """UPDATE tasks 
+                  SET status = {status} 
+                  WHERE id = {taskId}
+              """
+          ).on(
+              "taskId" -> task.id,
+              "status" -> STATUS_CREATED
+            )
+            .executeUpdate()
+        }
+        taskRepository.cacheManager.cache.remove(task.id)
+      }
+    }
+  }
+
+  /**
+    * Fetches the owner of the given TaskBundle with the given bundle id.
+    *
+    * @param bundleId The id of the bundle
+    */
+  def retrieveOwner(query: Query): Option[Long] = {
+    this.withMRTransaction { implicit c =>
+      query
+        .build(
+          "SELECT distinct owner_id from task_bundles tb " +
+            "INNER JOIN bundles ON bundles.id = tb.bundle_id"
+        )
+        .as(SqlParser.long("owner_id").singleOpt)
+    }
+  }
+
+  /**
+    * Fetches a list of tasks associated with the given bundle id.
+    *
+    * @param bundleId The id of the bundle
+    */
+  def retrieveTasks(query: Query): List[Task] = {
+    this.withMRConnection { implicit c =>
+      query.build(s"""SELECT ${this.retrieveColumnsWithReview} FROM ${baseTable}
+            INNER JOIN task_bundles tb on tasks.id = tb.task_id
+            LEFT OUTER JOIN task_review ON task_review.task_id = tasks.id
+         """).as(this.getTaskParser().*)
+    }
+  }
+
+  /**
+    * Locks the bundle's primary task for the given user, recording the other member task
+    * ids in that lock's bundled_tasks column instead of locking each task individually.
+    * Throws LockConflictException if the user already holds an edit lock on a different
+    * task elsewhere - the caller is expected to have the client release that lock first.
+    *
+    * @param bundleId The id of the bundle
+    */
+  private def lockBundleTasks(user: User, bundleId: Long): Unit = {
+    val tasks = this.retrieveTasks(
+      Query.simple(List(BaseParameter("bundle_id", bundleId, table = Some("tb"))))
+    )
+
+    if (tasks.nonEmpty) {
+      val primary   = tasks.find(_.isBundlePrimary.getOrElse(false)).getOrElse(tasks.head)
+      val memberIds = tasks.filterNot(_.id == primary.id).map(_.id)
+      this.lockBundle(user, primary, memberIds)
+    }
+  }
+}

@@ -1,0 +1,125 @@
+### NoDocs ###
+GET     /data/challenge/:challengeId/users          @org.maproulette.controllers.api.DataController.getUserChallengeSummary(challengeId:Long, start:String ?= "", end:String ?= "", priority:Int ?= -1)
+### NoDocs ###
+POST    /data/challenge/summary                     @org.maproulette.controllers.api.DataController.getChallengeSummaries(projectList:String ?= "", priority:String ?= "", onlyEnabled:Boolean ?= true)
+### NoDocs ###
+GET     /data/user/activity                         @org.maproulette.controllers.api.DataController.getRecentUserActivity(osmUserIds:String ?= "", limit:Int ?= -1, offset:Int ?= 0)
+### NoDocs ###
+GET     /data/user/summary                          @org.maproulette.controllers.api.DataController.getUserSummary(projectList:String ?= "", start:String ?= "", end:String ?= "", priority:Int ?= -1)
+### NoDocs ###
+GET     /data/user/:userId/metrics                  @org.maproulette.framework.controller.UserController.getMetricsForUser(userId:Long, monthDuration:Int ?= -1, reviewDuration:Int ?= -1, reviewerDuration:Int ?= -1, start: String ?= null, end: String ?= null, reviewStart: String ?= null, reviewEnd: String ?= null, reviewerStart: String ?= null, reviewerEnd: String ?= null)
+### NoDocs ###
+GET     /data/project/activity                      @org.maproulette.controllers.api.DataController.getProjectActivity(projectList:String ?= "", start:String ?= "", end:String ?= "")
+### NoDocs ###
+GET     /data/project/summary                       @org.maproulette.controllers.api.DataController.getProjectSummary(projectList:String ?= "", onlyEnabled:Boolean ?= true, includeByPriority:Boolean ?= false)
+### NoDocs ###
+GET     /data/challenge/:challengeId/activity       @org.maproulette.controllers.api.DataController.getChallengeActivity(challengeId:Long, start:String ?= "", end:String ?= "", priority:Int ?= -1)
+### NoDocs ###
+GET     /data/raw/activity                          @org.maproulette.controllers.api.DataController.getRawActivity(userIds:String ?= "", projectIds:String ?= "", challengeIds:String ?= "", start:String ?= "", end:String ?= "")
+### NoDocs ###
+GET     /data/status/activity                       @org.maproulette.controllers.api.DataController.getStatusActivity(userIds:String ?= "", projectIds:String ?= "", challengeIds:String ?= "", start:String ?= "", end:String ?= "", newStatus:String ?= "", oldStatus:String ?= "", limit:Int ?= 10, page:Int ?= 0)
+### NoDocs ###
+GET     /data/status/latestActivity                 @org.maproulette.controllers.api.DataController.getLatestChallengeActivity(projectIds:String ?= "", challengeIds:String ?= "", entries:Int ?= 1)
+### NoDocs ###
+GET     /data/status/summary                        @org.maproulette.controllers.api.DataController.getStatusSummary(userIds:String ?= "", projectIds:String ?= "", challengeIds:String ?= "", start:String ?= "", end:String ?= "", limit:Int ?= 10, page:Int ?= 0)
+### NoDocs ###
+GET     /data/challenge/:challengeId/propertyKeys   @org.maproulette.controllers.api.DataController.getPropertyKeys(challengeId:Long)
+###
+# tags: [ Data ]
+# operationId: data_get_challenge_summary
+# summary: Get Challenge Summary Statistics
+# description: Retrieves summary statistics for a challenge including action counts (fixed, false positive, skipped, etc.) and completion metrics.
+# responses:
+#   '200':
+#     description: An array containing the challenge summary with action statistics
+#     content:
+#       application/json:
+#         schema:
+#           type: array
+#           items:
+#             type: object
+#             properties:
+#               id:
+#                 type: integer
+#                 format: int64
+#                 description: The challenge ID
+#               name:
+#                 type: string
+#                 description: The challenge name
+#               actions:
+#                 type: object
+#                 description: Action summary statistics
+#                 properties:
+#                   total:
+#                     type: integer
+#                     description: Total number of tasks
+#                   available:
+#                     type: integer
+#                     description: Number of available tasks
+#                   fixed:
+#                     type: integer
+#                     description: Number of fixed tasks
+#                   falsePositive:
+#                     type: integer
+#                     description: Number of false positive tasks
+#                   skipped:
+#                     type: integer
+#                     description: Number of skipped tasks
+#                   deleted:
+#                     type: integer
+#                     description: Number of deleted tasks
+#                   alreadyFixed:
+#                     type: integer
+#                     description: Number of already fixed tasks
+#                   tooHard:
+#                     type: integer
+#                     description: Number of tasks marked as too hard
+#                   answered:
+#                     type: integer
+#                     description: Number of answered tasks
+#                   validated:
+#                     type: integer
+#                     description: Number of validated tasks
+#                   disabled:
+#                     type: integer
+#                     description: Number of disabled tasks
+#                   avgTimeSpent:
+#                     type: number
+#                     format: double
+#                     description: Average time spent on tasks
+#                   tasksWithTime:
+#                     type: integer
+#                     description: Number of tasks with time tracking data
+#               priorityActions:
+#                 type: object
+#                 description: Action summaries grouped by priority (only included if includeByPriority=true)
+#   '401':
+#     description: The user is not authorized to make this request
+#   '404':
+#     description: Challenge not found
+# parameters:
+#   - name: challengeId
+#     in: path
+#     description: The ID of the challenge
+#     required: true
+#     schema:
+#       type: integer
+#       format: int64
+#   - name: priority
+#     in: query
+#     description: Comma-separated list of priority levels to filter by (1=High, 2=Medium, 3=Low)
+#     required: false
+#     schema:
+#       type: string
+#       default: ""
+#   - name: includeByPriority
+#     in: query
+#     description: Whether to include action summaries broken down by priority level
+#     required: false
+#     schema:
+#       type: boolean
+#       default: false
+###
+GET     /data/challenge/:challengeId                @org.maproulette.controllers.api.DataController.getChallengeSummary(challengeId:Long, priority:String ?= "", includeByPriority:Boolean ?= false)
+### NoDocs ###
+GET     /data/tag/metrics                           @org.maproulette.framework.controller.DataController.getTagMetrics()

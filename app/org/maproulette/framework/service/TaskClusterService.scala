@@ -1,0 +1,320 @@
+/*
+ * Copyright (C) 2020 MapRoulette contributors (see CONTRIBUTORS.md).
+ * Licensed under the Apache License, Version 2.0 (see LICENSE).
+ */
+
+package org.maproulette.framework.service
+
+import javax.inject.{Inject, Singleton}
+
+import org.maproulette.Config
+import org.maproulette.exception.InvalidException
+import org.maproulette.framework.model._
+import org.maproulette.framework.psql._
+import org.maproulette.framework.psql.filter._
+import org.maproulette.framework.repository.TaskClusterRepository
+import org.maproulette.framework.mixins.{SearchParametersMixin, TaskFilterMixin}
+import org.maproulette.session.{SearchParameters, SearchLocation}
+
+/**
+  * Service layer for TaskCluster
+  *
+  * @author krotstan
+  */
+@Singleton
+class TaskClusterService @Inject() (repository: TaskClusterRepository)
+    extends SearchParametersMixin
+    with TaskFilterMixin {
+
+  val MAX_CLUSTER_DEGREES = 10
+
+  /**
+    * Retrieves task clusters
+    *
+    * @param params         SearchParameters used to filter the tasks in the cluster
+    * @param numberOfPoints Number of cluster points to group all the tasks by
+    * @return A list of task clusters
+    */
+  def getTaskClusters(
+      params: SearchParameters,
+      numberOfPoints: Int = this.repository.DEFAULT_NUMBER_OF_POINTS
+  ): List[TaskCluster] = {
+    ensureScoped(params)
+    val filtered = this.filterOnSearchParameters(params)(false)
+    val query    = this.filterOutDeletedParents(filtered)
+
+    this.repository.queryTaskClusters(query, numberOfPoints, params)
+  }
+
+  /**
+    * Gets the specific tasks within a cluster
+    *
+    * @param clusterId      The id of the cluster
+    * @param params         SearchParameters used to filter the tasks in the cluster
+    * @param numberOfPoints Number of cluster points to group all the tasks by
+    * @return A list of clustered task points
+    */
+  def getTasksInCluster(
+      clusterId: Int,
+      params: SearchParameters,
+      numberOfPoints: Int = this.repository.DEFAULT_NUMBER_OF_POINTS
+  ): List[ClusteredPoint] = {
+    ensureScoped(params)
+    val query = this.filterOutDeletedParents(this.filterOnSearchParameters(params)(false))
+    this.repository.queryTasksInCluster(query, clusterId, numberOfPoints)
+  }
+
+  /**
+    * This function will retrieve all the tasks in a given bounded area. You can use various search
+    * parameters to limit the tasks retrieved in the bounding box area.
+    *
+    * @param params        The search parameters from the cookie or the query string parameters.
+    * @param paging        This allows paging for the tasks within in the bounding box
+    * @param ignoreLocked  Whether to include locked tasks (by other users) or not
+    * @return The list of Tasks found within the bounding box and the total count of tasks if not bounding
+    */
+  def getTasksInBoundingBox(
+      user: User,
+      params: SearchParameters,
+      paging: Paging = Paging(Config.DEFAULT_LIST_SIZE, 0),
+      ignoreLocked: Boolean = false,
+      sort: String = "",
+      orderDirection: String = "ASC"
+  ): (Int, List[ClusteredPoint]) = {
+    val query = buildQueryForBoundingBox(user, params, ignoreLocked)
+    this.repository.queryTasksInBoundingBox(query, this.getOrder(sort, orderDirection), paging)
+  }
+
+  /**
+    * This function will retrieve all the task marker data in a given bounded area. You can use various search
+    * parameters to limit the tasks retrieved in the bounding box area.
+    *
+    * @param params        The search parameters from the cookie or the query string parameters.
+    * @param ignoreLocked  Whether to include locked tasks (by other users) or not
+    * @return The list of Tasks found within the bounding box
+    */
+  def getTaskMarkerDataInBoundingBox(
+      user: User,
+      params: SearchParameters,
+      limit: Int,
+      ignoreLocked: Boolean = false
+  ): List[ClusteredPoint] = {
+    val query = buildQueryForBoundingBox(user, params, ignoreLocked)
+    this.repository.queryTaskMarkerDataInBoundingBox(query, limit)
+  }
+
+  /**
+    * Simplified method to get challenge tasks in a bounding box
+    *
+    * @param bounds       Optional bounding box to search within
+    * @param challengeIds Optional list of challenge IDs to filter by
+    * @param paging       Pagination settings
+    * @return Tuple of (total count, list of tasks)
+    */
+  def getChallengeTasksInBounds(
+      bounds: Option[SearchLocation],
+      challengeIds: Option[List[Long]],
+      paging: Paging = Paging(Config.DEFAULT_LIST_SIZE, 0)
+  ): (Int, List[ClusteredPoint]) = {
+    this.repository.queryChallengeTasksInBounds(
+      bounds,
+      challengeIds,
+      paging.limit,
+      paging.limit * paging.page
+    )
+  }
+
+  def getTaskMarkers(
+      statuses: List[Int],
+      global: Boolean
+  ): List[TaskMarker] = {
+    this.repository.queryTaskMarkers(statuses, global)
+  }
+
+  /**
+    * Builds a query to retrieve tasks within a bounding box, applying search parameters.
+    *
+    * @param user         The user making the request
+    * @param params       Search parameters including location or bounding geometries
+    * @param ignoreLocked Whether to exclude tasks locked by other users
+    * @return The constructed query
+    */
+  private def buildQueryForBoundingBox(
+      user: User,
+      params: SearchParameters,
+      ignoreLocked: Boolean
+  ): Query = {
+    ensureBoundingBox(params)
+    var query = this.filterOutLocked(
+      user,
+      this.filterOutDeletedParents(this.filterOnSearchParameters(params)(false)),
+      ignoreLocked
+    )
+
+    params.taskParams.excludeTaskIds match {
+      case Some(excludedIds) if excludedIds.nonEmpty =>
+        query.addFilterGroup(
+          FilterGroup(
+            List(
+              BaseParameter(
+                Task.FIELD_ID,
+                excludedIds.mkString(","),
+                Operator.IN,
+                negate = true,
+                useValueDirectly = true,
+                table = Some("tasks")
+              )
+            )
+          )
+        )
+      case _ => query
+    }
+  }
+
+  /**
+    * Retrieves task markers with bounding box filtering
+    *
+    * @param statuses List of task status filters
+    * @param global   Whether to include global challenges
+    * @param boundingBox   Search parameters including bounding box
+    * @param keywords Optional comma-separated list of keywords to filter by
+    * @param difficulty Optional difficulty level to filter by
+    * @return List of task markers
+    */
+  def getTaskMarkersWithBoundingBox(
+      statuses: List[Int],
+      global: Boolean,
+      boundingBox: SearchLocation,
+      keywords: Option[String] = None,
+      difficulty: Option[Int] = None
+  ): List[TaskMarker] = {
+    this.repository.queryTaskMarkersWithBoundingBox(
+      statuses,
+      global,
+      boundingBox,
+      keywords,
+      difficulty
+    )
+  }
+
+  /**
+    * Retrieves task markers with bounding box filtering and overlap detection.
+    * Groups tasks that share the same location together.
+    *
+    * @param statuses List of task status filters
+    * @param global   Whether to include global challenges
+    * @param boundingBox   Search parameters including bounding box
+    * @param keywords Optional comma-separated list of keywords to filter by
+    * @param difficulty Optional difficulty level to filter by
+    * @return Tuple of (single task markers, overlapping task markers)
+    */
+  def getTaskMarkersWithOverlaps(
+      statuses: List[Int],
+      global: Boolean,
+      boundingBox: SearchLocation,
+      keywords: Option[String] = None,
+      difficulty: Option[Int] = None
+  ): (List[TaskMarker], List[OverlappingTaskMarker]) = {
+    this.repository.queryTaskMarkersWithOverlaps(
+      statuses,
+      global,
+      boundingBox,
+      keywords,
+      difficulty
+    )
+  }
+
+  /**
+    * Retrieves clustered task markers
+    *
+    * @param statuses List of task status filters
+    * @param global   Whether to include global challenges
+    * @param boundingBox   Search parameters including bounding box
+    * @param keywords Optional comma-separated list of keywords to filter by
+    * @param difficulty Optional difficulty level to filter by
+    * @return List of task cluster summaries
+    */
+  def getTaskMarkersClustered(
+      statuses: List[Int],
+      global: Boolean,
+      boundingBox: SearchLocation,
+      keywords: Option[String] = None,
+      difficulty: Option[Int] = None
+  ): List[TaskClusterSummary] = {
+    this.repository.queryTaskMarkersClustered(
+      statuses,
+      global,
+      boundingBox,
+      keywords,
+      difficulty
+    )
+  }
+
+  /**
+    * Counts task markers in the given bounding box
+    *
+    * @param statuses List of task status filters
+    * @param global   Whether to include global challenges
+    * @param boundingBox   Search parameters including bounding box
+    * @param keywords Optional comma-separated list of keywords to filter by
+    * @param difficulty Optional difficulty level to filter by
+    * @return Count of task markers
+    */
+  def countTaskMarkers(
+      statuses: List[Int],
+      global: Boolean,
+      boundingBox: SearchLocation,
+      keywords: Option[String] = None,
+      difficulty: Option[Int] = None
+  ): Int = {
+    this.repository.queryCountTaskMarkers(
+      statuses,
+      global,
+      boundingBox,
+      keywords,
+      difficulty
+    )
+  }
+
+  /**
+    * Ensures that either a location or bounding geometries are provided in the search parameters.
+    *
+    * @param params Search parameters
+    * @throws InvalidException if neither location nor bounding geometries are provided
+    */
+  private def ensureBoundingBox(params: SearchParameters): Unit = {
+    if (params.location.isEmpty && params.boundingGeometries.isEmpty) {
+      throw new InvalidException(
+        "Bounding Box (or Bounding Polygons) required to retrieve tasks within a bounding box"
+      )
+    }
+  }
+
+  /**
+    * Clustering runs k-means over every matching task, so a search that isn't
+    * narrowed to some challenges or a modest area covers the whole tasks table
+    * and use a ton of RAM or even spill gigabytes of data to temp files. This
+    * function enforces that the client supplied filters that will narrow the
+    * results down to some tractable set, and raises an error otherwise.
+    *
+    * @throws InvalidException if the search parameters aren't narrow enough
+    */
+  private def ensureScoped(params: SearchParameters): Unit = {
+    val inverted = params.invertFields.getOrElse(List())
+    def small(l: SearchLocation) =
+      math.abs(l.right - l.left) <= MAX_CLUSTER_DEGREES &&
+        math.abs(l.top - l.bottom) <= MAX_CLUSTER_DEGREES
+
+    val byChallenge =
+      params.getChallengeIds.exists(_.nonEmpty) && !inverted.contains("cid")
+    val byTaskArea      = params.location.exists(small) && !inverted.contains("tbb")
+    val byChallengeArea = params.bounding.exists(small) && !inverted.contains("bb")
+
+    if (!byChallenge && !byTaskArea && !byChallengeArea) {
+      throw new InvalidException(
+        s"Task clusters require a challenge id (cid) or a bounding box (tbb or bb) " +
+          s"no larger than $MAX_CLUSTER_DEGREES degrees on a side"
+      )
+    }
+  }
+}

@@ -1,0 +1,15 @@
+MapRoulette Contributors
+
+* Martijn Van Exel ([@mvexel](https://github.com/mvexel))
+* Michael Cuthbert ([@mgcuthbert](https://github.com/mgcuthbert))
+* Kyle Hopkins ([@kopkins](https://github.com/Kopkins))
+* Neil Rotstan ([@nrotstan](https://github.com/nrotstan))
+* Kelli Rotstan ([@krotstan](https://github.com/krotstan))
+* Brian Davis ([@davis20](https://github.com/davis20))
+* LuisGC ([@luisgc](https://github.com/luisgc))
+* Michael Glanznig ([@nebulon42](https://github.com/nebulon42))
+* Kyle Hopkins ([@Kopkins](https://github.com/Kopkins))
+* Joost Schouppe ([@joostschouppe](https://github.com/joostschouppe))
+* Harry Wood ([@harry-wood](https://github.com/harry-wood))
+* Ian McEwen ([@ianmcorvidae](https://github.com/ianmcorvidae))
+* Jesse Crocker ([@JesseCrocker](https://github.com/JesseCrocker))
