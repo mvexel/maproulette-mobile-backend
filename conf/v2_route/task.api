@@ -414,6 +414,48 @@ GET     /task/:id/release                               @org.maproulette.control
 POST    /task/:id/skip                                  @org.maproulette.controllers.api.TaskController.skipTask(id:Long)
 ###
 # tags: [ Task ]
+# operationId: task_choice_check
+# summary: Check a choice task against OSM (mobile only)
+# description: |
+#   Fork only. Reads the task's OSM element fresh (uncached) and reports whether the
+#   choice task can still be offered. A task whose element is gone, no longer matches
+#   the payload's match guard, or has a changed guarded key is ineligible and is hidden
+#   from mobile discovery (excludeStale=true); no task status is written. Requires a mobile bearer
+#   grant with tasks:read; web sessions and API keys get 403 mobile_only.
+# responses:
+#   '200':
+#     description: '{"eligible": true, "deleteAllowed": bool, "elementVersion": n} or {"eligible": false, "reason": "element_gone|match_failed|key_changed", "detail": [...]}'
+#   '422':
+#     description: unsupported_task (not a valid choice task, or bundled)
+#   '502':
+#     description: osm_unavailable
+# parameters:
+#   - name: id
+#     in: path
+#     description: The id of the Task
+###
+GET     /task/:id/choice/check                          @org.maproulette.controllers.api.MobileChoiceController.check(id:Long)
+###
+# tags: [ Task ]
+# operationId: task_choice_submit
+# summary: Submit answers to a choice task (mobile only)
+# description: |
+#   Fork only. Body {"answers": {"question": "option"}} or {"outcome": "id"} (plus
+#   "delete": true for a delete outcome). Answers are applied to OSM as one changeset
+#   with the user's OSM token (scope osm:tagfix), then the task is marked Fixed in the
+#   same transaction that stores the changeset id. The caller must hold the task lock.
+#   See docs/mobile-oauth.md for every response.
+# responses:
+#   '200':
+#     description: '{"status": n, "changesetId": n|null, "applied": {"set": {}, "unset": [], "deleted": bool}}'
+# parameters:
+#   - name: id
+#     in: path
+#     description: The id of the Task
+###
+POST    /task/:id/choice                                @org.maproulette.controllers.api.MobileChoiceController.submit(id:Long)
+###
+# tags: [ Task ]
 # operationId: task_refresh_an_existing_lock_on_a_task
 # summary: Refresh an existing lock on a Task
 # description: Refreshes an existing lock, extending its allowed duration, on the

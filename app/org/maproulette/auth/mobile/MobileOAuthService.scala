@@ -79,6 +79,9 @@ class MobileOAuthService @Inject() (
           else if (params.get("response_type") != Some("code"))
             Left(new InvalidRequest("Only code response type is supported"))
           else if (!scopes.exists(_.subsetOf(client.scopes))) Left(new InvalidScope())
+          // No token key: an OSM token could not be stored, so osm:tagfix is not offered.
+          else if (scopes.exists(_.contains(MobileScopes.TagFix)) && !settings.tagFixAvailable)
+            Left(new InvalidScope())
           else if (state.isEmpty || params.get("code_challenge_method") != Some("S256") || !challenge
                      .matches("[A-Za-z0-9_-]{43}"))
             Left(new InvalidRequest("State and S256 PKCE are required"))

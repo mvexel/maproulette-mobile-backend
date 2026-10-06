@@ -25,6 +25,7 @@ import org.maproulette.framework.mixins.TaskParserMixin
 import org.maproulette.models._
 import org.maproulette.models.dal.mixin.{SearchParametersMixin, TagDALMixin}
 import org.maproulette.permissions.Permission
+import org.maproulette.provider.choice.{ChoiceValidationException, ChoiceWork}
 import org.maproulette.provider.websockets.{WebSocketMessages, WebSocketProvider}
 import org.maproulette.session.SearchParameters
 import org.maproulette.utils.Utils
@@ -339,7 +340,13 @@ class TaskDAL @Inject() (
     }
     this.withMRTransaction { implicit c =>
       val result =
-        extractCooperativeWork(element.parent, geoJson, element.cooperativeWork)
+        extractCooperativeWork(
+          element.parent,
+          geoJson,
+          element.cooperativeWork,
+          // Only task ingest (id -1, matched by name) is checked; edits of existing tasks are not.
+          if (element.id <= 0) Some((element.id, element.name)) else None
+        )
       val geometries      = result._1
       var cooperativeWork = result._2
 
@@ -417,6 +424,10 @@ class TaskDAL @Inject() (
         case None => // ignore
       }
 
+      // Fork: a replaced choice payload is no longer known to be stale.
+      SQL"""DELETE FROM choice_stale s USING tasks t WHERE s.task_id = t.id AND t.id = $updatedTaskId
+            AND s.payload_md5 IS DISTINCT FROM md5(t.cooperative_work_json::text)""".executeUpdate()
+
       val updatedElement = element.copy(id = updatedTaskId)
       this.cacheManager.cache.remove(updatedTaskId)
       Some(updatedElement)
@@ -471,7 +482,8 @@ class TaskDAL @Inject() (
   private def extractCooperativeWork(
       parentId: Long,
       geometries: JsObject,
-      cooperativeWork: Option[JsObject]
+      cooperativeWork: Option[JsObject],
+      task: Option[(Long, String)] = None
   )(
       implicit c: Option[Connection] = None
   ): (String, Option[String]) = {
@@ -494,6 +506,19 @@ class TaskDAL @Inject() (
 
       val attachments         = (geometries \ "attachments").toOption
       val extractedGeometries = this.pruneMapRouletteProperties(geometries)
+
+      val parsedWork = cooperativeWorkJson.map(Json.parse)
+      val isChoice   = parsedWork.exists(ChoiceWork.isChoice)
+      parsedWork.filter(ChoiceWork.isChoice).foreach { parsed =>
+        ChoiceWork.validate(parsed) match {
+          case Left(errors) =>
+            throw new ChoiceValidationException(errors)
+          case Right(_) =>
+        }
+      }
+      task.foreach {
+        case (taskId, taskName) => this.checkChoiceConsistency(parentId, taskId, taskName, isChoice)
+      }
 
       // Set the correct cooperative type on the parent challenge
       cooperativeWorkJson match {
@@ -528,6 +553,41 @@ class TaskDAL @Inject() (
         ).toString,
         cooperativeWorkJson
       )
+    }
+  }
+
+  /**
+    * Fork rule for choice challenges (cooperative type 3): a challenge holds either only choice
+    * tasks or none. A challenge's cooperative_type becomes 3 with its first choice task and this
+    * check keeps it that way, so only the cheap "is there any other task" query is needed.
+    */
+  private def checkChoiceConsistency(
+      parentId: Long,
+      taskId: Long,
+      taskName: String,
+      isChoice: Boolean
+  )(implicit c: Connection): Unit = {
+    val challengeType =
+      SQL"SELECT cooperative_type FROM challenges WHERE id = $parentId"
+        .as(SqlParser.get[Option[Int]]("cooperative_type").singleOpt)
+        .flatten
+        .getOrElse(Challenge.COOPERATIVE_NONE)
+    if (isChoice != (challengeType == ChoiceWork.CooperativeType)) {
+      val othersExist =
+        SQL"""SELECT EXISTS(SELECT 1 FROM tasks WHERE parent_id = $parentId
+                AND id <> $taskId AND name <> $taskName)"""
+          .as(SqlParser.scalar[Boolean].single)
+      if (othersExist) {
+        throw new InvalidException(
+          if (isChoice) "Choice tasks cannot be added to a challenge that has other kinds of tasks"
+          else "Only choice tasks can be added to a challenge that has choice tasks"
+        )
+      }
+      if (!isChoice) {
+        // The challenge's only task stops being a choice task: clear the stale type.
+        SQL"""UPDATE challenges SET cooperative_type = ${Challenge.COOPERATIVE_NONE}
+              WHERE id = $parentId""".executeUpdate()
+      }
     }
   }
 
@@ -602,6 +662,9 @@ class TaskDAL @Inject() (
     * @param user                The user setting the status
     * @param requestReview       Optional boolean to request a review on this task.
     * @param completionResponses Optional json responses provided by user to task instruction questions
+    * @param inTransaction       Runs in the status write's transaction, right after the primary
+    *                            task's status row is updated and before its lock is released; if
+    *                            it throws, the status write rolls back.
     * @return The number of rows updated, should only ever be 1
     */
   def setTaskStatus(
@@ -611,7 +674,8 @@ class TaskDAL @Inject() (
       requestReview: Option[Boolean] = None,
       completionResponses: Option[JsValue] = None,
       bundleId: Option[Long] = None,
-      primaryTaskId: Option[Long] = None
+      primaryTaskId: Option[Long] = None,
+      inTransaction: Connection => Unit = _ => ()
   )(implicit c: Connection = null): Int = {
     val tasksLength = tasks.length
     val isBundle    = bundleId.isDefined
@@ -724,6 +788,7 @@ class TaskDAL @Inject() (
               s"This task is locked by another user, cannot update status at this time."
             )
           }
+          if (task.id == primaryTask.id) inTransaction(c)
         }
 
         var completedTimeSpent: Option[Long] = None

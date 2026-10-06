@@ -41,7 +41,7 @@ class TaskClusterService @Inject() (repository: TaskClusterRepository)
   ): List[TaskCluster] = {
     ensureScoped(params)
     val filtered = this.filterOnSearchParameters(params)(false)
-    val query    = this.filterOutDeletedParents(filtered)
+    val query    = excludeStaleChoiceTasks(params, this.filterOutDeletedParents(filtered))
 
     this.repository.queryTaskClusters(query, numberOfPoints, params)
   }
@@ -60,7 +60,10 @@ class TaskClusterService @Inject() (repository: TaskClusterRepository)
       numberOfPoints: Int = this.repository.DEFAULT_NUMBER_OF_POINTS
   ): List[ClusteredPoint] = {
     ensureScoped(params)
-    val query = this.filterOutDeletedParents(this.filterOnSearchParameters(params)(false))
+    val query = excludeStaleChoiceTasks(
+      params,
+      this.filterOutDeletedParents(this.filterOnSearchParameters(params)(false))
+    )
     this.repository.queryTasksInCluster(query, clusterId, numberOfPoints)
   }
 
@@ -147,7 +150,10 @@ class TaskClusterService @Inject() (repository: TaskClusterRepository)
     ensureBoundingBox(params)
     var query = this.filterOutLocked(
       user,
-      this.filterOutDeletedParents(this.filterOnSearchParameters(params)(false)),
+      excludeStaleChoiceTasks(
+        params,
+        this.filterOutDeletedParents(this.filterOnSearchParameters(params)(false))
+      ),
       ignoreLocked
     )
 
@@ -275,6 +281,23 @@ class TaskClusterService @Inject() (repository: TaskClusterRepository)
       difficulty
     )
   }
+
+  /**
+    * Fork only: `excludeStale=true` leaves out choice tasks whose OSM element was observed to no
+    * longer match the stored payload (table choice_stale). Kept apart from the generic `cct`.
+    */
+  private[service] def excludeStaleChoiceTasks(params: SearchParameters, query: Query): Query =
+    if (params.taskParams.excludeStale.contains(true))
+      query.addFilterGroup(
+        FilterGroup(
+          List(
+            CustomParameter(
+              "NOT EXISTS (SELECT 1 FROM choice_stale cs WHERE cs.task_id = tasks.id)"
+            )
+          )
+        )
+      )
+    else query
 
   /**
     * Ensures that either a location or bounding geometries are provided in the search parameters.

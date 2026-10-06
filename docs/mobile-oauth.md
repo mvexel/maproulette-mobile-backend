@@ -11,7 +11,7 @@ and credentials.
 
 ## Enable a local or staging instance
 
-Apply database evolutions through the normal backend setup. Evolution 129 adds separate interaction, authorization-code, grant-family and token tables; it does not replace existing user credentials.
+Apply database evolutions through the normal backend setup. Evolution 129 adds separate interaction, authorization-code, grant-family and token tables; it does not replace existing user credentials. Evolution 130 adds the encrypted OSM token table for `osm:tagfix` grants and the choice-task submission and stale tables.
 
 Register a **backend callback URL** with the existing OSM OAuth application, then configure the provider and each approved public client:
 
@@ -24,15 +24,18 @@ mobileOAuth {
     name = "Example Mobile"
     redirectUris = ["org.example.mobile:/oauth/callback"]
     # Optional; defaults to ["tasks:read"]. Add "tasks:write" to let this app
-    # request task lifecycle writes.
+    # request task lifecycle writes, and "osm:tagfix" (needs tasks:write and
+    # osmTokenKey) to let it apply choice-task answers to OSM.
     scopes = ["tasks:read", "tasks:write"]
   }]
+  # 32 random bytes, base64, e.g. `openssl rand -base64 32`. Only needed for osm:tagfix.
+  osmTokenKey = ${?MR_MOBILE_OSM_TOKEN_KEY}
 }
 ```
 
 The OSM callback and the app callback are different URLs. The app callback must match an entry exactly, including its path. HTTPS app links and reverse-domain custom schemes are accepted; query strings and fragments are not accepted in registered callbacks. There is no dynamic registration endpoint or public-client secret. Each host app owns its callback registration and operating-system integration.
 
-For loopback development only, `allowInsecureLoopback = true` permits an HTTP backend callback on localhost. Production callbacks require HTTPS. The existing OSM consumer configuration supplies the server-side OSM client credentials. This flow requests only `read_prefs`; it does not authorize OSM uploads.
+For loopback development only, `allowInsecureLoopback = true` permits an HTTP backend callback on localhost. Production callbacks require HTTPS. The existing OSM consumer configuration supplies the server-side OSM client credentials. A login asks OSM for `read_prefs` only, unless the app requests `osm:tagfix` (see [Choice tasks](#choice-tasks-osmtagfix)); then it asks for `read_prefs write_api`, and the OSM application must allow `write_api`.
 
 Default lifetimes are 10 minutes for a browser interaction, 2 minutes for an authorization code, 15 minutes for an access token, and 30 days for each refresh token. `accessSeconds` and `refreshSeconds` are configurable within the bounds enforced by `MobileOAuthSettings`.
 
@@ -40,7 +43,7 @@ Default lifetimes are 10 minutes for a browser interaction, 2 minutes for an aut
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /oauth/mobile/authorize` | Start browser login with `response_type=code`, `client_id`, exact `redirect_uri`, `scope` (`tasks:read` or `tasks:read tasks:write`), `state`, `code_challenge` and `code_challenge_method=S256`. |
+| `GET /oauth/mobile/authorize` | Start browser login with `response_type=code`, `client_id`, exact `redirect_uri`, `scope` (`tasks:read`, `tasks:read tasks:write` or `tasks:read tasks:write osm:tagfix`), `state`, `code_challenge` and `code_challenge_method=S256`. |
 | `GET /oauth/mobile/callback` | Server callback from OSM. The browser interaction must match persisted state and its separate HTTP-only cookie. |
 | `POST /oauth/mobile/consent` | Browser consent form with a transaction-bound CSRF value. Approval redirects to the app with only a short-lived code and its original state; denial returns `access_denied`. |
 | `POST /oauth/mobile/token` | Form-encoded authorization-code exchange or refresh. |
@@ -63,9 +66,9 @@ Use an established native OAuth client to generate and retain state/PKCE, open t
 
 ## Scope and credential lifecycle
 
-Scopes are a space-separated set. Every grant includes `tasks:read`; `tasks:write` is optional and only granted to clients whose `scopes` configuration lists it. Unknown, duplicate or write-only scope requests fail with `invalid_scope`. Stored and returned scope strings use the canonical order `tasks:read tasks:write`.
+Scopes are a space-separated set. Every grant includes `tasks:read`; `tasks:write` is optional and only granted to clients whose `scopes` configuration lists it. `osm:tagfix` is optional too, valid only together with `tasks:write`, and only granted to clients configured for it; new grants also need a valid `osmTokenKey`. Unknown, duplicate, write-only or `osm:tagfix`-without-`tasks:write` requests fail with `invalid_scope`. Stored and returned scope strings use the canonical order `tasks:read tasks:write osm:tagfix`.
 
-`tasks:read` permits the SDK's challenge discovery/detail/tags, task listing/detail, spatial queries, read-only marker query, and the new identity endpoint. The HTTP method **and exact route pattern** must be allowlisted in `MobileReadRoutes`. Legacy `whoami`, task-start/release and mutation routes are excluded. The user's existing permissions still apply. The marker query is a read-only PUT; not every GET is read-only.
+`tasks:read` permits the SDK's challenge discovery/detail/tags, task listing/detail, spatial queries, read-only marker query, the choice check (`GET /api/v2/task/:id/choice/check`, no query or body) and the new identity endpoint. The HTTP method **and exact route pattern** must be allowlisted in `MobileReadRoutes`. Legacy `whoami`, task-start/release and mutation routes are excluded. The user's existing permissions still apply. The marker query is a read-only PUT; not every GET is read-only.
 
 `tasks:write` additionally permits exactly these task lifecycle routes (`MobileWriteRoutes`), acting as the signed-in MapRoulette user:
 
@@ -75,12 +78,13 @@ Scopes are a space-separated set. Every grant includes `tasks:read`; `tasks:writ
 | `GET /api/v2/task/:id/release` | Release the caller's lock |
 | `POST /api/v2/task/:id/skip` | Skip: count the skip, release the lock, keep the status |
 | `PUT /api/v2/task/:id/(1\|2\|5\|6)` | Fixed, Not an issue, Already fixed, Too hard |
+| `POST /api/v2/task/:id/choice` | Resolve a choice task (see [Choice tasks](#choice-tasks-osmtagfix)) |
 
 Mobile clients lock late: they call `start` only when the user commits a
 resolution, then write the status (which releases the lock). Skip needs no
 lock. `refreshLock` is therefore not allowed for bearer tokens.
 
-These write requests must have **no query string and no body** (`400 invalid_request` otherwise). That excludes `requestReview` (the user's review setting applies), task `tags` and `completionResponses`. All other mutations, including statuses 0, 3, 4, 7, 8 and 9, comments, tags, bundles, review routes, `refreshLock`, unlock requests and anything that edits OpenStreetMap, return `403 insufficient_scope` for every bearer token. A `tasks:read`-only token on a lifecycle route also gets `403 insufficient_scope`.
+These write requests must have **no query string and no body** (`400 invalid_request` otherwise). The one exception is `POST /api/v2/task/:id/choice`: no query string, `Content-Type: application/json`, a `Content-Length` of 1 to 2048 bytes and no `Transfer-Encoding`. That excludes `requestReview` (the user's review setting applies), task `tags` and `completionResponses`. All other mutations, including statuses 0, 3, 4, 7, 8 and 9, comments, tags, bundles, review routes, `refreshLock`, unlock requests and anything that edits OpenStreetMap, return `403 insufficient_scope` for every bearer token. A `tasks:read`-only token on a lifecycle route also gets `403 insufficient_scope`.
 
 Existing `tasks:read` grants keep working unchanged for reads. They are never upgraded: the user signs in again and approves the write permission, which creates a new grant. The consent page names the write permission only when it is requested. If an operator removes `tasks:write` from a client's configuration, that client's existing write grants stop authenticating (`401 invalid_token`) until the user signs in again.
 
@@ -88,7 +92,90 @@ Send the access token only in `Authorization: Bearer ...`. Do not combine it wit
 
 Codes are consumed atomically with token issuance. Refresh tokens rotate atomically; reuse revokes the family, including its current access tokens. Apps must serialize refresh and replace saved credentials atomically. A lost refresh response can require fresh login; do not retry an old refresh token as if rotation were idempotent. Revocation affects this grant family, not another app's grant or the user's personal API key.
 
-Only credential hashes are stored in the new tables. Upstream OSM credentials are not returned to apps or persisted as mobile credentials. Existing users' web-session tokens and API keys are preserved during mobile login.
+Only credential hashes are stored in the new tables. Upstream OSM credentials are never returned to apps. They are kept only for `osm:tagfix` grants, AES-256-GCM encrypted under `osmTokenKey` with the user id as associated data, in `mobile_osm_tokens` keyed by grant family (evolution 130). Refresh rotation keeps that row; revoking the family or replaying a refresh token deletes it, and so does an OSM 401 (the MapRoulette grant stays). `users.oauth_token` is never read or written by the mobile flow. Existing users' web-session tokens and API keys are preserved during mobile login.
+
+## Choice tasks (`osm:tagfix`)
+
+A choice task has `cooperativeWork.meta = {"version": 2, "type": 3, "choiceVersion": 1}`: one OSM
+element, a `match` identity guard, 1 to 8 questions that each guard their keys with `expect`, and
+up to 4 outcomes (status 2 or 6, or one `delete: true` for a node). The payload format and every
+validation rule are in the SDK's `docs/mobile-choice-challenges.md` §2 (lengths in Unicode code
+points, JSON `null` = absent for optional fields, at most 16 KiB). The backend validates it when
+tasks are added; invalid lines are rejected. A challenge holds either only choice tasks or none.
+
+**Token key.** `osm:tagfix` needs `mobileOAuth.osmTokenKey` (`MR_MOBILE_OSM_TOKEN_KEY`): standard
+base64 of exactly 32 random bytes, for example the output of `openssl rand -base64 32`. Unset,
+empty or malformed are treated alike: new sign-ins asking for `osm:tagfix` get `invalid_scope`,
+choice edits answer `503 osm_edits_unavailable`, and everything else (startup, existing grants,
+reads, lifecycle writes, non-editing choice outcomes) keeps working. A malformed key is logged as
+an error, without its value.
+
+**Ingest.** `PUT /api/v2/challenge/:id/addFileTasks?lineByLine=true` as usual. With `&report=true`
+it returns `200 {"created": n, "updated": n, "rejected": [{"line": 1, "errors": ["..."]}]}`
+instead of 204, and a rejected line does not mark the challenge FAILED. `report=true` without
+`lineByLine`, or over the task cap, is a 400. Without `report` nothing changes.
+
+**Discovery.** `cct` (comma-separated `challenges.cooperative_type` values) filters `tasks/box`,
+`markers/box`, `taskCluster` and `tasksInCluster`; a non-integer gives 400. The separate,
+fork-only `excludeStale=true` leaves out tasks recorded in `choice_stale`. Mobile sends
+`cct=3&excludeStale=true`.
+
+**Eligibility** is all-or-nothing: the element exists and is visible, `match` holds and **every**
+question's `expect` holds. Otherwise the task is stale (`element_gone`, `match_failed` or
+`key_changed`) and is recorded in `choice_stale` (insert-only; a re-upload that replaces the
+payload deletes the row). No task status is ever written for staleness, because nobody resolved
+the task.
+
+**Check.** `GET /api/v2/task/:id/choice/check` (mobile bearer, `tasks:read`, no query or body)
+reads the element from OSM without any cache (results reused for 60 s per task) and returns
+`{"eligible": true, "deleteAllowed": bool, "elementVersion": n}` or
+`{"eligible": false, "reason": "...", "detail": [...]}`. `detail` lists the expected and current
+values, for diagnostics only. A task already in `choice_stale` is answered from that row without
+reading OSM. An OSM failure (or an HTML 404, which means a proxy or a wrong `MR_OSM_SERVER`) gives
+`502 osm_unavailable` and records nothing.
+
+*Deliberate side effect:* this GET inserts into `choice_stale` when it observes a stale element.
+It never changes a task's status, lock or history; the row records what OSM showed, is
+idempotent, and only hides the task from `excludeStale` discovery.
+
+**Submit.** `POST /api/v2/task/:id/choice` (mobile bearer, `tasks:write`; web sessions and API keys
+get `403 mobile_only`). Body: exactly `{"answers": {"<question>": "<option>", ...}}` (1 to 8) or
+`{"outcome": "<id>"}` (a declared outcome or `too-hard`, plus `"delete": true` only on the delete
+outcome). Answers and deletes need `osm:tagfix`; outcomes without deletion do not touch OSM.
+
+1. A completed identical submission (same task, user, payload and body) returns its stored
+   result, even after the lock is gone. An `uploaded` one finishes its status write.
+2. Otherwise the caller must hold the task lock and the status change must be allowed.
+3. Answers or delete: the element is read fresh with the user's OSM token. A stale element is
+   recorded, the lock is released and the answer is `409 task_ineligible` with `reason` and
+   `detail`; nothing is uploaded and no status is written. A delete also needs a node that no
+   way or relation uses (else `409 element_in_use`, not staleness).
+4. One changeset (`comment` = the challenge's check-in comment or "MapRoulette task N", `source`
+   = check-in source, `created_by=MapRoulette`) gets one `<modify>` with all answered tag changes
+   merged into the fetched element at its version, or one `<delete>`. The changeset is closed on
+   every branch. An OSM 409 triggers one re-check (stale → `task_ineligible`; otherwise one retry).
+5. In one transaction: status Fixed (1) after an upload, else the outcome's status (`gone`
+   without deletion → 2, `too-hard` → 6); `tasks.changeset_id`; the idempotency row
+   (`mobile_choice_submissions`) marked done. The lock is released.
+
+A `500 status_pending` (with `changesetId`) is finished by retrying the same submission, without a
+second upload. After an unknown upload outcome (`502`), a retry first asks OSM for the
+changeset's `changes_count`. A request working on a submission holds a 120 s lease on its row; a
+concurrent identical request gets `409 submission_pending` instead of resuming it. While one
+submission for a task is unfinished, others get `409 submission_pending`.
+
+| Code | `error` |
+| --- | --- |
+| 200 | `{"status": n, "changesetId": n \| null, "applied": {"set": {}, "unset": [], "deleted": bool}}` |
+| 400 | `invalid_request` (shape, unknown or duplicate field, both forms, bad id) |
+| 401 | `osm_reauth_required` (no usable OSM token, or OSM rejected it: sign in again with `osm:tagfix`; the token row is dropped, the MapRoulette grant stays) |
+| 403 | `insufficient_scope` (with `"scope": "osm:tagfix"`), `mobile_only` |
+| 404 | `not_found` |
+| 409 | `lock_required`, `invalid_transition`, `submission_pending`, `task_ineligible` (with `reason`, `detail`), `element_in_use`, `osm_conflict` |
+| 422 | `invalid_submission` (with `detail`), `unsupported_task` |
+| 500 | `status_pending` (with `changesetId`), `server_error` |
+| 502 | `osm_unavailable` |
+| 503 | `osm_edits_unavailable` (no token key configured) |
 
 ## Account identity
 

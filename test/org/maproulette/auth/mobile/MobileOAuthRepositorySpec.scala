@@ -65,12 +65,23 @@ class MobileOAuthRepositorySpec extends PlaySpec {
       db.withConnection { implicit c =>
         SQL("CREATE TABLE users(id bigint PRIMARY KEY)").execute()
         SQL("INSERT INTO users VALUES(1),(2)").executeUpdate()
-        val evolution =
-          new String(Files.readAllBytes(Paths.get("conf/evolutions/default/129.sql")), "UTF-8")
-        val ups = evolution.split("# --- !Ups")(1).split("# --- !Downs")(0)
-        // Execute migration text as SQL, not Anorm named-parameter syntax (regex uses braces).
-        scala.util.Using.resource(c.createStatement()) { statement =>
-          ups.split(";;").map(_.trim).filter(_.nonEmpty).foreach(statement.execute)
+        // Evolution 130 references tasks; only its id is needed here.
+        SQL("CREATE TABLE tasks(id bigint PRIMARY KEY)").execute()
+        Seq("129", "130").foreach { version =>
+          val evolution =
+            new String(
+              Files.readAllBytes(Paths.get(s"conf/evolutions/default/$version.sql")),
+              "UTF-8"
+            )
+          val ups = evolution.split("# --- !Ups")(1).split("# --- !Downs")(0)
+          // Execute migration text as SQL, not Anorm named-parameter syntax (regex uses braces).
+          scala.util.Using.resource(c.createStatement()) { statement =>
+            ups
+              .split(";;")
+              .map(_.linesIterator.filterNot(_.trim.startsWith("--")).mkString("\n").trim)
+              .filter(_.nonEmpty)
+              .foreach(statement.execute)
+          }
         }
       }
       test(new MobileOAuthRepository(db), db)
@@ -123,6 +134,160 @@ class MobileOAuthRepositorySpec extends PlaySpec {
       start.countDown()
       List(a.get(10, TimeUnit.SECONDS), b.get(10, TimeUnit.SECONDS))
     } finally executor.shutdownNow()
+  }
+
+  "Mobile OSM token persistence" should {
+    val sealedToken = SealedOsmToken(Array[Byte](1, 2, 3), Array.fill[Byte](12)(9))
+    def tokenLogin(store: MobileOAuthRepository, label: String): MobileInteraction = {
+      val interaction = pending(label).copy(scope = "tasks:read tasks:write osm:tagfix")
+      store.createInteraction(interaction)
+      store.claimLogin(interaction.idHash, interaction.browserHash, now).isDefined mustBe true
+      store.completeLogin(interaction.idHash, interaction.browserHash, 1, hash("csrf"), now) mustBe true
+      interaction
+    }
+    def approve(store: MobileOAuthRepository, interaction: MobileInteraction, family: String) =
+      store.approveInteraction(
+        interaction.idHash,
+        interaction.browserHash,
+        hash("csrf"),
+        hash(s"code-$family"),
+        family,
+        now.plusSeconds(60),
+        now
+      )
+    def interactionToken(db: play.api.db.Database, interaction: MobileInteraction) =
+      db.withConnection { implicit c =>
+        SQL(
+          "SELECT osm_token_ciphertext IS NOT NULL FROM mobile_oauth_interactions WHERE interaction_hash={id}"
+        ).on("id" -> interaction.idHash)
+          .as(SqlParser.scalar[Boolean].single)
+      }
+
+    "attach a sealed token only to the logged-in user's interaction and move it to the family" in withStore {
+      (store, db) =>
+        val interaction = tokenLogin(store, "osm-move")
+        store.attachOsmToken(
+          interaction.idHash,
+          hash("wrong"),
+          1,
+          sealedToken,
+          "read_prefs write_api",
+          now
+        ) mustBe false
+        store.attachOsmToken(
+          interaction.idHash,
+          interaction.browserHash,
+          2,
+          sealedToken,
+          "read_prefs write_api",
+          now
+        ) mustBe false
+        store.attachOsmToken(
+          interaction.idHash,
+          interaction.browserHash,
+          1,
+          sealedToken,
+          "read_prefs write_api",
+          now
+        ) mustBe true
+        approve(store, interaction, "family-osm").isDefined mustBe true
+        val stored = store.osmToken("family-osm").get
+        stored.userId mustBe 1
+        stored.osmScope mustBe "read_prefs write_api"
+        stored.token.ciphertext.toSeq mustBe sealedToken.ciphertext.toSeq
+        stored.token.nonce.toSeq mustBe sealedToken.nonce.toSeq
+        interactionToken(db, interaction) mustBe false
+        store.deleteOsmToken("family-osm")
+        store.osmToken("family-osm") mustBe None
+    }
+
+    "clear a declined login's token and give a family without osm:tagfix none" in withStore {
+      (store, db) =>
+        val declined = tokenLogin(store, "osm-decline")
+        store.attachOsmToken(
+          declined.idHash,
+          declined.browserHash,
+          1,
+          sealedToken,
+          "read_prefs write_api",
+          now
+        ) mustBe true
+        store
+          .declineInteraction(declined.idHash, declined.browserHash, hash("csrf"), now)
+          .isDefined mustBe true
+        interactionToken(db, declined) mustBe false
+        val (_, _, plain) = approved(store, "osm-none")
+        store.osmToken(plain.familyId) mustBe None
+    }
+
+    "issue no osm:tagfix grant without its token, and clear tokens of expired logins" in withStore {
+      (store, db) =>
+        val tokenless = tokenLogin(store, "osm-tokenless")
+        approve(store, tokenless, "family-tokenless") mustBe None
+        store.findCode(hash("code-family-tokenless"), now) mustBe None
+        // The rollback leaves the interaction unconsumed; a retry still finds no token.
+        approve(store, tokenless, "family-tokenless-2") mustBe None
+
+        val abandoned = tokenLogin(store, "osm-abandoned")
+        store.attachOsmToken(
+          abandoned.idHash,
+          abandoned.browserHash,
+          1,
+          sealedToken,
+          "read_prefs write_api",
+          now
+        ) mustBe true
+        interactionToken(db, abandoned) mustBe true
+        val later  = tokenLogin(store, "osm-later")
+        val expiry = abandoned.expiresAt.plusSeconds(1)
+        store.attachOsmToken(
+          later.idHash,
+          later.browserHash,
+          1,
+          sealedToken,
+          "read_prefs write_api",
+          expiry
+        ) mustBe false
+        interactionToken(db, abandoned) mustBe false
+    }
+
+    "delete the token when the family is revoked or a refresh token is replayed" in withStore {
+      (store, _) =>
+        Seq("revoked", "replayed").foreach { label =>
+          val interaction = tokenLogin(store, s"osm-$label")
+          store.attachOsmToken(
+            interaction.idHash,
+            interaction.browserHash,
+            1,
+            sealedToken,
+            "read_prefs write_api",
+            now
+          ) mustBe true
+          approve(store, interaction, s"family-$label").isDefined mustBe true
+          val first = pair(s"$label-1")
+          store
+            .redeemCode(
+              hash(s"code-family-$label"),
+              "mobile-test",
+              "org.example:/callback",
+              "s256-challenge",
+              first,
+              now
+            )
+            .isDefined mustBe true
+          store.osmToken(s"family-$label").isDefined mustBe true
+          if (label == "revoked") store.revoke(first.accessHash, "mobile-test", now)
+          else {
+            store
+              .rotate(first.refreshHash, "mobile-test", pair(s"$label-2"), now)
+              .isDefined mustBe true
+            // Rotation keeps the token; the replay below revokes the family.
+            store.osmToken(s"family-$label").isDefined mustBe true
+            store.rotate(first.refreshHash, "mobile-test", pair(s"$label-3"), now) mustBe None
+          }
+          store.osmToken(s"family-$label") mustBe None
+        }
+    }
   }
 
   "Mobile OAuth PostgreSQL persistence" should {

@@ -114,3 +114,41 @@ Mobile: none of these routes is reachable with a bearer token.
   despite its name.
 - Lock expiry is enforced only by the hourly `cleanLocks` job, so an expired
   lock stays valid for up to an extra hour.
+
+## 10. Proposals from mobile choice challenges
+
+These are additions this fork made for mobile choice tasks that could be useful upstream. Each
+keeps stock behavior for existing clients.
+
+- **`cooperativeWork.meta.type = 3` ("choice").** One OSM element, a `match` identity guard,
+  several questions that each guard their own keys (`expect`) and offer fixed tag changes, and
+  task-level outcomes. The server derives the OSM change from the stored payload, so clients send
+  only `{"answers": {...}}`, which also addresses 6 and 7 above. Today upstream validates only
+  `meta.version` and copies any `meta.type` into `challenges.cooperative_type` (last task wins,
+  never reset). Format and rules: the SDK's `docs/mobile-choice-challenges.md` §2.
+- **`cct` search filter.** A comma-separated list of `challenges.cooperative_type` values on the
+  task box, marker, cluster and in-cluster endpoints (`SearchParametersMixin`
+  `filterChallengeCooperativeType`, about 40 lines). Lets a client that supports only some task
+  kinds ask for those. A non-integer value is a 400. The fork's separate `excludeStale=true`
+  depends on a fork-only table (`choice_stale`) and is not part of this proposal. Note that `cct`
+  is read from the query string only; `SearchParametersFormat` does not round-trip it through
+  the search cookie (neither direction), like several other fork-irrelevant fields.
+- **`addFileTasks?report=true`.** Line-by-line ingest currently swallows task creation errors
+  (`ChallengeProvider._createNewTask` logs and returns `None`), so callers cannot tell which lines
+  were dropped. With `report=true` the route returns
+  `200 {"created", "updated", "rejected": [{"line", "errors"}]}`, and a rejected line no longer
+  marks the challenge FAILED. Without the flag the route still returns 204.
+- **Changeset left open.** `ChangesetProvider.submitOsmChange` did not close the changeset when
+  building the change failed after the changeset was created. Fixed in this fork for all clients.
+- **A GET with a side effect, on purpose.** The fork's `GET /task/:id/choice/check` records a
+  system observation (`choice_stale`) when OSM shows the element changed. It never touches a
+  task's status, lock or history, and repeating it changes nothing. Upstream may prefer a POST
+  or a background sweep for this.
+- **Changeset matching vs. one-transaction writes.** With `changesets.enabled=true`,
+  `TaskDAL.setTaskStatus` commits its connection from a `Future` and may then overwrite
+  `tasks.changeset_id` via `matchToOSMChangeSet`. The choice submit stores the changeset id in the
+  status transaction; deployments that enable matching should skip it for tasks that already have
+  one. Default is disabled; the fork does not change it.
+- **Test infrastructure.** `TestDatabase` overrides `db.default.*` but the background pool copies
+  `db.default` when the config is parsed, so in tests it pointed at the default URL. The fork's
+  `TestDatabase` overrides `db.background.*` too.

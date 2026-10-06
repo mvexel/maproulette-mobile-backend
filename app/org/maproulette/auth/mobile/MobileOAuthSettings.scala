@@ -11,29 +11,58 @@ case class MobileClient(
     scopes: Set[String] = Set(MobileScopes.Read)
 )
 
-/** OAuth scope sets. Every grant includes `tasks:read`; `tasks:write` is an optional addition. */
+/**
+  * OAuth scope sets. Every grant includes `tasks:read`; `tasks:write` is an optional addition, and
+  * `osm:tagfix` (apply choice answers to OSM) is only valid together with `tasks:write`.
+  */
 object MobileScopes {
-  val Read  = "tasks:read"
-  val Write = "tasks:write"
+  val Read   = "tasks:read"
+  val Write  = "tasks:write"
+  val TagFix = "osm:tagfix"
   // Canonical order for stored and returned scope strings.
-  private val supported = Seq(Read, Write)
+  private val supported = Seq(Read, Write, TagFix)
 
   /** Strict RFC 6749 scope parsing: single-space separated, known, unique, including read. */
   def parse(value: String): Option[Set[String]] = {
     val items = value.split(" ", -1).toSeq
     if (items.forall(supported.contains) && items.distinct.size == items.size && items.contains(
           Read
-        )) Some(items.toSet)
+        ) && (!items.contains(TagFix) || items.contains(Write))) Some(items.toSet)
     else None
   }
 
   def format(scopes: Set[String]): String = supported.filter(scopes.contains).mkString(" ")
+
+  /** The OSM scope a login asks for: write access only for grants that include osm:tagfix. */
+  def osmScope(scope: String): String =
+    if (parse(scope).exists(_.contains(TagFix))) "read_prefs write_api" else "read_prefs"
 }
 
 /** The new provider is inert unless explicitly configured and enabled. */
 @Singleton
 class MobileOAuthSettings @Inject() (configuration: Configuration) {
+  private val logger   = play.api.Logger(getClass)
   val enabled: Boolean = configuration.getOptional[Boolean]("mobileOAuth.enabled").getOrElse(false)
+
+  /**
+    * AES-256 key for stored OSM tokens (`MR_MOBILE_OSM_TOKEN_KEY`: standard base64 of exactly 32
+    * bytes, e.g. `openssl rand -base64 32`). Unset, empty or malformed means no key: new
+    * `osm:tagfix` authorizations are refused and choice edits answer 503, while existing grants,
+    * reads, lifecycle writes and startup are unaffected (fail closed).
+    */
+  val osmTokenKey: Option[Array[Byte]] = {
+    val raw =
+      configuration.getOptional[String]("mobileOAuth.osmTokenKey").map(_.trim).filter(_.nonEmpty)
+    val key = raw
+      .flatMap(value => scala.util.Try(java.util.Base64.getDecoder.decode(value)).toOption)
+      .filter(_.length == 32)
+    if (enabled && raw.isDefined && key.isEmpty)
+      logger.error(
+        "mobileOAuth.osmTokenKey (MR_MOBILE_OSM_TOKEN_KEY) is malformed: expected base64 of 32 bytes; osm:tagfix is disabled"
+      )
+    key
+  }
+  def tagFixAvailable: Boolean = osmTokenKey.isDefined
   val callbackUri: String =
     configuration.getOptional[String]("mobileOAuth.callbackUri").getOrElse("")
   val accessSeconds: Long =
@@ -60,6 +89,11 @@ class MobileOAuthSettings @Inject() (configuration: Configuration) {
             entry.getOptional[Seq[String]]("scopes").getOrElse(Seq(MobileScopes.Read)).mkString(" ")
           )
           .getOrElse(throw new IllegalArgumentException("Invalid mobile client scopes"))
+        if (scopes.contains(MobileScopes.TagFix) && osmTokenKey.isEmpty)
+          logger.warn(
+            s"Mobile client $id lists osm:tagfix but no valid mobileOAuth.osmTokenKey " +
+              "(MR_MOBILE_OSM_TOKEN_KEY) is set; new osm:tagfix sign-ins are refused"
+          )
         MobileClient(id, entry.get[String]("name"), redirects, scopes)
       }
       require(parsed.map(_.id).distinct.size == parsed.size, "Duplicate mobile client IDs")

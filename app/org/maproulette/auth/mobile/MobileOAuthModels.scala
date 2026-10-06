@@ -79,4 +79,19 @@ trait MobileOAuthStore {
   ): Option[MobileGrant]
   def authenticate(accessHash: String, now: Instant): Option[MobileGrant]
   def revoke(tokenHash: String, clientId: String, now: Instant): Unit
+
+  /** Holds the sealed OSM token on a logged-in, unconsumed interaction until consent. */
+  def attachOsmToken(
+      idHash: String,
+      browserHash: String,
+      userId: Long,
+      token: SealedOsmToken,
+      osmScope: String,
+      now: Instant
+  ): Boolean
+  def osmToken(familyId: String): Option[StoredOsmToken]
+  def deleteOsmToken(familyId: String): Unit
 }
+
+/** An `osm:tagfix` grant family's OSM token. Never logged; opened only to call OSM. */
+case class StoredOsmToken(familyId: String, userId: Long, token: SealedOsmToken, osmScope: String)

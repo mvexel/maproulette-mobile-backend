@@ -22,11 +22,13 @@ class MobileOAuthController @Inject() (
     service: MobileOAuthService,
     settings: MobileOAuthSettings,
     identity: MobileOSMIdentity,
+    cipher: MobileOsmTokenCipher,
     users: UserService,
     config: Config,
     ws: WSClient
 )(implicit ec: ExecutionContext)
     extends AbstractController(components) {
+  private val logger     = play.api.Logger(getClass)
   private val cookieName = "mr_mobile_oauth"
   private val cookiePath = "/oauth/mobile"
   private val defaultPolicy =
@@ -48,10 +50,15 @@ class MobileOAuthController @Inject() (
       val result =
         try operation
         catch {
-          case NonFatal(_) => Future.successful(BadRequest(Json.obj("error" -> "invalid_request")))
+          case NonFatal(e) =>
+            logger.warn(s"Mobile OAuth request rejected: ${e.getClass.getSimpleName}")
+            Future.successful(BadRequest(Json.obj("error" -> "invalid_request")))
         }
       result.map(secure).recover {
-        case NonFatal(_) => secure(InternalServerError(Json.obj("error" -> "server_error")))
+        case NonFatal(e) =>
+          // Class only: messages could echo request parameters.
+          logger.error(s"Mobile OAuth request failed: ${e.getClass.getSimpleName}")
+          secure(InternalServerError(Json.obj("error" -> "server_error")))
       }
     }
   }
@@ -70,6 +77,45 @@ class MobileOAuthController @Inject() (
       .get(value.clientId)
       .exists(_.redirectUris.contains(value.redirectUri)) &&
       settings.allowedScopes(value.clientId, value.scope).isDefined
+
+  private def tagFix(scope: String): Boolean =
+    MobileScopes.parse(scope).exists(_.contains(MobileScopes.TagFix))
+
+  private def osmScope(scope: String): String = MobileScopes.osmScope(scope)
+
+  /** Seals and attaches the OSM token for osm:tagfix logins; other logins keep nothing. */
+  private def keepOsmToken(
+      interaction: MobileInteraction,
+      stateHash: String,
+      browserHash: String,
+      userId: Long,
+      accessToken: String,
+      grantedScope: Option[String]
+  ): Future[Boolean] =
+    if (!tagFix(interaction.scope)) Future.successful(true)
+    else {
+      val scope = grantedScope.getOrElse(osmScope(interaction.scope))
+      if (!scope.split(" ").contains("write_api")) {
+        logger.warn("OSM did not grant write_api to an osm:tagfix login")
+        Future.successful(false)
+      } else
+        cipher.seal(userId, accessToken) match {
+          case None =>
+            logger.warn("osm:tagfix login without a token key")
+            Future.successful(false)
+          case Some(sealedToken) =>
+            service
+              .storage(
+                service.store
+                  .attachOsmToken(stateHash, browserHash, userId, sealedToken, scope, Instant.now())
+              )
+              .map { kept =>
+                if (!kept)
+                  logger.warn("osm:tagfix login: interaction gone before its OSM token was kept")
+                kept
+              }
+        }
+    }
 
   def authorize: Action[AnyContent] = Action.async { request =>
     handled {
@@ -93,7 +139,7 @@ class MobileOAuthController @Inject() (
               "client_id"     -> config.getOSMOauth.consumerKey.key,
               "response_type" -> "code",
               "redirect_uri"  -> settings.callbackUri,
-              "scope"         -> "read_prefs",
+              "scope"         -> osmScope(authorization.scope),
               "state"         -> state
             )
             val destination = ws
@@ -154,7 +200,8 @@ class MobileOAuthController @Inject() (
                   .flatMap { response =>
                     if (response.status != OK) Future.successful(error(new InvalidGrant()))
                     else {
-                      val accessToken = (response.json \ "access_token").as[String]
+                      val accessToken  = (response.json \ "access_token").as[String]
+                      val grantedScope = (response.json \ "scope").asOpt[String]
                       identity.resolve(accessToken).flatMap { user =>
                         val csrf = MobileSecrets.generate()
                         service
@@ -167,9 +214,20 @@ class MobileOAuthController @Inject() (
                               Instant.now()
                             )
                           )
-                          .map {
-                            case true  => consentPage(interaction, state, csrf, user.name)
-                            case false => error(new InvalidGrant())
+                          .flatMap {
+                            case true =>
+                              keepOsmToken(
+                                interaction,
+                                stateHash,
+                                browserHash,
+                                user.id,
+                                accessToken,
+                                grantedScope
+                              ).map {
+                                case true  => consentPage(interaction, state, csrf, user.name)
+                                case false => error(new InvalidGrant())
+                              }
+                            case false => Future.successful(error(new InvalidGrant()))
                           }
                       }
                     }
@@ -193,7 +251,9 @@ class MobileOAuthController @Inject() (
     val canWrite =
       MobileScopes.parse(interaction.scope).exists(_.contains(MobileScopes.Write))
     val access =
-      if (canWrite)
+      if (canWrite && tagFix(interaction.scope))
+        "This app can read MapRoulette tasks and your basic identity. It can also lock, skip and release tasks, and mark them fixed, not an issue, already fixed or too hard, as you. For multiple-choice tasks it can edit OpenStreetMap as you: it applies the tag changes you choose, and deletes a node you report as gone when the app allows that. It cannot make other OpenStreetMap edits, comment, review, delete tasks or obtain your personal API key."
+      else if (canWrite)
         "This app can read MapRoulette tasks and your basic identity. It can also lock, skip and release tasks, and mark them fixed, not an issue, already fixed or too hard, as you. It cannot edit OpenStreetMap, comment, review, delete tasks or obtain your personal API key."
       else
         "This app can read MapRoulette tasks and your basic identity. It cannot edit tasks or obtain your personal API key."

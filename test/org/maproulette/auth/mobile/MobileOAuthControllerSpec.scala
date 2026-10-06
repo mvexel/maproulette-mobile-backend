@@ -92,9 +92,29 @@ class MobileOAuthControllerSpec extends PlaySpec with MockitoSugar with BeforeAn
       .copy(id = 99L, displayName = "Example User", requestToken = "private-osm-token")
   )
 
-  private class Fixture(enabled: Boolean = true) {
-    val store    = mock[MobileOAuthStore]
-    val settings = new MobileOAuthSettings(if (enabled) mobileConfig else Configuration.empty)
+  private val tokenKey = java.util.Base64.getEncoder.encodeToString(Array.fill[Byte](32)(7))
+  private val tagFixConfig = Configuration(
+    ConfigFactory.parseString(
+      s"""
+    mobileOAuth {
+      enabled=true
+      callbackUri="https://mr.example/oauth/mobile/callback"
+      osmTokenKey="$tokenKey"
+      clients=[{
+        id="app",name="Example <App>",redirectUris=["org.example.app:/callback"],
+        scopes=["tasks:read","tasks:write","osm:tagfix"]
+      }]
+    }
+  """
+    )
+  )
+
+  private class Fixture(enabled: Boolean = true, config: Option[Configuration] = None) {
+    val store = mock[MobileOAuthStore]
+    val settings = new MobileOAuthSettings(
+      config.getOrElse(if (enabled) mobileConfig else Configuration.empty)
+    )
+    val cipher   = new MobileOsmTokenCipher(settings)
     val service  = new MobileOAuthService(store, settings, system)
     val identity = mock[MobileOSMIdentity]
     val users    = mock[UserService]
@@ -107,13 +127,16 @@ class MobileOAuthControllerSpec extends PlaySpec with MockitoSugar with BeforeAn
     when(upstream.withHttpHeaders(any[(String, String)])).thenReturn(upstream)
     when(upstream.post(any[Map[String, String]])(any())).thenReturn(Future.successful(response))
     when(response.status).thenReturn(200)
-    when(response.json).thenReturn(Json.obj("access_token" -> "upstream-only-secret"))
+    when(response.json).thenReturn(
+      Json.obj("access_token" -> "upstream-only-secret", "scope" -> "read_prefs write_api")
+    )
     when(identity.resolve(anyString())).thenReturn(Future.successful(user))
     val controller = new MobileOAuthController(
       stubControllerComponents(),
       service,
       settings,
       identity,
+      cipher,
       users,
       new Config(),
       ws
@@ -189,6 +212,159 @@ class MobileOAuthControllerSpec extends PlaySpec with MockitoSugar with BeforeAn
           body.contains("mark them fixed, not an issue, already fixed or too hard") mustBe write
           body.contains("It cannot edit tasks") mustBe !write
       }
+    }
+
+    "keep an osm:tagfix login's OSM token only sealed, and name OSM edits on consent" in {
+      val f      = new Fixture(config = Some(tagFixConfig))
+      val tagFix = interaction.copy(scope = "tasks:read tasks:write osm:tagfix")
+      when(f.store.claimLogin(anyString(), anyString(), any[Instant])).thenReturn(Some(tagFix))
+      when(f.store.completeLogin(anyString(), anyString(), anyLong(), anyString(), any[Instant]))
+        .thenReturn(true)
+      val sealedToken = org.mockito.ArgumentCaptor.forClass(classOf[SealedOsmToken])
+      when(
+        f.store.attachOsmToken(
+          anyString(),
+          anyString(),
+          anyLong(),
+          sealedToken.capture(),
+          anyString(),
+          any[Instant]
+        )
+      ).thenReturn(true)
+      val result = f.controller.callback.apply(
+        FakeRequest(GET, s"/oauth/mobile/callback?state=$state&code=example")
+          .withCookies(Cookie("mr_mobile_oauth", browser))
+      )
+      status(result) mustBe OK
+      val body = contentAsString(result)
+      body must include("edit OpenStreetMap as you")
+      body must not include "upstream-only-secret"
+      verify(f.store).attachOsmToken(
+        org.mockito.ArgumentMatchers.eq(tagFix.idHash),
+        org.mockito.ArgumentMatchers.eq(tagFix.browserHash),
+        org.mockito.ArgumentMatchers.eq(42L),
+        any[SealedOsmToken],
+        org.mockito.ArgumentMatchers.eq("read_prefs write_api"),
+        any[Instant]
+      )
+      new String(sealedToken.getValue.ciphertext, "UTF-8") must not include "upstream-only-secret"
+      f.cipher.open(42L, sealedToken.getValue) mustBe Right("upstream-only-secret")
+      f.cipher.open(43L, sealedToken.getValue) mustBe Left("unreadable")
+    }
+
+    "fail an osm:tagfix login closed when its token cannot be kept" in {
+      val f      = new Fixture(config = Some(tagFixConfig))
+      val tagFix = interaction.copy(scope = "tasks:read tasks:write osm:tagfix")
+      when(f.store.claimLogin(anyString(), anyString(), any[Instant])).thenReturn(Some(tagFix))
+      when(f.store.completeLogin(anyString(), anyString(), anyLong(), anyString(), any[Instant]))
+        .thenReturn(true)
+      when(
+        f.store.attachOsmToken(
+          anyString(),
+          anyString(),
+          anyLong(),
+          any[SealedOsmToken],
+          anyString(),
+          any[Instant]
+        )
+      ).thenReturn(false)
+      val result = f.controller.callback.apply(
+        FakeRequest(GET, s"/oauth/mobile/callback?state=$state&code=example")
+          .withCookies(Cookie("mr_mobile_oauth", browser))
+      )
+      status(result) mustBe BAD_REQUEST
+    }
+
+    "never keep the OSM token of a login without osm:tagfix" in {
+      val f = new Fixture(config = Some(tagFixConfig))
+      when(f.store.claimLogin(anyString(), anyString(), any[Instant]))
+        .thenReturn(Some(interaction.copy(scope = "tasks:read tasks:write")))
+      when(f.store.completeLogin(anyString(), anyString(), anyLong(), anyString(), any[Instant]))
+        .thenReturn(true)
+      val result = f.controller.callback.apply(
+        FakeRequest(GET, s"/oauth/mobile/callback?state=$state&code=example")
+          .withCookies(Cookie("mr_mobile_oauth", browser))
+      )
+      status(result) mustBe OK
+      contentAsString(result) must not include "edit OpenStreetMap as you"
+      verify(f.store, never()).attachOsmToken(
+        anyString(),
+        anyString(),
+        anyLong(),
+        any[SealedOsmToken],
+        anyString(),
+        any[Instant]
+      )
+    }
+
+    "treat an unset, empty or malformed token key alike: no new osm:tagfix, nothing else changes" in {
+      Seq(
+        "",
+        """osmTokenKey="" """,
+        """osmTokenKey="   " """,
+        """osmTokenKey="not base64!" """,
+        s"""osmTokenKey="${java.util.Base64.getEncoder.encodeToString(Array.fill[Byte](16)(1))}" """
+      ).foreach { keyLine =>
+        val config = Configuration(
+          ConfigFactory.parseString(
+            s"""
+          mobileOAuth {
+            enabled=true
+            callbackUri="https://mr.example/oauth/mobile/callback"
+            $keyLine
+            clients=[{
+              id="app",name="App",redirectUris=["org.example.app:/callback"],
+              scopes=["tasks:read","tasks:write","osm:tagfix"]
+            }]
+          }
+        """
+          )
+        )
+        val f = new Fixture(config = Some(config))
+        f.settings.tagFixAvailable mustBe false
+        f.cipher.available mustBe false
+        // Configured scopes stay, so grants issued earlier keep authenticating.
+        f.settings.allowedScopes("app", "tasks:read tasks:write osm:tagfix").isDefined mustBe true
+        def authorize(scope: String) = f.controller.authorize.apply(
+          FakeRequest(
+            GET,
+            "/oauth/mobile/authorize?response_type=code&client_id=app" +
+              s"&redirect_uri=org.example.app%3A%2Fcallback&scope=$scope" +
+              s"&state=native&code_challenge=${"a" * 43}&code_challenge_method=S256"
+          )
+        )
+        val refused = authorize("tasks%3Aread+tasks%3Awrite+osm%3Atagfix")
+        status(refused) mustBe BAD_REQUEST
+        (contentAsJson(refused) \ "error").as[String] mustBe "invalid_scope"
+        verify(f.store, never()).createInteraction(any[MobileInteraction])
+        // Other sign-ins go on as before.
+        Await.ready(authorize("tasks%3Aread+tasks%3Awrite"), 5.seconds)
+        verify(f.store).createInteraction(any[MobileInteraction])
+      }
+    }
+
+    "refuse an osm:tagfix login whose OSM grant lacks write_api" in {
+      val f      = new Fixture(config = Some(tagFixConfig))
+      val tagFix = interaction.copy(scope = "tasks:read tasks:write osm:tagfix")
+      when(f.store.claimLogin(anyString(), anyString(), any[Instant])).thenReturn(Some(tagFix))
+      when(f.store.completeLogin(anyString(), anyString(), anyLong(), anyString(), any[Instant]))
+        .thenReturn(true)
+      when(f.response.json).thenReturn(
+        Json.obj("access_token" -> "upstream-only-secret", "scope" -> "read_prefs")
+      )
+      val result = f.controller.callback.apply(
+        FakeRequest(GET, s"/oauth/mobile/callback?state=$state&code=example")
+          .withCookies(Cookie("mr_mobile_oauth", browser))
+      )
+      status(result) mustBe BAD_REQUEST
+      verify(f.store, never()).attachOsmToken(
+        anyString(),
+        anyString(),
+        anyLong(),
+        any[SealedOsmToken],
+        anyString(),
+        any[Instant]
+      )
     }
 
     "persist the requested canonical scope at authorization" in {

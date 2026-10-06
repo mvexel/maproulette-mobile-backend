@@ -133,7 +133,7 @@ class MobileOAuthRepository @Inject() (db: Database) extends MobileOAuthStore {
     digest(codeHash)
     require(codeExpiresAt.isAfter(now))
     db.withTransaction { implicit c =>
-      consumeInteraction(idHash, browserHash, csrfHash, now).map { value =>
+      consumeInteraction(idHash, browserHash, csrfHash, now).flatMap { value =>
         SQL("""INSERT INTO mobile_oauth_families
           (family_id,user_id,client_id,scope,redirect_uri,code_challenge,created_at)
           VALUES ({family},{user},{client},{scope},{redirect},{challenge},{now})""")
@@ -151,17 +151,96 @@ class MobileOAuthRepository @Inject() (db: Database) extends MobileOAuthStore {
           VALUES ({code},{family},{expires})""")
           .on("code" -> codeHash, "family" -> familyId, "expires" -> stamp(codeExpiresAt))
           .executeUpdate()
-        MobileGrant(
-          familyId,
-          value.userId.get,
-          value.clientId,
-          value.scope,
-          value.redirectUri,
-          value.codeChallenge
-        )
+        // An osm:tagfix login's sealed OSM token moves to the new grant family.
+        val moved = SQL("""INSERT INTO mobile_osm_tokens
+          (grant_family_id,user_id,ciphertext,nonce,osm_scope,created_at)
+          SELECT {family},user_id,osm_token_ciphertext,osm_token_nonce,osm_scope,{now}
+          FROM mobile_oauth_interactions WHERE interaction_hash={id}
+          AND osm_token_ciphertext IS NOT NULL AND osm_token_nonce IS NOT NULL
+          AND osm_scope IS NOT NULL""")
+          .on("family" -> familyId, "id" -> idHash, "now" -> stamp(now))
+          .executeUpdate()
+        clearInteractionToken(idHash)
+        if (MobileScopes.parse(value.scope).exists(_.contains(MobileScopes.TagFix)) && moved != 1) {
+          // An osm:tagfix grant without its OSM token would only fail later: issue nothing.
+          c.rollback()
+          None
+        } else
+          Some(
+            MobileGrant(
+              familyId,
+              value.userId.get,
+              value.clientId,
+              value.scope,
+              value.redirectUri,
+              value.codeChallenge
+            )
+          )
       }
     }
   }
+
+  private def clearInteractionToken(idHash: String)(implicit c: Connection): Unit = {
+    SQL("""UPDATE mobile_oauth_interactions SET osm_token_ciphertext=NULL,
+      osm_token_nonce=NULL, osm_scope=NULL WHERE interaction_hash={id}""")
+      .on("id" -> idHash)
+      .executeUpdate()
+    ()
+  }
+
+  override def attachOsmToken(
+      idHash: String,
+      browserHash: String,
+      userId: Long,
+      token: SealedOsmToken,
+      osmScope: String,
+      now: Instant
+  ): Boolean =
+    db.withTransaction { implicit c =>
+      // Abandoned logins must not keep OSM write tokens: clear every expired one.
+      SQL("""UPDATE mobile_oauth_interactions SET osm_token_ciphertext=NULL, osm_token_nonce=NULL,
+        osm_scope=NULL WHERE expires_at<={now} AND osm_token_ciphertext IS NOT NULL""")
+        .on("now" -> stamp(now))
+        .executeUpdate()
+      SQL("""UPDATE mobile_oauth_interactions SET osm_token_ciphertext={ciphertext},
+        osm_token_nonce={nonce}, osm_scope={scope}
+        WHERE interaction_hash={id} AND browser_hash={browser} AND user_id={user}
+        AND consumed_at IS NULL AND expires_at>{now}""")
+        .on(
+          "ciphertext" -> token.ciphertext,
+          "nonce"      -> token.nonce,
+          "scope"      -> osmScope,
+          "id"         -> idHash,
+          "browser"    -> browserHash,
+          "user"       -> userId,
+          "now"        -> stamp(now)
+        )
+        .executeUpdate() == 1
+    }
+
+  override def osmToken(familyId: String): Option[StoredOsmToken] =
+    db.withConnection { implicit c =>
+      SQL("""SELECT t.* FROM mobile_osm_tokens t JOIN mobile_oauth_families f
+        ON f.family_id=t.grant_family_id
+        WHERE t.grant_family_id={family} AND f.revoked_at IS NULL""")
+        .on("family" -> familyId)
+        .as(parser { row =>
+          StoredOsmToken(
+            row[String]("grant_family_id"),
+            row[Long]("user_id"),
+            SealedOsmToken(row[Array[Byte]]("ciphertext"), row[Array[Byte]]("nonce")),
+            row[String]("osm_scope")
+          )
+        }.singleOpt)
+    }
+
+  override def deleteOsmToken(familyId: String): Unit =
+    db.withConnection { implicit c =>
+      SQL("DELETE FROM mobile_osm_tokens WHERE grant_family_id={family}")
+        .on("family" -> familyId)
+        .executeUpdate()
+      ()
+    }
 
   override def declineInteraction(
       idHash: String,
@@ -170,7 +249,9 @@ class MobileOAuthRepository @Inject() (db: Database) extends MobileOAuthStore {
       now: Instant
   ): Option[MobileInteraction] =
     db.withTransaction { implicit c =>
-      consumeInteraction(idHash, browserHash, csrfHash, now)
+      val declined = consumeInteraction(idHash, browserHash, csrfHash, now)
+      if (declined.isDefined) clearInteractionToken(idHash)
+      declined
     }
 
   // Fixed private table/column arguments only; all caller-controlled inputs are SQL parameters.
@@ -209,6 +290,10 @@ class MobileOAuthRepository @Inject() (db: Database) extends MobileOAuthStore {
     SQL(
       "UPDATE mobile_oauth_families SET revoked_at=COALESCE(revoked_at,{now}) WHERE family_id={id}"
     ).on("now" -> stamp(now), "id" -> familyId)
+      .executeUpdate()
+    // Revocation and refresh-token replay both end the grant's OSM access.
+    SQL("DELETE FROM mobile_osm_tokens WHERE grant_family_id={id}")
+      .on("id" -> familyId)
       .executeUpdate()
     ()
   }

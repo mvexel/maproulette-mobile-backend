@@ -295,7 +295,12 @@ class MobileOAuthServiceSpec extends PlaySpec with MockitoSugar with BeforeAndAf
     }
 
     "reject invalid client scope configuration" in {
-      Seq("[\"tasks:write\"]", "[\"tasks:read\", \"tasks:admin\"]", "[]").foreach { scopes =>
+      Seq(
+        "[\"tasks:write\"]",
+        "[\"tasks:read\", \"tasks:admin\"]",
+        "[]",
+        "[\"tasks:read\", \"osm:tagfix\"]"
+      ).foreach { scopes =>
         an[Exception] must be thrownBy new MobileOAuthSettings(
           Configuration(
             ConfigFactory.parseString(

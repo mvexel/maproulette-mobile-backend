@@ -13,6 +13,7 @@ import org.maproulette.Config
 import org.maproulette.exception.InvalidException
 import org.maproulette.framework.model.{Challenge, Task, User}
 import org.maproulette.models.dal.{ChallengeDAL, TaskDAL}
+import org.maproulette.provider.choice.ChoiceValidationException
 import org.maproulette.utils.Utils
 import org.slf4j.LoggerFactory
 import play.api.db.{Database, NamedDatabase}
@@ -20,6 +21,7 @@ import play.api.http.Status
 import play.api.libs.json._
 import play.api.libs.ws.WSClient
 
+import scala.collection.mutable.ListBuffer
 import scala.concurrent.Future
 import scala.concurrent.duration.Duration
 import scala.util.{Failure, Success}
@@ -104,7 +106,8 @@ class ChallengeProvider @Inject() (
                     user,
                     taskNameFromJsValue(jsonData, challenge),
                     challenge,
-                    jsonData
+                    jsonData,
+                    None
                   )
                   None
                 } catch {
@@ -172,17 +175,28 @@ class ChallengeProvider @Inject() (
     * @param json      The geojson for the task
     * @return
     */
-  def createTaskFromJson(user: User, challenge: Challenge, json: String): Option[Task] = {
+  def createTaskFromJson(
+      user: User,
+      challenge: Challenge,
+      json: String,
+      errors: Option[ListBuffer[String]] = None
+  ): Option[Task] = {
     try {
       this
         .createTasksFromFeatures(
           user,
           challenge,
           Json.parse(this.normalizeRFC7464Sequence(json)),
-          true
+          true,
+          errors = errors
         )
         .headOption
     } catch {
+      // Reporting callers (addFileTasks?report=true) get the error per line instead of a
+      // FAILED challenge.
+      case e: Exception if errors.isDefined =>
+        errors.foreach(_ += ChallengeProvider.message(e))
+        None
       case e: Exception =>
         this.challengeDAL.update(
           Json.obj("status" -> Challenge.STATUS_FAILED, "statusMessage" -> e.getMessage),
@@ -275,7 +289,8 @@ class ChallengeProvider @Inject() (
                   user,
                   taskNameFromJsValue(jsonData, challenge),
                   challenge,
-                  jsonData
+                  jsonData,
+                  None
                 )
               }
               this.challengeDAL.update(Json.obj("status" -> Challenge.STATUS_READY), user)(
@@ -421,7 +436,8 @@ class ChallengeProvider @Inject() (
       parent: Challenge,
       jsonData: JsValue,
       single: Boolean = false,
-      currentTaskCount: Int = 0
+      currentTaskCount: Int = 0,
+      errors: Option[ListBuffer[String]] = None
   ): List[Task] = {
     this.challengeDAL.update(Json.obj("status" -> Challenge.STATUS_BUILDING), user)(parent.id)
     val featureList       = (jsonData \ "features").as[List[JsValue]]
@@ -468,7 +484,13 @@ class ChallengeProvider @Inject() (
         this.challengeDAL.markTasksRefreshed()(parent.id)
         this.challengeDAL.updateBoundingBox()(parent.id)
         if (single) {
-          this.createNewTask(user, taskNameFromJsValue(jsonData, parent), parent, jsonData) match {
+          this.createNewTask(
+            user,
+            taskNameFromJsValue(jsonData, parent),
+            parent,
+            jsonData,
+            errors
+          ) match {
             case Some(t) => List(t)
             case None    => List.empty
           }
@@ -478,6 +500,10 @@ class ChallengeProvider @Inject() (
         }
       }
     } catch {
+      case e: Exception if errors.isDefined =>
+        errors.foreach(_ += ChallengeProvider.message(e))
+        this.challengeDAL.update(Json.obj("status" -> Challenge.STATUS_READY), user)(parent.id)
+        List.empty
       case e: Exception =>
         this.challengeDAL.update(
           Json.obj("status" -> Challenge.STATUS_FAILED, "statusMessage" -> e.getMessage),
@@ -771,13 +797,15 @@ class ChallengeProvider @Inject() (
       user: User,
       name: String,
       parent: Challenge,
-      json: JsValue
+      json: JsValue,
+      errors: Option[ListBuffer[String]]
   ): Option[Task] = {
     this._createNewTask(
       user,
       name,
       parent,
-      Task(-1, name, DateTime.now(), DateTime.now(), parent.id, Some(""), None, json.as[JsObject])
+      Task(-1, name, DateTime.now(), DateTime.now(), parent.id, Some(""), None, json.as[JsObject]),
+      errors
     )
   }
 
@@ -815,7 +843,8 @@ class ChallengeProvider @Inject() (
       user: User,
       name: String,
       parent: Challenge,
-      newTask: Task
+      newTask: Task,
+      errors: Option[ListBuffer[String]] = None
   ): Option[Task] = {
     try {
       this.withBackgroundPool { c =>
@@ -825,6 +854,12 @@ class ChallengeProvider @Inject() (
       // this task could fail on unique key violation, we need to ignore them
       case e: Exception =>
         logger.error(s"Failed to create task '$name' in challenge ${parent.id}: ${e.getMessage}", e)
+        errors.foreach { collected =>
+          e match {
+            case choice: ChoiceValidationException => collected ++= choice.errors
+            case other                             => collected += ChallengeProvider.message(other)
+          }
+        }
         None
     }
   }
@@ -965,4 +1000,10 @@ class ChallengeProvider @Inject() (
       }
     }
   }
+}
+
+object ChallengeProvider {
+
+  /** A reportable message for a rejected line; never null. */
+  def message(e: Throwable): String = Option(e.getMessage).getOrElse(e.getClass.getSimpleName)
 }

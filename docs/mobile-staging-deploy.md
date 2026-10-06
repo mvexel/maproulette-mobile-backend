@@ -32,6 +32,9 @@ APPLICATION_SECRET=<unique-random-Play-secret>
 MAPROULETTE_SECRET_KEY=<different-unique-random-encryption-secret>
 MR_OAUTH_CONSUMER_KEY=<development-OSM-client-ID>
 MR_OAUTH_CONSUMER_SECRET=<development-OSM-client-secret>
+# Optional: enables osm:tagfix (choice answers applied to OSM). 32 random bytes:
+# openssl rand -base64 32
+MR_MOBILE_OSM_TOKEN_KEY=<base64-key>
 ```
 
 Use only a hostname in `PUBLIC_HOST`, without `https://` or a path. Compose
@@ -60,7 +63,7 @@ The first build can take several minutes. Compose starts PostGIS, waits for
 its health check, starts the API, then starts Caddy after the API is healthy.
 Caddy publishes ports 80 and 443; only the API can reach the private database
 network. Play automatically applies database evolutions, including version
-129 for mobile OAuth.
+129 for mobile OAuth and 130 for choice tasks.
 
 Replace the hostname below with your `PUBLIC_HOST`:
 
@@ -72,7 +75,7 @@ docker compose --env-file .env -f compose.mobile.yml exec -T db \
 ```
 
 Expect HTTP 200 for `/ping`, HTTP 401 for `/oauth/mobile/me` without a bearer
-token, and evolution 129. A 404 on `/oauth/mobile/me` means the responding
+token, and evolution 130. A 404 on `/oauth/mobile/me` means the responding
 backend does not have mobile OAuth enabled. Complete a browser sign-in from
 the approved Android app to verify OSM login, consent, app callback, token
 exchange, and authenticated identity together.

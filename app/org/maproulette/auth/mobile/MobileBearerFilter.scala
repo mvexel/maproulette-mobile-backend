@@ -12,6 +12,9 @@ import scala.concurrent.{ExecutionContext, Future}
 
 object MobileBearerIdentity {
   val UserKey: TypedKey[User] = TypedKey[User]("mobile-oauth-user")
+  // The grant's scopes and family, for controllers that need more than tasks:write.
+  val ScopesKey: TypedKey[Set[String]] = TypedKey[Set[String]]("mobile-oauth-scopes")
+  val FamilyKey: TypedKey[String]      = TypedKey[String]("mobile-oauth-family")
 }
 
 /** An explicit route allowlist: several legacy GET routes mutate data or disclose API keys. */
@@ -24,6 +27,7 @@ object MobileReadRoutes {
     "/api/v2/challenge/[0-9]+/tags",
     "/api/v2/challenge/[0-9]+/tasks",
     "/api/v2/task/[0-9]+",
+    "/api/v2/task/[0-9]+/choice/check",
     s"/api/v2/tasks/box/$box",
     "/oauth/mobile/me"
   ).map(_.r)
@@ -31,6 +35,10 @@ object MobileReadRoutes {
   def permits(method: String, path: String): Boolean =
     (method == "GET" && reads.exists(_.pattern.matcher(path).matches())) ||
       (method == "PUT" && path.matches(s"/api/v2/markers/box/$box"))
+
+  /** Reads that take no query string or body. */
+  def bare(method: String, path: String): Boolean =
+    method == "GET" && path.matches("/api/v2/task/[0-9]+/choice/check")
 }
 
 /**
@@ -40,13 +48,32 @@ object MobileReadRoutes {
   * (start immediately before the status write), so refreshLock is deliberately not allowed.
   */
 object MobileWriteRoutes {
-  private val task = "/api/v2/task/[0-9]+"
+  private val task       = "/api/v2/task/[0-9]+"
+  val MaxChoiceBodyBytes = 2048
 
   def permits(method: String, path: String): Boolean = method match {
     case "GET"  => path.matches(s"$task/(start|release)")
-    case "POST" => path.matches(s"$task/skip")
+    case "POST" => path.matches(s"$task/(skip|choice)")
     case "PUT"  => path.matches(s"$task/[1256]")
     case _      => false
+  }
+
+  /** The only write that carries a body: a small JSON choice submission. */
+  def takesBody(method: String, path: String): Boolean =
+    method == "POST" && path.matches(s"$task/choice")
+
+  def acceptableBody(request: RequestHeader): Boolean = {
+    val contentType = request.headers
+      .get("Content-Type")
+      .map(_.toLowerCase(java.util.Locale.ROOT).replace(" ", ""))
+    val length = request.headers.getAll("Content-Length") match {
+      case Seq(value) if value.matches("[0-9]{1,5}") => Some(value.toInt)
+      case _                                         => None
+    }
+    request.rawQueryString.isEmpty &&
+    request.headers.get("Transfer-Encoding").isEmpty &&
+    contentType.exists(Set("application/json", "application/json;charset=utf-8").contains) &&
+    length.exists(value => value > 0 && value <= MaxChoiceBodyBytes)
   }
 }
 
@@ -75,8 +102,13 @@ class MobileBearerFilter @Inject() (
     val write = MobileWriteRoutes.permits(request.method, request.path)
     if (!write && !MobileReadRoutes.permits(request.method, request.path))
       return denied(403, "insufficient_scope")
-    if (write && (request.rawQueryString.nonEmpty || request.hasBody))
-      return denied(400, "invalid_request")
+    val badShape =
+      if (write && MobileWriteRoutes.takesBody(request.method, request.path))
+        !MobileWriteRoutes.acceptableBody(request)
+      else
+        (write || MobileReadRoutes.bare(request.method, request.path)) &&
+        (request.rawQueryString.nonEmpty || request.hasBody)
+    if (badShape) return denied(400, "invalid_request")
     oauth.authenticate(parts(1)).flatMap { grant =>
       // MobileOAuthService.authenticate has already checked the scopes against the client.
       grant.flatMap(value => MobileScopes.parse(value.scope).map(value -> _)) match {
@@ -84,8 +116,14 @@ class MobileBearerFilter @Inject() (
           if (write && !scopes.contains(MobileScopes.Write)) denied(403, "insufficient_scope")
           else
             users.retrieve(value.userId).filter(_.id > 0) match {
-              case Some(user) => next(request.addAttr(MobileBearerIdentity.UserKey, user))
-              case None       => denied(401, "invalid_token")
+              case Some(user) =>
+                next(
+                  request
+                    .addAttr(MobileBearerIdentity.UserKey, user)
+                    .addAttr(MobileBearerIdentity.ScopesKey, scopes)
+                    .addAttr(MobileBearerIdentity.FamilyKey, value.familyId)
+                )
+              case None => denied(401, "invalid_token")
             }
         case None => denied(401, "invalid_token")
       }

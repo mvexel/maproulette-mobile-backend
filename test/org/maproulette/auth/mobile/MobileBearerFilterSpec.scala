@@ -79,6 +79,16 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
       MobileScopes.parse("tasks:write tasks:read") mustBe Some(Set("tasks:read", "tasks:write"))
       MobileScopes.format(Set("tasks:write", "tasks:read")) mustBe "tasks:read tasks:write"
     }
+    "accept osm:tagfix only together with tasks:write, in canonical order" in {
+      MobileScopes.parse("osm:tagfix tasks:write tasks:read") mustBe
+        Some(Set("tasks:read", "tasks:write", "osm:tagfix"))
+      MobileScopes.format(Set("osm:tagfix", "tasks:read", "tasks:write")) mustBe
+        "tasks:read tasks:write osm:tagfix"
+      MobileScopes.parse("tasks:read osm:tagfix") mustBe None
+      MobileScopes.parse("osm:tagfix") mustBe None
+      MobileScopes.osmScope("tasks:read tasks:write osm:tagfix") mustBe "read_prefs write_api"
+      MobileScopes.osmScope("tasks:read tasks:write") mustBe "read_prefs"
+    }
     "reject empty, unknown, duplicate, write-only and irregularly spaced scopes" in {
       Seq(
         "",
@@ -194,6 +204,89 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
         FakeRequest(GET, "/api/v2/task/123/start").withHeaders("apiKey" -> "legacy-key")
       ).foreach(request => contentAsString(open.apply(next)(request)) mustBe "legacy")
       verify(legacy, never()).authenticate(anyString())
+    }
+  }
+
+  "Mobile choice routes" should {
+    val choice = "/api/v2/task/123/choice"
+    def json(body: String, extra: (String, String)*) =
+      bearer(POST, choice).withHeaders(
+        Seq("Content-Type" -> "application/json", "Content-Length" -> body.length.toString) ++ extra: _*
+      )
+    def attrs(request: RequestHeader) =
+      Future.successful(
+        Results.Ok(
+          Seq(
+            request.attrs.get(MobileBearerIdentity.UserKey).map(_.id.toString),
+            request.attrs.get(MobileBearerIdentity.ScopesKey).map(_.toSeq.sorted.mkString("+")),
+            request.attrs.get(MobileBearerIdentity.FamilyKey)
+          ).flatten.mkString("|")
+        )
+      )
+
+    "accept a small JSON body on POST choice only, and pass the grant's scopes and family on" in {
+      val (filter, _) = writeFilter(grant.copy(scope = "tasks:read tasks:write osm:tagfix"))
+      contentAsString(filter.apply(attrs)(json("""{"answers":{"a":"b"}}"""))) mustBe
+        "123|osm:tagfix+tasks:read+tasks:write|family"
+      contentAsString(
+        filter.apply(next)(
+          bearer(POST, choice).withHeaders(
+            "Content-Type"   -> "application/json; charset=UTF-8",
+            "Content-Length" -> "2048"
+          )
+        )
+      ) mustBe "123"
+    }
+
+    "reject a choice body that is too large, chunked, untyped, empty or has a query" in {
+      val (filter, _) = writeFilter(writeGrant)
+      Seq(
+        bearer(POST, choice)
+          .withHeaders("Content-Type"  -> "application/json", "Content-Length" -> "2049"),
+        json("{}", "Transfer-Encoding" -> "chunked"),
+        bearer(POST, choice)
+          .withHeaders("Content-Type"                     -> "application/json", "Transfer-Encoding" -> "chunked"),
+        bearer(POST, choice).withHeaders("Content-Type"   -> "text/plain", "Content-Length" -> "2"),
+        bearer(POST, choice).withHeaders("Content-Length" -> "2"),
+        bearer(POST, choice).withHeaders("Content-Type"   -> "application/json"),
+        bearer(POST, choice)
+          .withHeaders("Content-Type" -> "application/json", "Content-Length" -> "0"),
+        bearer(POST, choice + "?x=1")
+          .withHeaders("Content-Type" -> "application/json", "Content-Length" -> "2"),
+        bearer(POST, choice).withHeaders(
+          "Content-Type"   -> "application/json",
+          "Content-Length" -> "2",
+          "Content-Length" -> "2"
+        )
+      ).foreach { request =>
+        val result = filter.apply(next)(request)
+        status(result) mustBe BAD_REQUEST
+        contentAsJson(result) mustBe play.api.libs.json.Json.obj("error" -> "invalid_request")
+      }
+      // Every other write keeps the no-body rule, JSON or not.
+      Seq(
+        bearer(POST, "/api/v2/task/123/skip")
+          .withHeaders("Content-Type" -> "application/json", "Content-Length" -> "2"),
+        bearer(PUT, "/api/v2/task/123/1")
+          .withHeaders("Content-Type" -> "application/json", "Content-Length" -> "2")
+      ).foreach(request => status(filter.apply(next)(request)) mustBe BAD_REQUEST)
+    }
+
+    "require tasks:write for the submit and allow the check to tasks:read without query or body" in {
+      val (readOnly, _) = writeFilter(grant)
+      status(readOnly.apply(next)(json("{}"))) mustBe FORBIDDEN
+      contentAsString(readOnly.apply(next)(bearer(GET, s"$choice/check"))) mustBe "123"
+      Seq(
+        bearer(GET, s"$choice/check?x=1"),
+        bearer(GET, s"$choice/check").withHeaders("Content-Length" -> "2")
+      ).foreach(request => status(readOnly.apply(next)(request)) mustBe BAD_REQUEST)
+      Seq(
+        bearer(PUT, choice),
+        bearer(GET, choice),
+        bearer(POST, s"$choice/check"),
+        bearer(GET, s"$choice/check/"),
+        bearer(POST, "/api/v2/task/abc/choice")
+      ).foreach(request => status(readOnly.apply(next)(request)) mustBe FORBIDDEN)
     }
   }
 
