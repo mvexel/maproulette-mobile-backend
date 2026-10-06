@@ -28,7 +28,8 @@ case class MobileAuthorization(
     client: MobileClient,
     redirectUri: String,
     state: String,
-    challenge: String
+    challenge: String,
+    scope: String
 )
 
 @Singleton
@@ -55,9 +56,7 @@ class MobileOAuthService @Inject() (
       storage {
         store
           .authenticate(MobileSecrets.hash(accessToken), Instant.now())
-          .filter(grant =>
-            settings.clients.contains(grant.clientId) && grant.scope == settings.scope
-          )
+          .filter(grant => settings.allowedScopes(grant.clientId, grant.scope).isDefined)
       }
 
   def parameters(values: Map[String, Seq[String]]): Either[OAuthError, Map[String, String]] = {
@@ -74,15 +73,25 @@ class MobileOAuthService @Inject() (
           val redirect  = params.getOrElse("redirect_uri", "")
           val state     = params.getOrElse("state", "")
           val challenge = params.getOrElse("code_challenge", "")
+          val scopes    = MobileScopes.parse(params.getOrElse("scope", ""))
           if (!client.redirectUris.contains(redirect))
             Left(new InvalidRequest("Invalid redirect URI"))
           else if (params.get("response_type") != Some("code"))
             Left(new InvalidRequest("Only code response type is supported"))
-          else if (params.get("scope") != Some(settings.scope)) Left(new InvalidScope())
+          else if (!scopes.exists(_.subsetOf(client.scopes))) Left(new InvalidScope())
           else if (state.isEmpty || params.get("code_challenge_method") != Some("S256") || !challenge
                      .matches("[A-Za-z0-9_-]{43}"))
             Left(new InvalidRequest("State and S256 PKCE are required"))
-          else Right(MobileAuthorization(client, redirect, state, challenge))
+          else
+            Right(
+              MobileAuthorization(
+                client,
+                redirect,
+                state,
+                challenge,
+                MobileScopes.format(scopes.get)
+              )
+            )
       }
     }
   }
@@ -104,7 +113,7 @@ class MobileOAuthService @Inject() (
               Left(new InvalidGrant("Invalid redirect URI"))
             else Right(params)
           case Some("refresh_token") =>
-            if (params.get("scope").exists(_ != settings.scope)) Left(new InvalidScope())
+            if (params.get("scope").exists(MobileScopes.parse(_).isEmpty)) Left(new InvalidScope())
             else Right(params)
           case _ => Left(new UnsupportedGrantType())
         }
@@ -198,8 +207,15 @@ class MobileOAuthService @Inject() (
     override def refreshAccessToken(
         info: AuthInfo[MobileGrant],
         refreshToken: String
-    ): Future[AccessToken] = issue { (pair, now) =>
-      store.rotate(MobileSecrets.hash(refreshToken), info.user.clientId, pair, now)
+    ): Future[AccessToken] = {
+      // A refresh may restate the grant's scope but never widen or narrow it.
+      val requested = params.get("scope").flatMap(MobileScopes.parse)
+      if (requested.exists(scopes => !MobileScopes.parse(info.user.scope).contains(scopes)))
+        Future.failed(new InvalidScope())
+      else
+        issue { (pair, now) =>
+          store.rotate(MobileSecrets.hash(refreshToken), info.user.clientId, pair, now)
+        }
     }
   }
 }

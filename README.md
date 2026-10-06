@@ -8,7 +8,10 @@ Welcome to the repository for the MapRoulette back-end server code. The MapRoule
 
 This fork is a test bed for per-user mobile sign-in in the MapRoulette mobile
 SDK. The `feat/mobile-oauth` branch adds an opt-in authorization-code flow
-with PKCE and read-only bearer grants for approved native apps. Public API
+with PKCE and scoped bearer grants for approved native apps: read-only by
+default, optionally allowing a narrow set of task lifecycle writes (lock, release,
+skip and four resolution statuses). It also fixes a stale task-cache read
+after status changes; see [upstream issue notes](docs/upstream-issues.md). Public API
 reads and personal MapRoulette API keys remain available without the patch;
 browser sign-in through `/oauth/mobile/*` requires a backend running this
 branch with mobile OAuth enabled. See [Mobile OAuth](docs/mobile-oauth.md) for

@@ -41,7 +41,10 @@ class MobileOAuthControllerSpec extends PlaySpec with MockitoSugar with BeforeAn
     mobileOAuth {
       enabled=true
       callbackUri="https://mr.example/oauth/mobile/callback"
-      clients=[{id="app",name="Example <App>",redirectUris=["org.example.app:/callback"]}]
+      clients=[{
+        id="app",name="Example <App>",redirectUris=["org.example.app:/callback"],
+        scopes=["tasks:read","tasks:write"]
+      }]
     }
   """
     )
@@ -163,6 +166,46 @@ class MobileOAuthControllerSpec extends PlaySpec with MockitoSugar with BeforeAn
       header("Content-Security-Policy", result).get must include("org.example.app:")
       verify(f.upstream).withFollowRedirects(false)
       verify(f.identity).resolve("upstream-only-secret")
+    }
+
+    "name the write permission on consent only for a tasks:write request" in {
+      Seq(
+        "tasks:read"             -> false,
+        "tasks:read tasks:write" -> true
+      ).foreach {
+        case (scope, write) =>
+          val f = new Fixture()
+          when(f.store.claimLogin(anyString(), anyString(), any[Instant]))
+            .thenReturn(Some(interaction.copy(scope = scope)))
+          when(
+            f.store.completeLogin(anyString(), anyString(), anyLong(), anyString(), any[Instant])
+          ).thenReturn(true)
+          val body = contentAsString(
+            f.controller.callback.apply(
+              FakeRequest(GET, s"/oauth/mobile/callback?state=$state&code=example")
+                .withCookies(Cookie("mr_mobile_oauth", browser))
+            )
+          )
+          body.contains("mark them fixed, not an issue, already fixed or too hard") mustBe write
+          body.contains("It cannot edit tasks") mustBe !write
+      }
+    }
+
+    "persist the requested canonical scope at authorization" in {
+      val f      = new Fixture()
+      val stored = org.mockito.ArgumentCaptor.forClass(classOf[MobileInteraction])
+      val result = f.controller.authorize.apply(
+        FakeRequest(
+          GET,
+          "/oauth/mobile/authorize?response_type=code&client_id=app" +
+            "&redirect_uri=org.example.app%3A%2Fcallback&scope=tasks%3Awrite+tasks%3Aread" +
+            s"&state=native&code_challenge=${"a" * 43}&code_challenge_method=S256"
+        )
+      )
+      // The upstream redirect builder is not stubbed; only the stored interaction matters here.
+      Await.ready(result, 5.seconds)
+      verify(f.store).createInteraction(stored.capture())
+      stored.getValue.scope mustBe "tasks:read tasks:write"
     }
 
     "reject invalid consent CSRF and return only code and client state after approval" in {

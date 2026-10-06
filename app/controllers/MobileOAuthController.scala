@@ -68,7 +68,8 @@ class MobileOAuthController @Inject() (
   private def validInteraction(value: MobileInteraction): Boolean =
     settings.clients
       .get(value.clientId)
-      .exists(_.redirectUris.contains(value.redirectUri)) && value.scope == settings.scope
+      .exists(_.redirectUris.contains(value.redirectUri)) &&
+      settings.allowedScopes(value.clientId, value.scope).isDefined
 
   def authorize: Action[AnyContent] = Action.async { request =>
     handled {
@@ -82,7 +83,7 @@ class MobileOAuthController @Inject() (
             MobileSecrets.hash(binding),
             authorization.client.id,
             authorization.redirectUri,
-            settings.scope,
+            authorization.scope,
             authorization.state,
             authorization.challenge,
             Instant.now().plusSeconds(settings.interactionSeconds)
@@ -189,14 +190,21 @@ class MobileOAuthController @Inject() (
   ): Result = {
     def html(value: String): String = HtmlFormat.escape(value).body
     val clientName                  = settings.clients(interaction.clientId).name
-    val callback                    = new URI(interaction.redirectUri)
+    val canWrite =
+      MobileScopes.parse(interaction.scope).exists(_.contains(MobileScopes.Write))
+    val access =
+      if (canWrite)
+        "This app can read MapRoulette tasks and your basic identity. It can also lock, skip and release tasks, and mark them fixed, not an issue, already fixed or too hard, as you. It cannot edit OpenStreetMap, comment, review, delete tasks or obtain your personal API key."
+      else
+        "This app can read MapRoulette tasks and your basic identity. It cannot edit tasks or obtain your personal API key."
+    val callback = new URI(interaction.redirectUri)
     // Chromium applies form-action to the consent response's redirect chain too.
     val callbackSource =
       if (callback.getScheme == "https") s"https://${callback.getRawAuthority}"
       else callback.getScheme + ":"
     Ok(s"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Authorize MapRoulette access</title></head>
       <body><h1>Connect ${html(clientName)}?</h1><p>Signed in as ${html(userName)}.</p>
-      <p>This app can read MapRoulette tasks and your basic identity. It cannot edit tasks or obtain your personal API key.</p>
+      <p>$access</p>
       <form method="post" action="/oauth/mobile/consent">
       <input type="hidden" name="interaction" value="${html(state)}"><input type="hidden" name="csrf" value="${html(
       csrf

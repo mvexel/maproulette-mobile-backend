@@ -35,6 +35,10 @@ class MobileOAuthServiceSpec extends PlaySpec with MockitoSugar with BeforeAndAf
       callbackUri = "https://mr.example/oauth/mobile/callback"
       clients = [
         { id = "app", name = "Example", redirectUris = ["org.example.app:/callback"] },
+        {
+          id = "writer", name = "Writer", redirectUris = ["org.example.writer:/callback"],
+          scopes = ["tasks:read", "tasks:write"]
+        },
         { id = "other", name = "Other", redirectUris = ["org.example.other:/callback"] }
       ]
     }
@@ -206,6 +210,101 @@ class MobileOAuthServiceSpec extends PlaySpec with MockitoSugar with BeforeAndAf
         valid.updated("code_challenge_method", Seq("plain")),
         valid.updated("redirect_uri", Seq(grant.redirectUri + "?redirect=evil"))
       ).foreach(attempt => service.authorization(attempt).isLeft mustBe true)
+    }
+
+    "grant tasks:write only to clients configured for it, storing a canonical scope" in {
+      val (service, _) = fixture()
+      def request(client: String, scope: String) = Map(
+        "client_id"             -> Seq(client),
+        "redirect_uri"          -> Seq(s"org.example.$client:/callback"),
+        "response_type"         -> Seq("code"),
+        "scope"                 -> Seq(scope),
+        "state"                 -> Seq("native-state"),
+        "code_challenge"        -> Seq(challenge),
+        "code_challenge_method" -> Seq("S256")
+      )
+      service.authorization(request("writer", "tasks:write tasks:read")).toOption.get.scope mustBe
+        "tasks:read tasks:write"
+      service.authorization(request("writer", "tasks:read")).toOption.get.scope mustBe "tasks:read"
+      service.authorization(request("app", "tasks:read")).toOption.get.scope mustBe "tasks:read"
+      Seq(
+        request("app", "tasks:read tasks:write"),
+        request("writer", "tasks:write"),
+        request("writer", "tasks:read tasks:read"),
+        request("writer", "tasks:read tasks:admin")
+      ).foreach(attempt =>
+        service.authorization(attempt).left.toOption.get.errorType mustBe "invalid_scope"
+      )
+    }
+
+    "never widen or narrow scope at refresh" in {
+      val refresh = Map(
+        "grant_type"    -> Seq("refresh_token"),
+        "client_id"     -> Seq("app"),
+        "refresh_token" -> Seq("refresh")
+      )
+      val (service, store) = fixture()
+      Await
+        .result(service.exchange(refresh.updated("scope", Seq("tasks:read")), false), 5.seconds)
+        .toOption
+        .get
+        .scope mustBe Some("tasks:read")
+      val widened = refresh.updated("scope", Seq("tasks:read tasks:write"))
+      Await.result(service.exchange(widened, false), 5.seconds).left.toOption.get.errorType mustBe
+        "invalid_scope"
+      verify(store, org.mockito.Mockito.times(1))
+        .rotate(anyString(), anyString(), any[TokenHashes], any[Instant])
+
+      val writer                     = grant.copy(clientId = "writer", scope = "tasks:read tasks:write")
+      val (writeService, writeStore) = fixture()
+      when(writeStore.findRefresh(anyString(), any[Instant])).thenReturn(Some(writer))
+      when(writeStore.rotate(anyString(), anyString(), any[TokenHashes], any[Instant]))
+        .thenReturn(Some(writer))
+      val writeRefresh = refresh.updated("client_id", Seq("writer"))
+      Await
+        .result(writeService.exchange(writeRefresh, false), 5.seconds)
+        .toOption
+        .get
+        .scope mustBe Some("tasks:read tasks:write")
+      Await
+        .result(
+          writeService.exchange(writeRefresh.updated("scope", Seq("tasks:read")), false),
+          5.seconds
+        )
+        .left
+        .toOption
+        .get
+        .errorType mustBe "invalid_scope"
+    }
+
+    "authenticate legacy read grants and write grants only while the client allows them" in {
+      val (service, store) = fixture()
+      when(store.authenticate(anyString(), any[Instant])).thenReturn(Some(grant))
+      Await.result(service.authenticate(MobileSecrets.generate()), 5.seconds) mustBe Some(grant)
+      val writer = grant.copy(clientId = "writer", scope = "tasks:read tasks:write")
+      when(store.authenticate(anyString(), any[Instant])).thenReturn(Some(writer))
+      Await.result(service.authenticate(MobileSecrets.generate()), 5.seconds) mustBe Some(writer)
+      Seq(
+        writer.copy(clientId = "app"),
+        grant.copy(scope = "tasks:write"),
+        grant.copy(scope = "unknown")
+      ).foreach { value =>
+        when(store.authenticate(anyString(), any[Instant])).thenReturn(Some(value))
+        Await.result(service.authenticate(MobileSecrets.generate()), 5.seconds) mustBe None
+      }
+    }
+
+    "reject invalid client scope configuration" in {
+      Seq("[\"tasks:write\"]", "[\"tasks:read\", \"tasks:admin\"]", "[]").foreach { scopes =>
+        an[Exception] must be thrownBy new MobileOAuthSettings(
+          Configuration(
+            ConfigFactory.parseString(
+              s"""mobileOAuth { enabled = true, callbackUri = "https://mr.example/cb",
+                 clients = [{ id = "x", name = "X", redirectUris = ["org.example.x:/cb"], scopes = $scopes }] }"""
+            )
+          )
+        )
+      }
     }
 
     "remain disabled by default and reject removed clients at bearer validation" in {

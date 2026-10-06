@@ -4,13 +4,36 @@ import javax.inject.{Inject, Singleton}
 import java.net.URI
 import play.api.Configuration
 
-case class MobileClient(id: String, name: String, redirectUris: Set[String])
+case class MobileClient(
+    id: String,
+    name: String,
+    redirectUris: Set[String],
+    scopes: Set[String] = Set(MobileScopes.Read)
+)
+
+/** OAuth scope sets. Every grant includes `tasks:read`; `tasks:write` is an optional addition. */
+object MobileScopes {
+  val Read  = "tasks:read"
+  val Write = "tasks:write"
+  // Canonical order for stored and returned scope strings.
+  private val supported = Seq(Read, Write)
+
+  /** Strict RFC 6749 scope parsing: single-space separated, known, unique, including read. */
+  def parse(value: String): Option[Set[String]] = {
+    val items = value.split(" ", -1).toSeq
+    if (items.forall(supported.contains) && items.distinct.size == items.size && items.contains(
+          Read
+        )) Some(items.toSet)
+    else None
+  }
+
+  def format(scopes: Set[String]): String = supported.filter(scopes.contains).mkString(" ")
+}
 
 /** The new provider is inert unless explicitly configured and enabled. */
 @Singleton
 class MobileOAuthSettings @Inject() (configuration: Configuration) {
   val enabled: Boolean = configuration.getOptional[Boolean]("mobileOAuth.enabled").getOrElse(false)
-  val scope: String    = "tasks:read"
   val callbackUri: String =
     configuration.getOptional[String]("mobileOAuth.callbackUri").getOrElse("")
   val accessSeconds: Long =
@@ -32,7 +55,12 @@ class MobileOAuthSettings @Inject() (configuration: Configuration) {
           redirects.nonEmpty && redirects.forall(validRedirect),
           "Invalid mobile client redirect URI"
         )
-        MobileClient(id, entry.get[String]("name"), redirects)
+        val scopes = MobileScopes
+          .parse(
+            entry.getOptional[Seq[String]]("scopes").getOrElse(Seq(MobileScopes.Read)).mkString(" ")
+          )
+          .getOrElse(throw new IllegalArgumentException("Invalid mobile client scopes"))
+        MobileClient(id, entry.get[String]("name"), redirects, scopes)
       }
       require(parsed.map(_.id).distinct.size == parsed.size, "Duplicate mobile client IDs")
       parsed.map(client => client.id -> client).toMap
@@ -56,6 +84,13 @@ class MobileOAuthSettings @Inject() (configuration: Configuration) {
     )
   }
   def secureCookie: Boolean = callbackUri.startsWith("https://")
+
+  /** The grant's scopes while its client remains configured to allow all of them. */
+  def allowedScopes(clientId: String, scope: String): Option[Set[String]] =
+    for {
+      client <- clients.get(clientId)
+      scopes <- MobileScopes.parse(scope) if scopes.subsetOf(client.scopes)
+    } yield scopes
 
   private def validRedirect(value: String): Boolean =
     scala.util

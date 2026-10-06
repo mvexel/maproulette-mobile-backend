@@ -4,7 +4,7 @@ This guide deploys the `feat/mobile-oauth` backend as an isolated service with
 PostGIS and Caddy. It uses [compose.mobile.yml](../compose.mobile.yml) with
 Docker Compose alone. The separate `compose.production.yml` is tailored to an
 existing host's shared ingress and is not used here. See
-[Mobile OAuth](mobile-oauth.md) for the sign-in protocol and read-only scope.
+[Mobile OAuth](mobile-oauth.md) for the sign-in protocol and scopes.
 
 ## Prerequisites
 

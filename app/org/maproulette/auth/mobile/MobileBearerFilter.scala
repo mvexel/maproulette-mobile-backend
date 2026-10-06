@@ -33,6 +33,23 @@ object MobileReadRoutes {
       (method == "PUT" && path.matches(s"/api/v2/markers/box/$box"))
 }
 
+/**
+  * Task lifecycle writes for grants with `tasks:write`. Only the bare route is allowed: no query
+  * string (which would carry requestReview or tags) and no body (completion responses). Status
+  * codes are limited to Fixed, False positive, Already fixed and Too hard. Mobile clients lock late
+  * (start immediately before the status write), so refreshLock is deliberately not allowed.
+  */
+object MobileWriteRoutes {
+  private val task = "/api/v2/task/[0-9]+"
+
+  def permits(method: String, path: String): Boolean = method match {
+    case "GET"  => path.matches(s"$task/(start|release)")
+    case "POST" => path.matches(s"$task/skip")
+    case "PUT"  => path.matches(s"$task/[1256]")
+    case _      => false
+  }
+}
+
 /** Disabled/legacy requests pass through unchanged; mobile credentials can never fall back. */
 class MobileBearerFilter @Inject() (
     settings: MobileOAuthSettings,
@@ -55,15 +72,23 @@ class MobileBearerFilter @Inject() (
     val parts = authorizations.head.split(" ", -1)
     if (parts.length != 2 || !parts(0).equalsIgnoreCase("Bearer") ||
         !parts(1).matches("[A-Za-z0-9_-]{32,256}")) return denied(401, "invalid_token")
-    if (!MobileReadRoutes.permits(request.method, request.path))
+    val write = MobileWriteRoutes.permits(request.method, request.path)
+    if (!write && !MobileReadRoutes.permits(request.method, request.path))
       return denied(403, "insufficient_scope")
-    oauth.authenticate(parts(1)).flatMap {
-      case Some(grant) if grant.scope == settings.scope =>
-        users.retrieve(grant.userId).filter(_.id > 0) match {
-          case Some(user) => next(request.addAttr(MobileBearerIdentity.UserKey, user))
-          case None       => denied(401, "invalid_token")
-        }
-      case _ => denied(401, "invalid_token")
+    if (write && (request.rawQueryString.nonEmpty || request.hasBody))
+      return denied(400, "invalid_request")
+    oauth.authenticate(parts(1)).flatMap { grant =>
+      // MobileOAuthService.authenticate has already checked the scopes against the client.
+      grant.flatMap(value => MobileScopes.parse(value.scope).map(value -> _)) match {
+        case Some((value, scopes)) =>
+          if (write && !scopes.contains(MobileScopes.Write)) denied(403, "insufficient_scope")
+          else
+            users.retrieve(value.userId).filter(_.id > 0) match {
+              case Some(user) => next(request.addAttr(MobileBearerIdentity.UserKey, user))
+              case None       => denied(401, "invalid_token")
+            }
+        case None => denied(401, "invalid_token")
+      }
     }
   }
 }

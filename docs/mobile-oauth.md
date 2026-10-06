@@ -23,6 +23,9 @@ mobileOAuth {
     id = "example-mobile"
     name = "Example Mobile"
     redirectUris = ["org.example.mobile:/oauth/callback"]
+    # Optional; defaults to ["tasks:read"]. Add "tasks:write" to let this app
+    # request task lifecycle writes.
+    scopes = ["tasks:read", "tasks:write"]
   }]
 }
 ```
@@ -37,12 +40,12 @@ Default lifetimes are 10 minutes for a browser interaction, 2 minutes for an aut
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /oauth/mobile/authorize` | Start browser login with `response_type=code`, `client_id`, exact `redirect_uri`, `scope=tasks:read`, `state`, `code_challenge` and `code_challenge_method=S256`. |
+| `GET /oauth/mobile/authorize` | Start browser login with `response_type=code`, `client_id`, exact `redirect_uri`, `scope` (`tasks:read` or `tasks:read tasks:write`), `state`, `code_challenge` and `code_challenge_method=S256`. |
 | `GET /oauth/mobile/callback` | Server callback from OSM. The browser interaction must match persisted state and its separate HTTP-only cookie. |
 | `POST /oauth/mobile/consent` | Browser consent form with a transaction-bound CSRF value. Approval redirects to the app with only a short-lived code and its original state; denial returns `access_denied`. |
 | `POST /oauth/mobile/token` | Form-encoded authorization-code exchange or refresh. |
 | `POST /oauth/mobile/revoke` | Form-encoded `client_id` and `token`; revokes that token's app grant family. Unknown tokens return success without disclosing whether they exist. |
-| `GET /oauth/mobile/me` | Bearer-authenticated identity: `id`, `osmId`, `displayName`, `scope`. No API key or OSM credential. |
+| `GET /oauth/mobile/me` | Bearer-authenticated identity: `id`, `osmId`, `displayName`, `scope` (the grant's scope string). No API key or OSM credential. |
 
 Authorization-code exchange fields:
 
@@ -54,13 +57,32 @@ code=<authorization code>
 code_verifier=<original PKCE verifier>
 ```
 
-Refresh fields are `grant_type=refresh_token`, `client_id` and `refresh_token`. The optional refresh `scope` must remain `tasks:read`. Token responses contain `access_token`, `token_type=Bearer`, `expires_in`, `refresh_token` and `scope`. Password, client-credentials and implicit grants are unsupported.
+Refresh fields are `grant_type=refresh_token`, `client_id` and `refresh_token`. The optional refresh `scope` must equal the grant's scope; a refresh can never widen or narrow it. Token responses contain `access_token`, `token_type=Bearer`, `expires_in`, `refresh_token` and `scope`. Password, client-credentials and implicit grants are unsupported.
 
 Use an established native OAuth client to generate and retain state/PKCE, open the system browser and validate the returned callback. This backend implementation does not itself add native sign-in or secure token storage to the SDK.
 
 ## Scope and credential lifecycle
 
+Scopes are a space-separated set. Every grant includes `tasks:read`; `tasks:write` is optional and only granted to clients whose `scopes` configuration lists it. Unknown, duplicate or write-only scope requests fail with `invalid_scope`. Stored and returned scope strings use the canonical order `tasks:read tasks:write`.
+
 `tasks:read` permits the SDK's challenge discovery/detail/tags, task listing/detail, spatial queries, read-only marker query, and the new identity endpoint. The HTTP method **and exact route pattern** must be allowlisted in `MobileReadRoutes`. Legacy `whoami`, task-start/release and mutation routes are excluded. The user's existing permissions still apply. The marker query is a read-only PUT; not every GET is read-only.
+
+`tasks:write` additionally permits exactly these task lifecycle routes (`MobileWriteRoutes`), acting as the signed-in MapRoulette user:
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/v2/task/:id/start` | Lock the task, immediately before resolving it |
+| `GET /api/v2/task/:id/release` | Release the caller's lock |
+| `POST /api/v2/task/:id/skip` | Skip: count the skip, release the lock, keep the status |
+| `PUT /api/v2/task/:id/(1\|2\|5\|6)` | Fixed, Not an issue, Already fixed, Too hard |
+
+Mobile clients lock late: they call `start` only when the user commits a
+resolution, then write the status (which releases the lock). Skip needs no
+lock. `refreshLock` is therefore not allowed for bearer tokens.
+
+These write requests must have **no query string and no body** (`400 invalid_request` otherwise). That excludes `requestReview` (the user's review setting applies), task `tags` and `completionResponses`. All other mutations, including statuses 0, 3, 4, 7, 8 and 9, comments, tags, bundles, review routes, `refreshLock`, unlock requests and anything that edits OpenStreetMap, return `403 insufficient_scope` for every bearer token. A `tasks:read`-only token on a lifecycle route also gets `403 insufficient_scope`.
+
+Existing `tasks:read` grants keep working unchanged for reads. They are never upgraded: the user signs in again and approves the write permission, which creates a new grant. The consent page names the write permission only when it is requested. If an operator removes `tasks:write` from a client's configuration, that client's existing write grants stop authenticating (`401 invalid_token`) until the user signs in again.
 
 Send the access token only in `Authorization: Bearer ...`. Do not combine it with a personal API key or a legacy authenticated session. Invalid mobile credentials never fall back to either. Disabling the provider restores legacy handling; the new endpoints return 404.
 
@@ -75,7 +97,8 @@ existing `users.osm_id` row. On the **same MapRoulette instance and OSM
 environment**, mobile and traditional web login therefore reach the same
 MapRoulette user account and permissions. A first mobile login creates a user
 row if none exists. Mobile login does not replace an existing personal API key
-or web-session credential; it issues a separate, read-only app grant.
+or web-session credential; it issues a separate app grant limited to the
+approved scopes.
 
 The isolated `mr-api.osm.lol` staging instance has its own database and uses
 development OSM accounts. Its user IDs, projects, and challenges are separate
