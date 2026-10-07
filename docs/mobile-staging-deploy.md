@@ -45,8 +45,8 @@ from the Docker build context. The default OSM server is the development
 server. To use another OSM environment, set `MR_OSM_SERVER` in `.env` and
 register the matching callback there.
 
-The included native client registration is for the Android example:
-`maproulette-android-example` with callback
+The included native client registrations are for the SDK examples:
+`maproulette-android-example` and `maproulette-ios-example`, both with callback
 `org.maproulette.example:/oauth2redirect`. Change
 `conf/mobile-staging.conf` and rebuild for a different native app. The native
 client ID is public; never put the OSM client secret in an app.
