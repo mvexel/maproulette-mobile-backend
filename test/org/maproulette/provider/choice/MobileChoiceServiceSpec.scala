@@ -249,6 +249,31 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
   )
 
   "Choice check" should {
+    "filter template questions using live tags without staling the remaining work" taggedAs ChoiceTag in {
+      val (task, node) = benchTask(
+        payload = _ ++ Json.obj("liveMissingQuestions" -> true),
+        tags = Map("amenity" -> "bench", "material" -> "wood")
+      )
+      (check(task).body \ "questionIds").as[List[String]] mustBe List("backrest")
+      stale(task) mustBe None
+      osm.edit("node", node)(_ + ("backrest" -> "yes"))
+      val refreshed = await(otherService(withKey = true).check(task.id))
+      reason(refreshed) mustBe Some("already_tagged")
+      stale(task) mustBe Some("already_tagged")
+    }
+
+    "reject an answer whose tag appeared while leaving other live questions available" taggedAs ChoiceTag in {
+      val (task, node) = benchTask(payload = _ ++ Json.obj("liveMissingQuestions" -> true))
+      lock(task)
+      osm.edit("node", node)(_ + ("backrest" -> "yes"))
+      val response = submit(task, """{"answers":{"backrest":"no"}}""")
+      reason(response) mustBe Some("key_changed")
+      stale(task) mustBe None
+      lockedBy(task) mustBe None
+      (check(task).body \ "questionIds").as[List[String]] mustBe List("material")
+      fresh(task) mustBe ((Task.STATUS_CREATED, None))
+    }
+
     "report an unchanged element as eligible and allow a free node's delete" taggedAs ChoiceTag in {
       val (task, _) = benchTask()
       check(task) mustBe ChoiceResponse(

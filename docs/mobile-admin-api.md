@@ -29,6 +29,10 @@ a stock route is recorded in the audit log as `stock.<METHOD>` with its path and
 Challenge creation, update, and line-by-line task import are available while a field deployment's
 task write policy is off. The policy still blocks task lifecycle and choice submissions, including
 production OSM edits. Legacy session and API-key challenge writes remain blocked while it is off.
+Choice payloads may opt into `liveMissingQuestions: true`. The choice check then returns
+`questionIds` for template questions whose guarded tags are still absent in live OSM. When none
+remain, the task becomes ineligible. A selected answer is checked again against fresh OSM before
+upload; a changed selected tag returns `409 task_ineligible` without an edit or task status change.
 
 ## Clients
 

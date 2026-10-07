@@ -42,7 +42,8 @@ case class ChoiceWork(
     elementId: Long,
     matchTags: Map[String, String],
     questions: List[ChoiceQuestion],
-    outcomes: List[ChoiceOutcome]
+    outcomes: List[ChoiceOutcome],
+    liveMissingQuestions: Boolean = false
 ) {
   def element: String                      = s"$elementType/$elementId"
   def deleteOutcome: Option[ChoiceOutcome] = outcomes.find(_.delete)
@@ -105,7 +106,12 @@ object ChoiceWork {
       fail(s"payload: larger than $MaxBytes bytes")
 
     val root =
-      obj(json, "cooperativeWork", Set("meta", "element", "match", "questions", "outcomes"))
+      obj(json, "cooperativeWork", Set("meta", "element", "match", "questions", "outcomes", "liveMissingQuestions"))
+    val liveMissingQuestions = root.flatMap(r => (r \ "liveMissingQuestions").toOption) match {
+      case None | Some(JsFalse) => false
+      case Some(JsTrue)         => true
+      case _ => fail("liveMissingQuestions: must be a boolean"); false
+    }
     val meta = root.flatMap(r =>
       (r \ "meta").toOption match {
         case Some(m) => obj(m, "meta", Set("version", "type", "choiceVersion"))
@@ -234,6 +240,8 @@ object ChoiceWork {
     (matchTags.keySet & expectKeys.toSet).foreach(key =>
       fail(s"match: key '$key' overlaps a question's expect")
     )
+    if (liveMissingQuestions && questions.exists(q => q.expect.values.exists(_.isDefined)))
+      fail("liveMissingQuestions: every question must guard only absent tags")
 
     val outcomes: List[ChoiceOutcome] = root.flatMap(r => present(r, "outcomes")) match {
       case None => Nil
@@ -269,7 +277,7 @@ object ChoiceWork {
     errors.result() match {
       case Nil =>
         val (kind, number) = element.get
-        Right(ChoiceWork(kind, number, matchTags, questions, outcomes))
+        Right(ChoiceWork(kind, number, matchTags, questions, outcomes, liveMissingQuestions))
       case list => Left(list)
     }
   }

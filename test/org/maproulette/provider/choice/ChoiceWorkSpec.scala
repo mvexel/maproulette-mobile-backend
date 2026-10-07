@@ -55,6 +55,14 @@ class ChoiceWorkSpec extends PlaySpec {
       work.outcomes.head.status mustBe Some(2)
     }
 
+    "accept an opt-in live question template and require absent-key guards" in {
+      val live = bench ++ Json.obj("liveMissingQuestions" -> true)
+      ChoiceWork.validate(live).toOption.get.liveMissingQuestions mustBe true
+      val present = question(0) ++ Json.obj("expect" -> Json.obj("backrest" -> "yes"))
+      errors(withQuestion(0, present) ++ Json.obj("liveMissingQuestions" -> true)) must
+        contain("liveMissingQuestions: every question must guard only absent tags")
+    }
+
     "recognise choice payloads by meta only" in {
       ChoiceWork.isChoice(bench) mustBe true
       ChoiceWork.isChoice(Json.obj("meta" -> Json.obj("version" -> 2, "type" -> 1))) mustBe false

@@ -119,7 +119,7 @@ class MobileChoiceService @Inject() (
 
   private def value(v: Option[String]): JsValue = v.map(JsString).getOrElse(JsNull)
 
-  /** All-or-nothing eligibility (spec §2): every guard, not only the answered questions. */
+  /** Fixed tasks require every guard. Live-filtered tasks need at least one missing key. */
   private def staleness(work: ChoiceWork, read: ElementRead): Either[Staleness, ElementFound] =
     read match {
       case ElementGone => Left(Staleness("element_gone", Json.arr(), None))
@@ -131,7 +131,7 @@ class MobileChoiceService @Inject() (
         val keyDiff = for {
           question        <- work.questions
           (key, expected) <- question.expect.toList.sortBy(_._1)
-          if found.tags.get(key) != expected
+          if !work.liveMissingQuestions && found.tags.get(key) != expected
         } yield Json.obj(
           "question" -> question.id,
           "key"      -> key,
@@ -140,6 +140,8 @@ class MobileChoiceService @Inject() (
         )
         if (matchDiff.nonEmpty)
           Left(Staleness("match_failed", JsArray(matchDiff), Some(found.version)))
+        else if (work.liveMissingQuestions && !work.questions.exists(_.holds(found.tags)))
+          Left(Staleness("already_tagged", Json.arr(), Some(found.version)))
         else if (keyDiff.nonEmpty)
           Left(Staleness("key_changed", JsArray(keyDiff), Some(found.version)))
         else Right(found)
@@ -209,6 +211,9 @@ class MobileChoiceService @Inject() (
                         )
                       (ChoiceResponse(200, body), markStale(taskId, stale))
                     case Right(found) =>
+                      val liveQuestions = if (work.liveMissingQuestions)
+                        Json.obj("questionIds" -> work.questions.filter(_.holds(found.tags)).map(_.id))
+                      else Json.obj()
                       (
                         ChoiceResponse(
                           200,
@@ -216,7 +221,7 @@ class MobileChoiceService @Inject() (
                             "eligible"       -> true,
                             "deleteAllowed"  -> observation.inUse.contains(false),
                             "elementVersion" -> found.version
-                          )
+                          ) ++ liveQuestions
                         ),
                         true
                       )
@@ -590,10 +595,24 @@ class MobileChoiceService @Inject() (
       error(409, "task_ineligible", "reason" -> found.reason, "detail" -> found.detail)
     }
 
+    /** A selected question was answered in OSM meanwhile; other questions may remain. */
+    private def changedAnswer(): ChoiceResponse = {
+      try taskDAL.unlockItem(user, task)
+      catch {
+        case NonFatal(e) => logger.warn(s"Choice task ${task.id}: unlock failed: ${e.getMessage}")
+      }
+      error(409, "task_ineligible", "reason" -> "key_changed")
+    }
+
     private def verify(): Future[Either[ChoiceResponse, ElementFound]] =
       observe(work, Some(token)).map { observation =>
         staleness(work, observation.read) match {
           case Left(found) => Left(stale(found))
+          case Right(found) if work.liveMissingQuestions && (plan match {
+              case edit: EditTags => !edit.answers.forall(_._1.holds(found.tags))
+              case _              => false
+            }) =>
+            Left(changedAnswer())
           case Right(_) if plan == DeleteNode && observation.inUse.contains(true) =>
             Left(error(409, "element_in_use"))
           case Right(found) => Right(found)

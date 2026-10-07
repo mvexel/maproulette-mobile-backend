@@ -86,6 +86,7 @@ Backend for the admin web app: approved clients in the database, the super-user-
 | Super-user check (`Permission.isSuperUser`) on every admin request | `app/org/maproulette/auth/mobile/MobileAdmin.scala:35` (`MobileAdminGate`), `MobileBearerFilter.scala:162` |
 | Admin allowlist: `/api/v2/mobile-admin/*`, `me`, `POST /challenge`, `PUT /challenge/:id`, `PUT /challenge/:id/addFileTasks?lineByLine=true&report=true`, challenge, challenge tasks and task reads | `MobileBearerFilter.scala:25` (`MobileAdminRoutes`) |
 | Authenticated super-user admin bearer grants can prepare challenges and import tasks while the field write switch is off; legacy challenge writes remain blocked | `MobileBearerFilter.scala` (`MobileFieldRoutes`, `MobileAdminRoutes`) |
+| Optional `liveMissingQuestions` choice templates filter absent-tag questions at check time; selected answers are guarded again immediately before an OSM edit | `ChoiceWork.scala`, `MobileChoiceService.scala` |
 | Routes `GET`/`POST /api/v2/mobile-admin/clients`, `PATCH …/clients/:id[?revokeGrants=true]`, `GET …/audit` | `conf/routes:11-15` → `app/controllers/MobileAdminController.scala:49,53,67,97` |
 | Client writes and audit entries in one transaction; revocation of a client's grant families | `MobileAdmin.scala:73` (`MobileAdminRepository`) |
 | Admin writes through stock routes are audited as `stock.<METHOD>` | `MobileBearerFilter.scala:142` |
