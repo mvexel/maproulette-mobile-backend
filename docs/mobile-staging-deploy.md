@@ -35,6 +35,9 @@ MR_OAUTH_CONSUMER_SECRET=<development-OSM-client-secret>
 # Optional: enables osm:tagfix (choice answers applied to OSM). 32 random bytes:
 # openssl rand -base64 32
 MR_MOBILE_OSM_TOKEN_KEY=<base64-key>
+# Optional: comma-separated OSM user ids made MapRoulette super-users at startup.
+# Each must have signed in once. Super-users can use the mobile admin app.
+MR_SUPER_ACCOUNTS=<osm-user-id>
 ```
 
 Use only a hostname in `PUBLIC_HOST`, without `https://` or a path. Compose

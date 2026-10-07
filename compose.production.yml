@@ -44,6 +44,9 @@ services:
       # Optional: base64 of 32 random bytes (openssl rand -base64 32). Unset, empty or malformed
       # disables osm:tagfix (choice answers applied to OSM); nothing else changes.
       MR_MOBILE_OSM_TOKEN_KEY: ${MR_MOBILE_OSM_TOKEN_KEY:-}
+      # Optional: comma-separated OSM user ids promoted to MapRoulette super-user at startup
+      # (they must have signed in once). Super-users can use the mobile admin app.
+      MR_SUPER_ACCOUNTS: ${MR_SUPER_ACCOUNTS:-}
       MOBILE_OAUTH_CALLBACK_URI: ${MOBILE_OAUTH_CALLBACK_URI:-https://mr-api.osm.lol/oauth/mobile/callback}
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--max-time", "5", "http://127.0.0.1:80/ping"]
