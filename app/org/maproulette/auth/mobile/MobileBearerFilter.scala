@@ -119,6 +119,7 @@ object MobileFieldRoutes {
   private val discovery = Set(
     "/api/v2/challenges/tags",
     "/api/v2/challenges/find",
+    "/api/v2/challenges/search",
     "/api/v2/challenges/extendedFind"
   )
 

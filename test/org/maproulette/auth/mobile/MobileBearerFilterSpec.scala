@@ -135,6 +135,9 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
           .obj("error" -> "mobile_writes_disabled")
       }
       contentAsString(filter.apply(next)(FakeRequest(GET, "/ping"))) mustBe "legacy"
+      contentAsString(
+        filter.apply(next)(FakeRequest(GET, "/api/v2/challenges/search?search=field&limit=1"))
+      ) mustBe "legacy"
     }
 
     "refuse task writes when the deployment gate is closed, including existing write grants" in {
