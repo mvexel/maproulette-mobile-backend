@@ -15,6 +15,40 @@ object MobileBearerIdentity {
   // The grant's scopes and family, for controllers that need more than tasks:write.
   val ScopesKey: TypedKey[Set[String]] = TypedKey[Set[String]]("mobile-oauth-scopes")
   val FamilyKey: TypedKey[String]      = TypedKey[String]("mobile-oauth-family")
+  val ClientKey: TypedKey[String]      = TypedKey[String]("mobile-oauth-client")
+}
+
+/**
+  * Routes for `mobile:admin` grants, and only for them: the fork's admin API, plus the exact stock
+  * routes the admin app's challenge creator needs. Nothing else, not even the app read routes.
+  */
+object MobileAdminRoutes {
+  private val challenge = "/api/v2/challenge/[0-9]+"
+  val Methods           = Set("GET", "POST", "PATCH", "PUT", "DELETE")
+
+  def adminApi(path: String): Boolean =
+    path.matches("/api/v2/mobile-admin(/[A-Za-z0-9_-][A-Za-z0-9._-]*)+")
+
+  /** Method and path only; [[permits]] also checks the `addFileTasks` query. */
+  def matches(method: String, path: String): Boolean =
+    if (adminApi(path)) Methods.contains(method)
+    else
+      method match {
+        case "GET" =>
+          path == "/oauth/mobile/me" || path.matches(challenge) ||
+            path.matches(s"$challenge/tasks") || path.matches("/api/v2/task/[0-9]+")
+        case "POST" => path == "/api/v2/challenge"
+        case "PUT"  => path.matches(challenge) || path.matches(s"$challenge/addFileTasks")
+        case _      => false
+      }
+
+  /** `addFileTasks` only line by line with a per-line report: never removeUnmatched. */
+  def permits(method: String, path: String, query: Map[String, Seq[String]]): Boolean =
+    matches(method, path) && (!path.endsWith("/addFileTasks") ||
+      query == Map("lineByLine" -> Seq("true"), "report" -> Seq("true")))
+
+  /** Stock writes, which the bearer filter records in the admin audit log. */
+  def stockWrite(method: String, path: String): Boolean = method != "GET" && !adminApi(path)
 }
 
 /** An explicit route allowlist: several legacy GET routes mutate data or disclose API keys. */
@@ -81,14 +115,49 @@ object MobileWriteRoutes {
 class MobileBearerFilter @Inject() (
     settings: MobileOAuthSettings,
     oauth: MobileOAuthService,
-    users: UserService
+    users: UserService,
+    admins: MobileAdminCheck,
+    adminRepository: MobileAdminRepository
 )(implicit val mat: Materializer, ec: ExecutionContext)
     extends Filter {
+  private val logger = play.api.Logger(getClass)
+
+  // No admins and so no audit log: for tests of app grants only.
+  def this(settings: MobileOAuthSettings, oauth: MobileOAuthService, users: UserService)(
+      implicit mat: Materializer,
+      ec: ExecutionContext
+  ) = this(settings, oauth, users, MobileAdminCheck.Nobody, null)
+
   private def denied(status: Int, code: String): Future[Result] = Future.successful(
     Results
       .Status(status)(Json.obj("error" -> code))
       .withHeaders("Cache-Control" -> "no-store", "WWW-Authenticate" -> "Bearer")
   )
+
+  /**
+    * Admin writes through stock routes: who, which route, and the outcome. Also recorded when the
+    * action fails with an exception (status 500 and the exception class), since part of the write
+    * may have been committed.
+    */
+  private def auditStockWrite(
+      user: User,
+      request: RequestHeader,
+      outcome: scala.util.Try[Result]
+  ): Future[Result] = {
+    val after = outcome match {
+      case scala.util.Success(response) => Json.obj("status" -> response.header.status)
+      case scala.util.Failure(e)        => Json.obj("status" -> 500, "error" -> e.getClass.getSimpleName)
+    }
+    Future(adminRepository.record(user.id, s"stock.${request.method}", request.path, Some(after)))
+      .recover {
+        case e: Exception =>
+          // The write already happened; losing its audit entry must be visible in the logs.
+          logger.error(
+            s"Mobile admin audit entry not recorded for ${request.method} ${request.path}: ${e.getClass.getSimpleName}"
+          )
+      }
+      .flatMap(_ => Future.fromTry(outcome))
+  }
 
   def apply(next: RequestHeader => Future[Result])(request: RequestHeader): Future[Result] = {
     val authorizations = request.headers.getAll("Authorization")
@@ -100,8 +169,9 @@ class MobileBearerFilter @Inject() (
     if (parts.length != 2 || !parts(0).equalsIgnoreCase("Bearer") ||
         !parts(1).matches("[A-Za-z0-9_-]{32,256}")) return denied(401, "invalid_token")
     val write = MobileWriteRoutes.permits(request.method, request.path)
-    if (!write && !MobileReadRoutes.permits(request.method, request.path))
-      return denied(403, "insufficient_scope")
+    val read  = MobileReadRoutes.permits(request.method, request.path)
+    val admin = MobileAdminRoutes.permits(request.method, request.path, request.queryString)
+    if (!write && !read && !admin) return denied(403, "insufficient_scope")
     val badShape =
       if (write && MobileWriteRoutes.takesBody(request.method, request.path))
         !MobileWriteRoutes.acceptableBody(request)
@@ -113,16 +183,26 @@ class MobileBearerFilter @Inject() (
       // MobileOAuthService.authenticate has already checked the scopes against the client.
       grant.flatMap(value => MobileScopes.parse(value.scope).map(value -> _)) match {
         case Some((value, scopes)) =>
-          if (write && !scopes.contains(MobileScopes.Write)) denied(403, "insufficient_scope")
+          // Admin grants reach only admin routes; app grants never do.
+          val adminGrant = MobileScopes.isAdmin(scopes)
+          if (if (adminGrant) !admin else !write && !read) denied(403, "insufficient_scope")
+          else if (write && !scopes.contains(MobileScopes.Write)) denied(403, "insufficient_scope")
           else
             users.retrieve(value.userId).filter(_.id > 0) match {
+              // Re-checked on every request, so a demotion takes effect at once.
+              case Some(user) if adminGrant && !admins.isAdmin(user) =>
+                denied(403, "admin_required")
               case Some(user) =>
-                next(
+                val result = next(
                   request
                     .addAttr(MobileBearerIdentity.UserKey, user)
                     .addAttr(MobileBearerIdentity.ScopesKey, scopes)
                     .addAttr(MobileBearerIdentity.FamilyKey, value.familyId)
+                    .addAttr(MobileBearerIdentity.ClientKey, value.clientId)
                 )
+                if (adminGrant && MobileAdminRoutes.stockWrite(request.method, request.path))
+                  result.transformWith(outcome => auditStockWrite(user, request, outcome))
+                else result
               case None => denied(401, "invalid_token")
             }
         case None => denied(401, "invalid_token")

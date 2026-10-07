@@ -51,6 +51,18 @@ The included native client registrations are for the SDK examples:
 `conf/mobile-staging.conf` and rebuild for a different native app. The native
 client ID is public; never put the OSM client secret in an app.
 
+The staging config also registers the admin web app: client
+`maproulette-mobile-admin`, redirect `https://admin.mr-dev.osm.lol/callback`,
+scope `mobile:admin` (MapRoulette super-users only), and the admin origin
+`https://admin.mr-dev.osm.lol` for CORS. This follows the planned rename of
+`mr-api.osm.lol` to `mr-dev.osm.lol`, with the admin app at
+`admin.<deployment host>`. To use another admin origin, add
+`MR_MOBILE_ADMIN_ORIGIN` to the API service's environment. The Compose files
+don't pass it, because an empty value would turn admin CORS off. Config clients seed the
+`mobile_oauth_clients` table; once a client is edited through the
+[admin API](mobile-admin-api.md), config no longer changes it (see
+[Clients](mobile-oauth.md#clients)).
+
 ## Start and verify
 
 ```sh
@@ -63,7 +75,8 @@ The first build can take several minutes. Compose starts PostGIS, waits for
 its health check, starts the API, then starts Caddy after the API is healthy.
 Caddy publishes ports 80 and 443; only the API can reach the private database
 network. Play automatically applies database evolutions, including version
-129 for mobile OAuth and 130 for choice tasks.
+129 for mobile OAuth, 130 for choice tasks and 131 for the client table and
+admin audit log.
 
 Replace the hostname below with your `PUBLIC_HOST`:
 
@@ -75,7 +88,7 @@ docker compose --env-file .env -f compose.mobile.yml exec -T db \
 ```
 
 Expect HTTP 200 for `/ping`, HTTP 401 for `/oauth/mobile/me` without a bearer
-token, and evolution 130. A 404 on `/oauth/mobile/me` means the responding
+token, and evolution 131. A 404 on `/oauth/mobile/me` means the responding
 backend does not have mobile OAuth enabled. Complete a browser sign-in from
 the approved Android app to verify OSM login, consent, app callback, token
 exchange, and authenticated identity together.

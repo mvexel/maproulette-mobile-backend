@@ -11,7 +11,7 @@ and credentials.
 
 ## Enable a local or staging instance
 
-Apply database evolutions through the normal backend setup. Evolution 129 adds separate interaction, authorization-code, grant-family and token tables; it does not replace existing user credentials. Evolution 130 adds the encrypted OSM token table for `osm:tagfix` grants and the choice-task submission and stale tables.
+Apply database evolutions through the normal backend setup. Evolution 129 adds separate interaction, authorization-code, grant-family and token tables; it does not replace existing user credentials. Evolution 130 adds the encrypted OSM token table for `osm:tagfix` grants and the choice-task submission and stale tables. Evolution 131 adds the `mobile_oauth_clients` table (see [Clients](#clients)) and the `mobile_admin_audit` log.
 
 Register a **backend callback URL** with the existing OSM OAuth application, then configure the provider and each approved public client:
 
@@ -30,6 +30,8 @@ mobileOAuth {
   }]
   # 32 random bytes, base64, e.g. `openssl rand -base64 32`. Only needed for osm:tagfix.
   osmTokenKey = ${?MR_MOBILE_OSM_TOKEN_KEY}
+  # Optional: the admin web app's origin, for CORS (see "CORS" below).
+  adminOrigin = ${?MR_MOBILE_ADMIN_ORIGIN}
 }
 ```
 
@@ -43,7 +45,7 @@ Default lifetimes are 10 minutes for a browser interaction, 2 minutes for an aut
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /oauth/mobile/authorize` | Start browser login with `response_type=code`, `client_id`, exact `redirect_uri`, `scope` (`tasks:read`, `tasks:read tasks:write` or `tasks:read tasks:write osm:tagfix`), `state`, `code_challenge` and `code_challenge_method=S256`. |
+| `GET /oauth/mobile/authorize` | Start browser login with `response_type=code`, `client_id`, exact `redirect_uri`, `scope` (`tasks:read`, `tasks:read tasks:write`, `tasks:read tasks:write osm:tagfix` or `mobile:admin`), `state`, `code_challenge` and `code_challenge_method=S256`. |
 | `GET /oauth/mobile/callback` | Server callback from OSM. The browser interaction must match persisted state and its separate HTTP-only cookie. |
 | `POST /oauth/mobile/consent` | Browser consent form with a transaction-bound CSRF value. Approval redirects to the app with only a short-lived code and its original state; denial returns `access_denied`. |
 | `POST /oauth/mobile/token` | Form-encoded authorization-code exchange or refresh. |
@@ -64,9 +66,30 @@ Refresh fields are `grant_type=refresh_token`, `client_id` and `refresh_token`. 
 
 Use an established native OAuth client to generate and retain state/PKCE, open the system browser and validate the returned callback. This backend implementation does not itself add native sign-in or secure token storage to the SDK.
 
+## Clients
+
+Approved clients live in the `mobile_oauth_clients` table (evolution 131). Each backend process
+seeds it from `mobileOAuth.clients` the first time it needs a client (not at startup), then
+reads it with a 10-second cache. A config client whose name is empty or longer than 200
+characters, or that has more than 10 redirects, stops startup. The [admin API](mobile-admin-api.md) edits it. Precedence, per client id:
+
+1. A config client without a row is inserted (`created_by` NULL).
+2. A row that came from config and was never edited through the admin API (`created_by` and
+   `updated_by` NULL) follows config on every start: name, redirects, scopes and `enabled`
+   (an optional config key, default `true`).
+3. A row created or edited through the admin API is never changed by config again. Seeding
+   logs the ids whose config entry was not applied, as `config entry not applied`.
+4. A config-seeded, never-edited row whose id is no longer in config is disabled, not deleted,
+   just as removing a client from config cut it off before this table existed.
+
+A **disabled** client is treated like an unknown one for authorization, code exchange, refresh
+(`401 invalid_client`) and bearer authentication (`401 invalid_token`). Its grant families are
+kept unless the admin also revokes them, and revocation (`/oauth/mobile/revoke`) still works for
+it. Enabling it again restores its grants.
+
 ## Scope and credential lifecycle
 
-Scopes are a space-separated set. Every grant includes `tasks:read`; `tasks:write` is optional and only granted to clients whose `scopes` configuration lists it. `osm:tagfix` is optional too, valid only together with `tasks:write`, and only granted to clients configured for it; new grants also need a valid `osmTokenKey`. Unknown, duplicate, write-only or `osm:tagfix`-without-`tasks:write` requests fail with `invalid_scope`. Stored and returned scope strings use the canonical order `tasks:read tasks:write osm:tagfix`.
+Scopes are a space-separated set. Every app grant includes `tasks:read`; `tasks:write` is optional and only granted to clients whose `scopes` configuration lists it. `osm:tagfix` is optional too, valid only together with `tasks:write`, and only granted to clients configured for it; new grants also need a valid `osmTokenKey`. Unknown, duplicate, write-only or `osm:tagfix`-without-`tasks:write` requests fail with `invalid_scope`. Stored and returned scope strings use the canonical order `tasks:read tasks:write osm:tagfix`. `mobile:admin` stands alone (see [Admin scope](#admin-scope-mobileadmin)); combining it with any other scope is `invalid_scope`.
 
 `tasks:read` permits the SDK's challenge discovery/detail/tags, task listing/detail, spatial queries, read-only marker query, the choice check (`GET /api/v2/task/:id/choice/check`, no query or body) and the new identity endpoint. The HTTP method **and exact route pattern** must be allowlisted in `MobileReadRoutes`. Legacy `whoami`, task-start/release and mutation routes are excluded. The user's existing permissions still apply. The marker query is a read-only PUT; not every GET is read-only.
 
@@ -93,6 +116,54 @@ Send the access token only in `Authorization: Bearer ...`. Do not combine it wit
 Codes are consumed atomically with token issuance. Refresh tokens rotate atomically; reuse revokes the family, including its current access tokens. Apps must serialize refresh and replace saved credentials atomically. A lost refresh response can require fresh login; do not retry an old refresh token as if rotation were idempotent. Revocation affects this grant family, not another app's grant or the user's personal API key.
 
 Only credential hashes are stored in the new tables. Upstream OSM credentials are never returned to apps. They are kept only for `osm:tagfix` grants, AES-256-GCM encrypted under `osmTokenKey` with the user id as associated data, in `mobile_osm_tokens` keyed by grant family (evolution 130). Refresh rotation keeps that row; revoking the family or replaying a refresh token deletes it, and so does an OSM 401 (the MapRoulette grant stays). `users.oauth_token` is never read or written by the mobile flow. Existing users' web-session tokens and API keys are preserved during mobile login.
+
+## Admin scope (`mobile:admin`)
+
+`mobile:admin` is for the admin web app. It is a scope on its own: an admin grant has no
+`tasks:*` scopes, so it never reaches the app read routes (including `choice/check`, which
+records stale tasks) or the app write routes. App grants never reach admin routes. Only a client
+configured with `scopes = ["mobile:admin"]` can request it.
+
+- **Super-users only.** Only a MapRoulette super-user (`Permission.isSuperUser`) can be granted
+  it. A user who isn't one goes back to the app at the OSM callback, before any consent page,
+  with `error=access_denied`, `error_description=MapRoulette super-user required` and the app's
+  `state`. The check is repeated when consent is approved, at code exchange and at every refresh
+  (`invalid_grant`).
+- **Every request.** The bearer filter checks super-user status again on every request
+  (`403 admin_required`), so a demotion through MapRoulette takes effect at once. MapRoulette
+  keeps super-user ids in memory: a change made directly in SQL counts only after a restart.
+- **Routes.** Only the `MobileAdminRoutes` allowlist: `/api/v2/mobile-admin/...`,
+  `/oauth/mobile/me`, and the exact stock routes the challenge creator needs. See
+  [mobile-admin-api.md](mobile-admin-api.md). The consent page says the app administers
+  MapRoulette as a super-user, and that every change is recorded in an audit log.
+
+The staging registration is the public web client `maproulette-mobile-admin` with redirect
+`https://admin.mr-dev.osm.lol/callback` and `scopes = ["mobile:admin"]`. It is not
+`tasks:read mobile:admin`: with `tasks:read`, the admin token would also open the app read
+routes, and the reads the creator needs are already in the admin allowlist.
+
+## CORS
+
+Upstream sets `play.filters.cors.allowedOrigins = null` (`conf/application.conf`). In Play, that
+means **every origin**, with credentials (`Access-Control-Allow-Credentials: true`), on every
+path: Play's CORS filter reflects any `Origin`. The fork keeps that unchanged everywhere except
+below.
+
+`MobileCorsFilter` wraps Play's filter. With mobile OAuth enabled and `mobileOAuth.adminOrigin`
+(`MR_MOBILE_ADMIN_ORIGIN`) set:
+
+- `/api/v2/mobile-admin/...`, `/oauth/mobile/token` and `/oauth/mobile/revoke` answer CORS for
+  the admin origin only, without credentials. Other origins get no CORS headers (and 403 on a
+  preflight). This **narrows** token and revoke, which Play's filter used to open to every
+  origin. Native apps send no `Origin`, so they are not affected.
+- On the stock routes in the admin allowlist (and `/oauth/mobile/me`), the admin origin gets the
+  same credential-free answer. Every other origin still goes to Play's filter, as upstream.
+- Preflights allow the requested method only if the route allows it, the headers
+  `Authorization`, `Content-Type` and `Accept`, and a 10-minute cache.
+
+Without `adminOrigin`, admin paths, token and revoke get no CORS at all. The value must be exactly
+`https://host[:port]` in lowercase (or `http://` on loopback with `allowInsecureLoopback`);
+anything else stops startup.
 
 ## Choice tasks (`osm:tagfix`)
 
@@ -198,6 +269,10 @@ The protocol/controller suites use synthetic users, an in-memory/mock store boun
 ```sh
 sbt 'testOnly org.maproulette.auth.mobile.* org.maproulette.filters.HttpLoggingFilterSpec org.maproulette.framework.controller.UserControllerSpec'
 ```
+
+`MobileAdminRepositorySpec` (clients table, seeding precedence, disabled clients, revocation,
+audit) uses the same opt-in test database. `MobileAdminSpec` covers the admin scope gate, the
+admin routes and CORS without a database.
 
 These checks do not constitute a real OSM browser-login test. Real login additionally requires configured OSM credentials, the registered backend callback, and an approved app callback installed on a device. No deployment is performed by these tests.
 

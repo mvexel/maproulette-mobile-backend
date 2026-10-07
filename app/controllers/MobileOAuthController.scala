@@ -73,10 +73,14 @@ class MobileOAuthController @Inject() (
   private def browser[A](request: Request[A]): Option[String] =
     request.cookies.get(cookieName).map(_.value).filter(_.matches("[A-Za-z0-9_-]{43}"))
   private def validInteraction(value: MobileInteraction): Boolean =
-    settings.clients
+    service.clients
       .get(value.clientId)
       .exists(_.redirectUris.contains(value.redirectUri)) &&
-      settings.allowedScopes(value.clientId, value.scope).isDefined
+      service.clients.allowedScopes(value.clientId, value.scope).isDefined
+
+  /** `mobile:admin` is for MapRoulette super-users only; other scopes need no extra check. */
+  private def adminAllowed(scope: String, userId: Long): Boolean =
+    !MobileScopes.isAdmin(scope) || service.admins.isAdmin(userId)
 
   private def tagFix(scope: String): Boolean =
     MobileScopes.parse(scope).exists(_.contains(MobileScopes.TagFix))
@@ -204,31 +208,42 @@ class MobileOAuthController @Inject() (
                       val grantedScope = (response.json \ "scope").asOpt[String]
                       identity.resolve(accessToken).flatMap { user =>
                         val csrf = MobileSecrets.generate()
-                        service
-                          .storage(
-                            service.store.completeLogin(
-                              stateHash,
-                              browserHash,
-                              user.id,
-                              MobileSecrets.hash(csrf),
-                              Instant.now()
+                        if (!adminAllowed(interaction.scope, user.id))
+                          // Not a super-user: back to the app without a consent page or a grant.
+                          Future.successful(
+                            appRedirect(
+                              interaction.redirectUri,
+                              "error"             -> "access_denied",
+                              "error_description" -> "MapRoulette super-user required",
+                              "state"             -> interaction.clientState
                             )
                           )
-                          .flatMap {
-                            case true =>
-                              keepOsmToken(
-                                interaction,
+                        else
+                          service
+                            .storage(
+                              service.store.completeLogin(
                                 stateHash,
                                 browserHash,
                                 user.id,
-                                accessToken,
-                                grantedScope
-                              ).map {
-                                case true  => consentPage(interaction, state, csrf, user.name)
-                                case false => error(new InvalidGrant())
-                              }
-                            case false => Future.successful(error(new InvalidGrant()))
-                          }
+                                MobileSecrets.hash(csrf),
+                                Instant.now()
+                              )
+                            )
+                            .flatMap {
+                              case true =>
+                                keepOsmToken(
+                                  interaction,
+                                  stateHash,
+                                  browserHash,
+                                  user.id,
+                                  accessToken,
+                                  grantedScope
+                                ).map {
+                                  case true  => consentPage(interaction, state, csrf, user.name)
+                                  case false => error(new InvalidGrant())
+                                }
+                              case false => Future.successful(error(new InvalidGrant()))
+                            }
                       }
                     }
                   }
@@ -247,11 +262,13 @@ class MobileOAuthController @Inject() (
       userName: String
   ): Result = {
     def html(value: String): String = HtmlFormat.escape(value).body
-    val clientName                  = settings.clients(interaction.clientId).name
+    val clientName                  = service.clients.get(interaction.clientId).map(_.name).getOrElse("")
     val canWrite =
       MobileScopes.parse(interaction.scope).exists(_.contains(MobileScopes.Write))
     val access =
-      if (canWrite && tagFix(interaction.scope))
+      if (MobileScopes.isAdmin(interaction.scope))
+        "This app can administer MapRoulette as you, a super-user: manage the approved mobile apps, create and update challenges, add tasks to them and read challenges and tasks. Every change is recorded in an audit log. It cannot edit OpenStreetMap or obtain your personal API key."
+      else if (canWrite && tagFix(interaction.scope))
         "This app can read MapRoulette tasks and your basic identity. It can also lock, skip and release tasks, and mark them fixed, not an issue, already fixed or too hard, as you. For multiple-choice tasks it can edit OpenStreetMap as you: it applies the tag changes you choose, and deletes a node you report as gone when the app allows that. It cannot make other OpenStreetMap edits, comment, review, delete tasks or obtain your personal API key."
       else if (canWrite)
         "This app can read MapRoulette tasks and your basic identity. It can also lock, skip and release tasks, and mark them fixed, not an issue, already fixed or too hard, as you. It cannot edit OpenStreetMap, comment, review, delete tasks or obtain your personal API key."
@@ -291,7 +308,10 @@ class MobileOAuthController @Inject() (
             service.storage {
               service.store.getInteraction(idHash, browserHash, Instant.now()) match {
                 case Some(interaction) if validInteraction(interaction) =>
-                  if (params("decision") == "deny") {
+                  if (params("decision") == "allow" &&
+                      !interaction.userId.exists(adminAllowed(interaction.scope, _)))
+                    error(new InvalidGrant())
+                  else if (params("decision") == "deny") {
                     service.store.declineInteraction(idHash, browserHash, csrfHash, Instant.now()) match {
                       case Some(value) =>
                         appRedirect(
@@ -355,7 +375,7 @@ class MobileOAuthController @Inject() (
         service.parameters(request.body) match {
           case Right(params)
               if !request.headers.hasHeader(AUTHORIZATION) && !params.contains("client_secret") &&
-                settings.clients.contains(params.getOrElse("client_id", "")) && params
+                service.clients.known(params.getOrElse("client_id", "")).isDefined && params
                 .getOrElse("token", "")
                 .nonEmpty =>
             service.storage {

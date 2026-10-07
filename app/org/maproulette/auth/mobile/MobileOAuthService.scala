@@ -36,8 +36,24 @@ case class MobileAuthorization(
 class MobileOAuthService @Inject() (
     val store: MobileOAuthStore,
     val settings: MobileOAuthSettings,
+    val clients: MobileClientRegistry,
+    val admins: MobileAdminCheck,
     actorSystem: ActorSystem
 ) {
+  // Config clients only and no admins: for tests that need neither the database nor users.
+  def this(store: MobileOAuthStore, settings: MobileOAuthSettings, actorSystem: ActorSystem) =
+    this(
+      store,
+      settings,
+      new StaticMobileClientRegistry(settings),
+      MobileAdminCheck.Nobody,
+      actorSystem
+    )
+
+  /** An admin grant needs a current super-user; other grants need nothing more. */
+  def adminAllowed(grant: MobileGrant): Boolean =
+    !MobileScopes.isAdmin(grant.scope) || admins.isAdmin(grant.userId)
+
   // Older production config files need no mobile dispatcher while the feature is disabled.
   private implicit lazy val executionContext: ExecutionContext =
     actorSystem.dispatchers.lookup("mobile-oauth-dispatcher")
@@ -56,7 +72,7 @@ class MobileOAuthService @Inject() (
       storage {
         store
           .authenticate(MobileSecrets.hash(accessToken), Instant.now())
-          .filter(grant => settings.allowedScopes(grant.clientId, grant.scope).isDefined)
+          .filter(grant => clients.allowedScopes(grant.clientId, grant.scope).isDefined)
       }
 
   def parameters(values: Map[String, Seq[String]]): Either[OAuthError, Map[String, String]] = {
@@ -67,7 +83,7 @@ class MobileOAuthService @Inject() (
 
   def authorization(values: Map[String, Seq[String]]): Either[OAuthError, MobileAuthorization] = {
     parameters(values).flatMap { params =>
-      settings.clients.get(params.getOrElse("client_id", "")) match {
+      clients.get(params.getOrElse("client_id", "")) match {
         case None => Left(new InvalidClient())
         case Some(client) =>
           val redirect  = params.getOrElse("redirect_uri", "")
@@ -104,7 +120,7 @@ class MobileOAuthService @Inject() (
       hasAuthorizationHeader: Boolean
   ): Future[Either[OAuthError, GrantHandlerResult[MobileGrant]]] = {
     val validated = parameters(values).flatMap { params =>
-      val client = settings.clients.get(params.getOrElse("client_id", ""))
+      val client = clients.get(params.getOrElse("client_id", ""))
       if (hasAuthorizationHeader || params.contains("client_secret") || client.isEmpty)
         Left(new InvalidClient())
       else
@@ -140,7 +156,7 @@ class MobileOAuthService @Inject() (
         request: AuthorizationRequest
     ): Future[Boolean] =
       Future.successful(
-        credential.exists(c => settings.clients.contains(c.clientId) && c.clientSecret.isEmpty)
+        credential.exists(c => clients.get(c.clientId).isDefined && c.clientSecret.isEmpty)
       )
 
     override def findUser(
@@ -195,18 +211,20 @@ class MobileOAuthService @Inject() (
       )
     }
 
-    override def createAccessToken(info: AuthInfo[MobileGrant]): Future[AccessToken] = issue {
-      (pair, now) =>
-        val grant = info.user
-        store.redeemCode(
-          MobileSecrets.hash(params("code")),
-          grant.clientId,
-          grant.redirectUri,
-          grant.codeChallenge,
-          pair,
-          now
-        )
-    }
+    override def createAccessToken(info: AuthInfo[MobileGrant]): Future[AccessToken] =
+      if (!adminAllowed(info.user)) Future.failed(new InvalidGrant())
+      else
+        issue { (pair, now) =>
+          val grant = info.user
+          store.redeemCode(
+            MobileSecrets.hash(params("code")),
+            grant.clientId,
+            grant.redirectUri,
+            grant.codeChallenge,
+            pair,
+            now
+          )
+        }
     override def refreshAccessToken(
         info: AuthInfo[MobileGrant],
         refreshToken: String
@@ -215,6 +233,8 @@ class MobileOAuthService @Inject() (
       val requested = params.get("scope").flatMap(MobileScopes.parse)
       if (requested.exists(scopes => !MobileScopes.parse(info.user.scope).contains(scopes)))
         Future.failed(new InvalidScope())
+      // A disabled client is refused earlier (invalid_client); a demoted admin is refused here.
+      else if (!adminAllowed(info.user)) Future.failed(new InvalidGrant())
       else
         issue { (pair, now) =>
           store.rotate(MobileSecrets.hash(refreshToken), info.user.clientId, pair, now)

@@ -8,6 +8,11 @@ POST    /oauth/mobile/consent                                           @control
 POST    /oauth/mobile/token                                             @controllers.MobileOAuthController.token
 POST    /oauth/mobile/revoke                                            @controllers.MobileOAuthController.revoke
 GET     /oauth/mobile/me                                                @controllers.MobileOAuthController.me
+# Mobile admin API (fork): mobile:admin bearer grants of super-users only, see docs/mobile-admin-api.md
+GET     /api/v2/mobile-admin/clients                                    @controllers.MobileAdminController.listClients
+POST    /api/v2/mobile-admin/clients                                    @controllers.MobileAdminController.createClient
+PATCH   /api/v2/mobile-admin/clients/:id                                @controllers.MobileAdminController.updateClient(id:String, revokeGrants:Boolean ?= false)
+GET     /api/v2/mobile-admin/audit                                      @controllers.MobileAdminController.audit(limit:Int ?= 50, page:Int ?= 0)
 # Authentication Routes
 GET     /auth/authenticate                                              @controllers.AuthController.authenticate(redirectUri: String ?= "")
 GET     /auth/callback                                                  @controllers.AuthController.callback(code: String, redirectUri: String ?= "")

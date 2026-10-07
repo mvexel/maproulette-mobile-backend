@@ -8,28 +8,35 @@ case class MobileClient(
     id: String,
     name: String,
     redirectUris: Set[String],
-    scopes: Set[String] = Set(MobileScopes.Read)
+    scopes: Set[String] = Set(MobileScopes.Read),
+    enabled: Boolean = true
 )
 
 /**
-  * OAuth scope sets. Every grant includes `tasks:read`; `tasks:write` is an optional addition, and
+  * OAuth scope sets. An app grant includes `tasks:read`; `tasks:write` is an optional addition, and
   * `osm:tagfix` (apply choice answers to OSM) is only valid together with `tasks:write`.
+  * `mobile:admin` stands alone: an admin grant has no app scopes, so it reaches only the admin
+  * allowlist, and app grants never reach it.
   */
 object MobileScopes {
   val Read   = "tasks:read"
   val Write  = "tasks:write"
   val TagFix = "osm:tagfix"
+  val Admin  = "mobile:admin"
   // Canonical order for stored and returned scope strings.
-  private val supported = Seq(Read, Write, TagFix)
+  private val supported = Seq(Read, Write, TagFix, Admin)
 
-  /** Strict RFC 6749 scope parsing: single-space separated, known, unique, including read. */
+  /** Strict RFC 6749 scope parsing: single-space separated, known, unique; read or admin alone. */
   def parse(value: String): Option[Set[String]] = {
     val items = value.split(" ", -1).toSeq
-    if (items.forall(supported.contains) && items.distinct.size == items.size && items.contains(
-          Read
-        ) && (!items.contains(TagFix) || items.contains(Write))) Some(items.toSet)
-    else None
+    val known = items.forall(supported.contains) && items.distinct.size == items.size
+    val app = items.contains(Read) && !items.contains(Admin) &&
+      (!items.contains(TagFix) || items.contains(Write))
+    if (known && (app || items == Seq(Admin))) Some(items.toSet) else None
   }
+
+  def isAdmin(scopes: Set[String]): Boolean = scopes.contains(Admin)
+  def isAdmin(scope: String): Boolean       = parse(scope).exists(isAdmin)
 
   def format(scopes: Set[String]): String = supported.filter(scopes.contains).mkString(" ")
 
@@ -71,6 +78,11 @@ class MobileOAuthSettings @Inject() (configuration: Configuration) {
     configuration.getOptional[Long]("mobileOAuth.refreshSeconds").getOrElse(2592000L)
   val interactionSeconds: Long = 600L
   val codeSeconds: Long        = 120L
+
+  /**
+    * Clients listed in `mobileOAuth.clients`. They seed the `mobile_oauth_clients` table; at
+    * runtime clients are read through [[MobileClientRegistry]], not from here.
+    */
   val clients: Map[String, MobileClient] =
     if (!enabled) Map.empty
     else {
@@ -81,9 +93,13 @@ class MobileOAuthSettings @Inject() (configuration: Configuration) {
         val redirects = entry.get[Seq[String]]("redirectUris").toSet
         require(id.matches("[A-Za-z0-9._-]{1,100}"), "Invalid mobile client ID")
         require(
-          redirects.nonEmpty && redirects.forall(validRedirect),
+          redirects.nonEmpty && redirects.size <= 10 &&
+            redirects.forall(MobileOAuthSettings.validRedirect),
           "Invalid mobile client redirect URI"
         )
+        val name = entry.get[String]("name")
+        // The limits of mobile_oauth_clients (evolution 131), so a bad entry fails at startup.
+        require(name.nonEmpty && name.length <= 200, "Invalid mobile client name")
         val scopes = MobileScopes
           .parse(
             entry.getOptional[Seq[String]]("scopes").getOrElse(Seq(MobileScopes.Read)).mkString(" ")
@@ -94,18 +110,49 @@ class MobileOAuthSettings @Inject() (configuration: Configuration) {
             s"Mobile client $id lists osm:tagfix but no valid mobileOAuth.osmTokenKey " +
               "(MR_MOBILE_OSM_TOKEN_KEY) is set; new osm:tagfix sign-ins are refused"
           )
-        MobileClient(id, entry.get[String]("name"), redirects, scopes)
+        MobileClient(
+          id,
+          name,
+          redirects,
+          scopes,
+          entry.getOptional[Boolean]("enabled").getOrElse(true)
+        )
       }
       require(parsed.map(_.id).distinct.size == parsed.size, "Duplicate mobile client IDs")
       parsed.map(client => client.id -> client).toMap
     }
+  private val allowHttp =
+    configuration.getOptional[Boolean]("mobileOAuth.allowInsecureLoopback").getOrElse(false)
+  private def loopback(uri: URI) = Set("localhost", "127.0.0.1", "[::1]").contains(uri.getHost)
+
+  /**
+    * The one browser origin of the admin web app (`MR_MOBILE_ADMIN_ORIGIN`), e.g.
+    * `https://admin.mr-dev.osm.lol`. Unset means no admin CORS; see [[MobileCorsFilter]].
+    */
+  val adminOrigin: Option[String] =
+    if (!enabled) None
+    else
+      configuration
+        .getOptional[String]("mobileOAuth.adminOrigin")
+        .map(_.trim)
+        .filter(_.nonEmpty)
+        .map { value =>
+          val valid = scala.util
+            .Try {
+              val uri = new URI(value)
+              (uri.getScheme == "https" || (allowHttp && loopback(uri) && uri.getScheme == "http")) &&
+              uri.getHost != null && value == s"${uri.getScheme}://${uri.getRawAuthority}" &&
+              uri.getUserInfo == null && value == value.toLowerCase(java.util.Locale.ROOT)
+            }
+            .getOrElse(false)
+          require(valid, "Invalid mobileOAuth.adminOrigin: expected https://host[:port]")
+          value
+        }
+
   if (enabled) {
-    val uri      = new URI(callbackUri)
-    val loopback = Set("localhost", "127.0.0.1", "[::1]").contains(uri.getHost)
-    val allowHttp =
-      configuration.getOptional[Boolean]("mobileOAuth.allowInsecureLoopback").getOrElse(false)
+    val uri = new URI(callbackUri)
     require(
-      uri.getScheme == "https" || (allowHttp && loopback && uri.getScheme == "http"),
+      uri.getScheme == "https" || (allowHttp && loopback(uri) && uri.getScheme == "http"),
       "Invalid mobile callback URI"
     )
     require(
@@ -119,14 +166,18 @@ class MobileOAuthSettings @Inject() (configuration: Configuration) {
   }
   def secureCookie: Boolean = callbackUri.startsWith("https://")
 
-  /** The grant's scopes while its client remains configured to allow all of them. */
+  /** The grant's scopes while its configured client allows all of them (config clients only). */
   def allowedScopes(clientId: String, scope: String): Option[Set[String]] =
-    for {
-      client <- clients.get(clientId)
-      scopes <- MobileScopes.parse(scope) if scopes.subsetOf(client.scopes)
-    } yield scopes
+    MobileClientRegistry.allowedScopes(clients.get(clientId), scope)
+}
 
-  private def validRedirect(value: String): Boolean =
+object MobileOAuthSettings {
+
+  /**
+    * A registered app callback: https with a host, or a reverse-domain custom scheme. No fragment,
+    * query or user info, because the code is appended as the query.
+    */
+  def validRedirect(value: String): Boolean =
     scala.util
       .Try {
         val uri    = new URI(value)
