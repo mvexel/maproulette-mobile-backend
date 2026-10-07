@@ -13,29 +13,37 @@ Welcome to the repository for the MapRoulette back-end server code. The MapRoule
 
 This fork is a test bed for per-user mobile sign-in in the MapRoulette mobile
 SDK. The `feat/mobile-oauth` branch adds an opt-in authorization-code flow
-with PKCE and scoped bearer grants for approved native apps: read-only by
-default, optionally allowing a narrow set of task lifecycle writes (lock, release,
-skip and four resolution statuses). It also fixes a stale task-cache read
-after status changes; see [upstream issue notes](docs/upstream-issues.md). Public API
-reads and personal MapRoulette API keys remain available without the patch;
-browser sign-in through `/oauth/mobile/*` requires a backend running this
-branch with mobile OAuth enabled. See [Mobile OAuth](docs/mobile-oauth.md) for
-configuration and security boundaries, and the
-[staging deployment guide](docs/mobile-staging-deploy.md) for the Compose,
-reverse-proxy, verification, and backup steps.
+with PKCE and scoped bearer grants for approved native apps. Grants can read
+tasks, perform a narrow set of task lifecycle writes, or submit choice answers
+that edit OSM. An accompanying admin site manages approved clients and, in
+the field deployments, an audited write switch. The fork also fixes a stale
+task-cache read after status changes; see [upstream issue notes](docs/upstream-issues.md).
+Anonymous challenge and task discovery reads remain available. Mobile task
+writes require a registered client, a user's bearer grant, and an enabled
+write policy in the field deployments. See [Mobile OAuth](docs/mobile-oauth.md)
+for the grant boundaries, [Mobile admin](docs/mobile-admin-api.md) for the
+admin API, and [fork changes](docs/fork-changes.md) for the full delta.
 
 The code is based on [maproulette/maproulette-backend](https://github.com/maproulette/maproulette-backend)
 at upstream commit `b9b2e69b`, with the mobile changes maintained here.
 
 The isolated test deployment at `https://mr-api.osm.lol` uses development OSM
-accounts and its own database. It is separate from `maproulette.org` and does
-not change that service's authentication. Deployment credentials are supplied
-through environment variables, outside this repository.
+accounts and its own database; see the [development staging guide](docs/mobile-staging-deploy.md).
+The prepared `mr-stage.osm.lol` and `mr-prod.osm.lol` deployments use production
+OSM, separate databases and confidential OSM OAuth applications, and one admin
+site per backend. Both start with task and OSM edit writes disabled in their own
+database. They are separate from the upstream `maproulette.org` service. Their
+runtime definition is [compose.field.yml](compose.field.yml); see the
+[field deployment runbook](https://github.com/mvexel/infra/blob/main/docs/maproulette-field-deploy.md)
+for the coordinated API, admin and ingress rollout. Keep each OSM client secret
+and other deployment credentials in the environment's secret store, outside
+this repository. The OSM apps must allow `read_prefs` and `write_api`: the
+backend requests only `read_prefs` for ordinary sign-in and both for an OSM
+edit grant.
 
 The [upstream Docker image](https://github.com/maproulette/maproulette2-docker)
 is for the standard MapRoulette backend and does not include this mobile OAuth
-patch. Build this branch with the standalone Compose guide above for mobile
-sign-in.
+patch. Build this branch with the appropriate Compose guide for mobile sign-in.
 
 ## Requirements
 

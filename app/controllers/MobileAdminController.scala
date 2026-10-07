@@ -16,10 +16,19 @@ class MobileAdminController @Inject() (
     components: ControllerComponents,
     settings: MobileOAuthSettings,
     service: MobileOAuthService,
-    repository: MobileAdminRepository
+    repository: MobileAdminRepository,
+    writePolicy: MobileWritePolicy
 )(implicit ec: ExecutionContext)
     extends AbstractController(components) {
   private val MaxBody = 16 * 1024
+
+  def this(
+      components: ControllerComponents,
+      settings: MobileOAuthSettings,
+      service: MobileOAuthService,
+      repository: MobileAdminRepository
+  )(implicit ec: ExecutionContext) =
+    this(components, settings, service, repository, null)
 
   private def problem(status: Status, code: String, detail: Seq[String] = Seq.empty): Result =
     status(
@@ -45,6 +54,51 @@ class MobileAdminController @Inject() (
   }
 
   private def db[A](operation: => A): Future[A] = service.storage(operation)
+
+  def getWritePolicy: Action[AnyContent] = Action.async { request =>
+    admin(request)(_ =>
+      db(
+        Ok(
+          Json.obj(
+            "enabled" -> (if (settings.writeControlEnabled) writePolicy.enabled
+                          else settings.allowTaskWrites),
+            "managed" -> settings.writeControlEnabled
+          )
+        )
+      )
+    )
+  }
+
+  def setWritePolicy: Action[JsValue] = Action.async(parse.tolerantJson(MaxBody)) { request =>
+    admin(request) { user =>
+      if (!settings.writeControlEnabled)
+        Future.successful(problem(Forbidden, "write_policy_unmanaged"))
+      else
+        request.body match {
+          case value: JsObject if value.keys == Set("enabled") =>
+            (value \ "enabled").asOpt[Boolean] match {
+              case Some(true) if !settings.tagFixAvailable =>
+                Future.successful(
+                  problem(
+                    Conflict,
+                    "write_prerequisites_missing",
+                    Seq(
+                      "Configure a valid MR_MOBILE_OSM_TOKEN_KEY before enabling production OSM edits"
+                    )
+                  )
+                )
+              case Some(enabled) =>
+                db(Ok(Json.obj("enabled" -> writePolicy.set(enabled, user.id), "managed" -> true)))
+              case None =>
+                Future.successful(
+                  problem(BadRequest, "invalid_request", Seq("enabled must be a boolean"))
+                )
+            }
+          case _ =>
+            Future.successful(problem(BadRequest, "invalid_request", Seq("expected only enabled")))
+        }
+    }
+  }
 
   def listClients: Action[AnyContent] = Action.async { request =>
     admin(request)(_ => db(Ok(Json.obj("clients" -> repository.listClients))))

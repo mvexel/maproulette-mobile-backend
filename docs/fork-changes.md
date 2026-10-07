@@ -7,13 +7,12 @@ at commit
 [`b9b2e69b`](https://github.com/maproulette/maproulette-backend/commit/b9b2e69b0115cbfb7a1f997a29dfc3b2ca32512a)
 (2026-09-30, "Reject unscoped requests to task cluster endpoint (#1284)").
 
-Every change is additive and opt-in. With `mobileOAuth.enabled = false` (the
-default in `conf/application.conf`), web sessions, API keys and all existing
-routes behave as upstream, apart from the general fixes listed under
-[Changed](#changed). No upstream file was removed.
-
-Relative to the base: 44 files added (21 application and configuration, 12 test,
-11 deployment, scripts and docs) and 22 changed. To reproduce the comparison:
+The mobile OAuth and field write-control features are opt-in. With
+`mobileOAuth.enabled = false` and `mobileOAuth.writeControlEnabled = false`
+(their defaults in `conf/application.conf`), web sessions, API keys and
+existing routes behave as upstream, apart from the general fixes listed under
+[Changed](#changed). No upstream file was removed. To compare the fork with its
+base commit:
 
 ```sh
 git -C <upstream checkout> archive b9b2e69b | tar -x -C /tmp/up
@@ -22,8 +21,10 @@ diff -r /tmp/up . --exclude=.git
 
 Background and design: [mobile-oauth.md](mobile-oauth.md) (configuration and
 security boundaries), [mobile-staging-deploy.md](mobile-staging-deploy.md)
-(deployment) and [upstream-issues.md](upstream-issues.md) (upstream behavior we
-found and did not change). The client side is the
+(development deployment), the
+[field deployment runbook](https://github.com/mvexel/infra/blob/main/docs/maproulette-field-deploy.md)
+(stage/prod deployment), and [upstream-issues.md](upstream-issues.md)
+(upstream behavior we found and did not change). The client side is the
 [MapRoulette mobile SDK](https://github.com/mvexel/maproulette-mobile-sdk).
 
 ## Added
@@ -31,8 +32,12 @@ found and did not change). The client side is the
 ### Mobile OAuth provider (`/oauth/mobile/*`)
 
 The fork adds an authorization-code flow with S256 PKCE for approved native apps,
-with no client secrets. A user signs in through OSM. The backend issues its own
-short-lived access tokens and rotating refresh tokens, scoped per grant.
+with no secrets in those apps. A user signs in through OSM. The backend is a
+separate confidential OSM OAuth client: it stores an OSM client secret and
+exchanges the authorization code server-side. It requests `read_prefs` for
+ordinary sign-in, or `read_prefs write_api` for an `osm:tagfix` grant. The backend
+then issues its own short-lived access tokens and rotating refresh tokens,
+scoped per grant.
 
 | What | Where |
 | --- | --- |
@@ -85,6 +90,8 @@ Backend for the admin web app: approved clients in the database, the super-user-
 | Admin writes through stock routes are audited as `stock.<METHOD>` | `MobileBearerFilter.scala:142` |
 | CORS for `mobileOAuth.adminOrigin` (`MR_MOBILE_ADMIN_ORIGIN`) | `app/org/maproulette/auth/mobile/MobileCorsFilter.scala:24,65`, `MobileOAuthSettings.scala:132` |
 | Staging admin client `maproulette-mobile-admin` (`https://admin.mr-dev.osm.lol/callback`, `mobile:admin`) and admin origin | `conf/mobile-staging.conf:26-37` |
+| Per-database write policy, initially disabled on a new database, and audited updates | `conf/evolutions/default/132.sql`, `MobileWritePolicy.scala` |
+| Super-user-only `GET`/`PUT /api/v2/mobile-admin/write-policy`; enabling also requires a configured OSM token encryption key | `conf/routes`, `MobileAdminController.scala` |
 
 ### Multiple-choice tasks (`cooperativeWork.meta.type = 3`)
 
@@ -124,9 +131,11 @@ repo:
 | What | Where |
 | --- | --- |
 | Compose files and Caddy reverse proxy for the staging deployment | `compose.mobile.yml`, `compose.production.yml`, `deploy/mobile/Caddyfile`, `.dockerignore` |
+| One reusable field Compose file for separate stage and prod projects; each has its own PostGIS volume, backend image, OSM OAuth credentials and ingress alias | `compose.field.yml` |
+| Field configuration: production OSM, public origin, 5,000-task ingest cap, seed clients for read-only native bootstrap and one admin site, and database-backed write control | `conf/mobile-field.conf` |
 | `curl` in the image, for health checks | `Dockerfile` |
 | End-to-end OAuth smoke test against a synthetic OSM provider | `scripts/mobile-oauth-smoke.mjs`, `scripts/mobile-oauth-test-osm.mjs` |
-| Docs | `docs/mobile-oauth.md`, `docs/mobile-staging-deploy.md`, `docs/upstream-issues.md`, this file |
+| Docs | `docs/mobile-oauth.md`, `docs/mobile-admin-api.md`, `docs/mobile-staging-deploy.md`, `docs/upstream-issues.md`, this file; coordinated deployment runbook in the infra repo |
 | Tests | `test/org/maproulette/auth/mobile/*Spec.scala` (including `MobileAdminSpec` and `MobileAdminRepositorySpec`), `test/org/maproulette/provider/choice/*` (including `FakeOsmServer.scala`), `test/org/maproulette/filters/HttpLoggingFilterSpec.scala` |
 
 ## Changed
@@ -147,8 +156,11 @@ not only mobile.
 
 ## Disabled or restricted
 
-Nothing is disabled for web sessions or API keys. Mobile bearer grants are
-deliberately narrower than a web session:
+With the default configuration, web sessions and API keys are unrestricted by
+the mobile gate. Field deployments set `writeControlEnabled = true`; while
+their database policy is off, the filter blocks routes outside the known
+public reads, login, and admin-control routes for every credential type. Mobile
+bearer grants are narrower than a web session in either configuration:
 
 | Restriction | Where |
 | --- | --- |
@@ -162,6 +174,9 @@ deliberately narrower than a web session:
 | `refreshLock` is not allowed: mobile locks late, just before the status write | `MobileWriteRoutes.permits` |
 | `choice/check` and `choice` accept only bearer grants. Web sessions and API keys get 403 `mobile_only` | `MobileChoiceController.scala` |
 | An `osm:tagfix` grant can't be created without the OSM token key. Without the key, edits return 503 `osm_edits_unavailable` and everything else keeps working | `MobileOAuthSettings.scala`, `MobileChoiceService.scala` |
+| In a field deployment, an off write policy blocks task writes and OSM choice submissions even for an existing bearer grant, and declines new `tasks:write` grants | `MobileBearerFilter.scala` (`MobileFieldRoutes`, `MobileWriteRoutes`), `MobileOAuthService.scala` |
+| The field gate allows anonymous challenge and task discovery reads. It excludes `GET /task/:id/choice/check`, which performs a fresh OSM read and may record staleness | `MobileFieldRoutes.permitsWhenDisabled` |
+| Each stage/prod admin site changes only its matching backend's policy. The switch starts off; a current super-user with a `mobile:admin` grant is required to change it | `MobileAdminController.scala`, `MobileWritePolicy.scala`, `conf/mobile-field.conf` |
 
 ## Proposed upstream
 

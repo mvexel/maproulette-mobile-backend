@@ -111,13 +111,50 @@ object MobileWriteRoutes {
   }
 }
 
+/** During a field deployment's disabled phase, expose only the mobile login,
+  * admin control, and known read routes. This also closes legacy session and
+  * API-key write paths while the policy is off.
+  */
+object MobileFieldRoutes {
+  private val discovery = Set(
+    "/api/v2/challenges/tags",
+    "/api/v2/challenges/find",
+    "/api/v2/challenges/extendedFind"
+  )
+
+  def permitsWhenDisabled(request: RequestHeader): Boolean =
+    request.method match {
+      case "OPTIONS" => true
+      case "GET" =>
+        request.path == "/ping" ||
+          Set("/oauth/mobile/authorize", "/oauth/mobile/callback", "/oauth/mobile/me")
+            .contains(request.path) ||
+          discovery.contains(request.path) ||
+          request.path.matches("/api/v2/task/[0-9]+/tags") ||
+          (!request.path.matches("/api/v2/task/[0-9]+/choice/check") &&
+            MobileReadRoutes.permits(request.method, request.path)) ||
+          MobileAdminRoutes.permits(request.method, request.path, request.queryString)
+      case "POST" =>
+        Set(
+          "/oauth/mobile/consent",
+          "/oauth/mobile/token",
+          "/oauth/mobile/revoke",
+          "/api/v2/mobile-admin/clients"
+        ).contains(request.path)
+      case "PATCH" => request.path.matches("/api/v2/mobile-admin/clients/[A-Za-z0-9._-]+")
+      case "PUT"   => request.path == "/api/v2/mobile-admin/write-policy"
+      case _       => false
+    }
+}
+
 /** Disabled/legacy requests pass through unchanged; mobile credentials can never fall back. */
 class MobileBearerFilter @Inject() (
     settings: MobileOAuthSettings,
     oauth: MobileOAuthService,
     users: UserService,
     admins: MobileAdminCheck,
-    adminRepository: MobileAdminRepository
+    adminRepository: MobileAdminRepository,
+    writePolicy: MobileWritePolicy
 )(implicit val mat: Materializer, ec: ExecutionContext)
     extends Filter {
   private val logger = play.api.Logger(getClass)
@@ -126,7 +163,18 @@ class MobileBearerFilter @Inject() (
   def this(settings: MobileOAuthSettings, oauth: MobileOAuthService, users: UserService)(
       implicit mat: Materializer,
       ec: ExecutionContext
-  ) = this(settings, oauth, users, MobileAdminCheck.Nobody, null)
+  ) = this(settings, oauth, users, MobileAdminCheck.Nobody, null, null)
+
+  def this(
+      settings: MobileOAuthSettings,
+      oauth: MobileOAuthService,
+      users: UserService,
+      admins: MobileAdminCheck,
+      adminRepository: MobileAdminRepository
+  )(
+      implicit mat: Materializer,
+      ec: ExecutionContext
+  ) = this(settings, oauth, users, admins, adminRepository, null)
 
   private def denied(status: Int, code: String): Future[Result] = Future.successful(
     Results
@@ -160,6 +208,8 @@ class MobileBearerFilter @Inject() (
   }
 
   def apply(next: RequestHeader => Future[Result])(request: RequestHeader): Future[Result] = {
+    if (settings.writeControlEnabled && !MobileFieldRoutes.permitsWhenDisabled(request) &&
+        !writePolicy.enabled) return denied(403, "mobile_writes_disabled")
     val authorizations = request.headers.getAll("Authorization")
     val mobile         = authorizations.exists(_.toLowerCase(java.util.Locale.ROOT).startsWith("bearer"))
     if (!settings.enabled || !mobile) return next(request)
@@ -171,6 +221,9 @@ class MobileBearerFilter @Inject() (
     val write = MobileWriteRoutes.permits(request.method, request.path)
     val read  = MobileReadRoutes.permits(request.method, request.path)
     val admin = MobileAdminRoutes.permits(request.method, request.path, request.queryString)
+    if (write && (!settings.allowTaskWrites ||
+        (settings.writeControlEnabled && !writePolicy.enabled)))
+      return denied(403, "mobile_writes_disabled")
     if (!write && !read && !admin) return denied(403, "insufficient_scope")
     val badShape =
       if (write && MobileWriteRoutes.takesBody(request.method, request.path))

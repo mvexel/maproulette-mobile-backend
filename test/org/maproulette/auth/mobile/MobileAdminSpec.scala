@@ -559,6 +559,39 @@ class MobileAdminSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll 
     }
   }
 
+  "The field write policy route" should {
+    "require a super-user and an OSM token key before enabling" in {
+      val fieldSettings = new MobileOAuthSettings(
+        Configuration(
+          ConfigFactory.parseString("""
+          mobileOAuth {
+            enabled = true
+            callbackUri = "https://mr-stage.osm.lol/oauth/mobile/callback"
+            writeControlEnabled = true
+          }
+        """)
+        )
+      )
+      val policy = mock[MobileWritePolicy]
+      when(policy.enabled).thenReturn(false)
+      val controller = new MobileAdminController(
+        stubControllerComponents(),
+        fieldSettings,
+        service(),
+        mock[MobileAdminRepository],
+        policy
+      )
+      val signed = FakeRequest()
+        .withBody(Json.obj("enabled" -> true): JsValue)
+        .addAttr(MobileBearerIdentity.UserKey, superUser)
+        .addAttr(MobileBearerIdentity.ScopesKey, Set("mobile:admin"))
+      status(controller.setWritePolicy.apply(signed)) mustBe CONFLICT
+      (contentAsJson(controller.setWritePolicy.apply(signed)) \ "error").as[String] mustBe
+        "write_prerequisites_missing"
+      verify(policy, never()).set(anyBoolean(), anyLong())
+    }
+  }
+
   "Admin CORS" should {
     // The upstream settings from conf/application.conf.
     val playCors = new CORSFilter(

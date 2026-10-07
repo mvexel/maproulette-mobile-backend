@@ -50,6 +50,10 @@ object MobileScopes {
 class MobileOAuthSettings @Inject() (configuration: Configuration) {
   private val logger   = play.api.Logger(getClass)
   val enabled: Boolean = configuration.getOptional[Boolean]("mobileOAuth.enabled").getOrElse(false)
+  val allowTaskWrites: Boolean =
+    configuration.getOptional[Boolean]("mobileOAuth.allowTaskWrites").getOrElse(true)
+  val writeControlEnabled: Boolean =
+    configuration.getOptional[Boolean]("mobileOAuth.writeControlEnabled").getOrElse(false)
 
   /**
     * AES-256 key for stored OSM tokens (`MR_MOBILE_OSM_TOKEN_KEY`: standard base64 of exactly 32

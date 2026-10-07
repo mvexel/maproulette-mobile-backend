@@ -95,6 +95,8 @@ class MobileOAuthService @Inject() (
           else if (params.get("response_type") != Some("code"))
             Left(new InvalidRequest("Only code response type is supported"))
           else if (!scopes.exists(_.subsetOf(client.scopes))) Left(new InvalidScope())
+          else if (scopes.exists(_.contains(MobileScopes.Write)) && !settings.allowTaskWrites)
+            Left(new InvalidScope())
           // No token key: an OSM token could not be stored, so osm:tagfix is not offered.
           else if (scopes.exists(_.contains(MobileScopes.TagFix)) && !settings.tagFixAvailable)
             Left(new InvalidScope())

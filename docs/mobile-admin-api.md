@@ -83,6 +83,25 @@ best effort: if that insert fails, the error is logged and the response is uncha
 `200 {"items": [{"id", "actorUserId", "action", "target", "before", "after", "createdAt"}],
 "page", "limit", "total"}`, newest first. `limit` is 1 to 200; `page` starts at 0.
 
+## Field write policy
+
+On deployments using `conf/mobile-field.conf`,
+`GET /api/v2/mobile-admin/write-policy` returns `{"enabled":false,"managed":true}`
+initially. `PUT /api/v2/mobile-admin/write-policy` accepts exactly
+`{"enabled":true|false}` from a `mobile:admin` grant held by a current
+super-user. It changes the policy in that deployment's database and records
+`write_policy.update` in the audit log. Repeating the current value is a no-op.
+Enabling requires a valid `MR_MOBILE_OSM_TOKEN_KEY`; otherwise the route
+returns 409 `write_prerequisites_missing`. A deployment without the managed
+policy reports `managed:false` and refuses PUT with 403
+`write_policy_unmanaged`.
+
+While disabled, the backend exposes only selected read, mobile login, and
+admin control routes, including for legacy sessions and API keys. Mobile
+lifecycle and choice submissions return 403 `mobile_writes_disabled`, even
+with an existing write grant. This switch is per database. The production-OSM
+field Compose projects start with the policy disabled.
+
 ## CORS
 
 With `mobileOAuth.adminOrigin` set (`MR_MOBILE_ADMIN_ORIGIN`, for example

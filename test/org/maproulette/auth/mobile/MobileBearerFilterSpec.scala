@@ -38,12 +38,18 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
   )
   override def afterAll(): Unit = { await(system.terminate()); super.afterAll() }
 
-  private def settings(enabled: Boolean) =
+  private def settings(
+      enabled: Boolean,
+      allowTaskWrites: Boolean = true,
+      writeControlEnabled: Boolean = false
+  ) =
     new MobileOAuthSettings(
       Configuration.from(
         Map(
-          "mobileOAuth.enabled"     -> enabled,
-          "mobileOAuth.callbackUri" -> "https://example.org/oauth/mobile/callback"
+          "mobileOAuth.enabled"             -> enabled,
+          "mobileOAuth.callbackUri"         -> "https://example.org/oauth/mobile/callback",
+          "mobileOAuth.allowTaskWrites"     -> allowTaskWrites,
+          "mobileOAuth.writeControlEnabled" -> writeControlEnabled
         )
       )
     )
@@ -104,6 +110,47 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
   }
 
   "Mobile task write gate" should {
+    "close legacy and bearer write paths when the field policy is off" in {
+      val policy = mock[MobileWritePolicy]
+      when(policy.enabled).thenReturn(false)
+      val filter = new MobileBearerFilter(
+        settings(true, writeControlEnabled = true),
+        mock[MobileOAuthService],
+        mock[UserService],
+        MobileAdminCheck.Nobody,
+        mock[MobileAdminRepository],
+        policy
+      )
+      val deniedRequests = Seq(
+        bearer(GET, "/api/v2/task/123/start"),
+        FakeRequest(GET, "/api/v2/task/123/choice/check"),
+        FakeRequest(POST, "/api/v2/challenge"),
+        FakeRequest(PUT, "/api/v2/task/123/1"),
+        FakeRequest(GET, "/auth/generateAPIKey")
+      )
+      deniedRequests.foreach { request =>
+        val result = filter.apply(next)(request)
+        status(result) mustBe FORBIDDEN
+        contentAsJson(result) mustBe play.api.libs.json.Json
+          .obj("error" -> "mobile_writes_disabled")
+      }
+      contentAsString(filter.apply(next)(FakeRequest(GET, "/ping"))) mustBe "legacy"
+    }
+
+    "refuse task writes when the deployment gate is closed, including existing write grants" in {
+      val oauth = mock[MobileOAuthService]
+      val filter =
+        new MobileBearerFilter(settings(true, allowTaskWrites = false), oauth, mock[UserService])
+      (allowedWrites :+ (POST -> "/api/v2/task/123/choice")).foreach {
+        case (method, path) =>
+          val result = filter.apply(next)(bearer(method, path))
+          status(result) mustBe FORBIDDEN
+          contentAsJson(result) mustBe play.api.libs.json.Json
+            .obj("error" -> "mobile_writes_disabled")
+      }
+      verify(oauth, never()).authenticate(anyString())
+    }
+
     "allow each audited lifecycle route for a tasks:write grant" in {
       val (filter, _) = writeFilter(writeGrant)
       allowedWrites.foreach {

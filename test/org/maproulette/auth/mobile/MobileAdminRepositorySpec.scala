@@ -54,7 +54,7 @@ class MobileAdminRepositorySpec extends PlaySpec {
         SQL("CREATE TABLE users(id bigint PRIMARY KEY)").execute()
         SQL("INSERT INTO users VALUES(1),(2)").executeUpdate()
         SQL("CREATE TABLE tasks(id bigint PRIMARY KEY)").execute()
-        Seq("129", "130", "131").foreach { version =>
+        Seq("129", "130", "131", "132").foreach { version =>
           val text = new String(
             Files.readAllBytes(Paths.get(s"conf/evolutions/default/$version.sql")),
             "UTF-8"
@@ -95,6 +95,25 @@ class MobileAdminRepositorySpec extends PlaySpec {
       val text =
         new String(Files.readAllBytes(Paths.get("conf/evolutions/default/131.sql")), "UTF-8")
       text.replace(";;", "").contains(";") mustBe false
+    }
+  }
+
+  "The mobile write policy" should {
+    "start disabled, persist each change, and audit only changes" in withDb { db =>
+      val policy = new MobileWritePolicy(db)
+      val repository =
+        new MobileAdminRepository(db, new DbMobileClientRegistry(db, settings(admin)))
+      policy.enabled mustBe false
+      policy.set(true, 1L) mustBe true
+      new MobileWritePolicy(db).enabled mustBe true
+      policy.set(true, 1L) mustBe true
+      policy.set(false, 2L) mustBe false
+      val (entries, total) = repository.audit(10, 0)
+      total mustBe 2
+      entries.map(_.action) mustBe Seq("write_policy.update", "write_policy.update")
+      entries.map(_.actorUserId) mustBe Seq(2L, 1L)
+      entries.head.before mustBe Some(Json.obj("enabled" -> true))
+      entries.head.after mustBe Some(Json.obj("enabled"  -> false))
     }
   }
 

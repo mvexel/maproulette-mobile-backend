@@ -13,6 +13,8 @@ GET     /api/v2/mobile-admin/clients                                    @control
 POST    /api/v2/mobile-admin/clients                                    @controllers.MobileAdminController.createClient
 PATCH   /api/v2/mobile-admin/clients/:id                                @controllers.MobileAdminController.updateClient(id:String, revokeGrants:Boolean ?= false)
 GET     /api/v2/mobile-admin/audit                                      @controllers.MobileAdminController.audit(limit:Int ?= 50, page:Int ?= 0)
+GET     /api/v2/mobile-admin/write-policy                               @controllers.MobileAdminController.getWritePolicy
+PUT     /api/v2/mobile-admin/write-policy                               @controllers.MobileAdminController.setWritePolicy
 # Authentication Routes
 GET     /auth/authenticate                                              @controllers.AuthController.authenticate(redirectUri: String ?= "")
 GET     /auth/callback                                                  @controllers.AuthController.callback(code: String, redirectUri: String ?= "")
