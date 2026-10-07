@@ -33,6 +33,8 @@ The prepared `mr-stage.osm.lol` and `mr-prod.osm.lol` deployments use production
 OSM, separate databases and confidential OSM OAuth applications, and one admin
 site per backend. Both start with task and OSM edit writes disabled in their own
 database. They are separate from the upstream `maproulette.org` service. Their
+super-user admin sites can prepare challenges while the task write switch is
+off; this does not permit mapper submissions or OSM edits. Their
 runtime definition is [compose.field.yml](compose.field.yml); see the
 [field deployment runbook](https://github.com/mvexel/infra/blob/main/docs/maproulette-field-deploy.md)
 for the coordinated API, admin and ingress rollout. Keep each OSM client secret

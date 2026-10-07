@@ -123,8 +123,14 @@ object MobileFieldRoutes {
     "/api/v2/challenges/extendedFind"
   )
 
-  def permitsWhenDisabled(request: RequestHeader): Boolean =
-    request.method match {
+  def permitsWhenDisabled(request: RequestHeader): Boolean = {
+    // Challenge preparation is an admin action, not a mapper task or OSM edit.
+    // The bearer filter below validates the grant and super-user before forwarding.
+    val adminSetup = request.headers.getAll("Authorization")
+      .exists(_.toLowerCase(java.util.Locale.ROOT).startsWith("bearer")) &&
+      MobileAdminRoutes.permits(request.method, request.path, request.queryString) &&
+      MobileAdminRoutes.stockWrite(request.method, request.path)
+    adminSetup || (request.method match {
       case "OPTIONS" => true
       case "GET" =>
         request.path == "/ping" ||
@@ -145,7 +151,8 @@ object MobileFieldRoutes {
       case "PATCH" => request.path.matches("/api/v2/mobile-admin/clients/[A-Za-z0-9._-]+")
       case "PUT"   => request.path == "/api/v2/mobile-admin/write-policy"
       case _       => false
-    }
+    })
+  }
 }
 
 /** Disabled/legacy requests pass through unchanged; mobile credentials can never fall back. */

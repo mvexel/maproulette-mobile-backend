@@ -26,6 +26,9 @@ An admin grant reaches only these routes:
 
 The stock routes behave as upstream, acting as the signed-in super-user. Every non-GET request on
 a stock route is recorded in the audit log as `stock.<METHOD>` with its path and response status.
+Challenge creation, update, and line-by-line task import are available while a field deployment's
+task write policy is off. The policy still blocks task lifecycle and choice submissions, including
+production OSM edits. Legacy session and API-key challenge writes remain blocked while it is off.
 
 ## Clients
 
