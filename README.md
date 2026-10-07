@@ -1,5 +1,10 @@
 # MapRoulette API: mobile OAuth experiment
 
+> **This is a fork of
+> [maproulette/maproulette-backend](https://github.com/maproulette/maproulette-backend).**
+> For everything it adds, changes or restricts compared to upstream, with
+> pointers to the code, see [docs/fork-changes.md](docs/fork-changes.md).
+
 [![Build Status](https://github.com/mvexel/maproulette-mobile-backend/actions/workflows/scala.yml/badge.svg?branch=feat/mobile-oauth)](https://github.com/mvexel/maproulette-mobile-backend/actions/workflows/scala.yml)
 
 Welcome to the repository for the MapRoulette back-end server code. The MapRoulette back-end exposes the MapRoulette API, which the MapRoulette front-end web application depends on. The source code for the web application is in [a separate repository](https://github.com/maproulette/maproulette3).
