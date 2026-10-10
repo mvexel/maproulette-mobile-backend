@@ -273,18 +273,40 @@ Step B2, guest registration and guest tokens:
 | `GET /api/v2/mobile-guest/me` | Guest bearer. `{"guestId", "state", "email": "none\|pending\|verified", "expiresAt"}`. Never the address. |
 | `DELETE /api/v2/mobile-guest` | Guest bearer. "Delete my data": `204`. |
 
-A guest token reaches only `MobileGuestRoutes`: the discovery reads of `MobileReadRoutes` (not
-`choice/check` yet, and not `/oauth/mobile/me`) and its own routes, which take no query or body.
-It is never a MapRoulette user: the bearer filter sets `MobileBearerIdentity.GuestKey`, never
-`UserKey`, so stock routes see an anonymous request. App grants cannot reach the guest's own
-routes. Registration and the guest's own routes stay open while the field write switch is off:
-they neither write OSM nor change task status.
+Step B3, pending answers. A pending answer is held on the backend and changes nothing in OSM or in
+the task's status; claiming publishes it later.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/v2/task/:id/choice/pending` | Guest bearer, body as for `POST /task/:id/choice` (JSON, 1–2048 bytes). Only for challenges with `liveMissingQuestions`. Runs the choice check (same 60 s cache), then stores the answer and replaces the guest's earlier answer for the task. `200 {"taskId", "state": "pending", "answeredAt", "holdUntil", "expiresAt"}`: the hold is 7 days and the guest's expiry moves to at least 30 days after this answer. |
+| `DELETE /api/v2/task/:id/choice/pending` | Guest bearer. Withdraws the guest's pending answer: `204`, or `404 not_found`. |
+| `GET /api/v2/mobile-guest/pending?limit=&after=` | Guest bearer. Every answer of the guest, newest first: `{"items": [{"taskId", "challengeId", "state", "answeredAt", "holdUntil", "result"}], "next"}`. `limit` 1–100 (default 50); `after` is the previous page's `next`. |
+
+Submit errors: `400 invalid_request`; `403 challenge_not_published` (field writes are off and the
+challenge is not enabled with tag `mobile-survey-v1`); `404 not_found`; `409 task_completed` (status
+no longer Created, Skipped or Too hard) or `409 task_ineligible` with `reason` and `detail` as from
+`choice/check`, `key_changed` when a chosen question was answered in OSM meanwhile; `422
+unsupported_task` (no `liveMissingQuestions`, not a choice task, or bundled) or `422
+invalid_submission` (including `"delete": true`); `429 pending_limit` (200 pending answers per
+guest); `502 osm_unavailable`; `401 invalid_token` if the guest was deleted, claimed or expired in
+the meantime. Evolution 137 adds `choice_pending`; "delete my data" deletes the guest's answers that
+are still pending.
+
+A guest token reaches only `MobileGuestRoutes`: the discovery reads of `MobileReadRoutes`, including
+`choice/check` (but not `/oauth/mobile/me`), pending answers and its own routes. It is never a
+MapRoulette user: the bearer filter sets `MobileBearerIdentity.GuestKey`, never `UserKey`, so stock
+routes see an anonymous request. App grants cannot reach the guest's routes. Registration, the
+guest's routes and, for guest tokens only, `choice/check` stay open while the field write switch is
+off: they neither write OSM nor change task status.
 
 Step B4, the claim email:
 
 | Endpoint | Purpose |
 | --- | --- |
 | `PUT /api/v2/mobile-guest/email` | Guest bearer, JSON `{"email"}` (≤ 254 characters, one `@`, no spaces), no query string. Stores the address AES-256-GCM sealed under `osmTokenKey` with the guest id as associated data, creates a claim token (kept only as a digest) and sends the link email. Can be called again to correct the address; each call sends a new link. `200` with the `GET /api/v2/mobile-guest/me` body (`"email": "pending"`). `400 invalid_request`, `409 guest_claimed`, `409 nothing_saved` (no pending answers yet; the app asks after the first saved stop), `429 email_rate_limited` (3 sends per guest per 24 h), `503 mail_unavailable` (no mail provider or token key, or the provider refused). |
+| `PUT /api/v2/mobile-guest/reminders` | Guest bearer, JSON `{"enabled": false}` (or `true` to resume), no query string. Sets or clears `reminders_stopped_at`; deletes nothing. `204`. |
+| `POST /api/v2/mobile-claim/delete` | No credential (a request with `Authorization` is refused), JSON `{"claimToken"}` from a `/claim/delete#t=` link. Same effect as `DELETE /api/v2/mobile-guest`. `204`, `400 invalid_request`, `404 not_found` (unknown token, or not among the guest's three newest), `409 guest_claimed` (account deletion is MapRoulette's process). Allowed while field writes are off. |
+| `POST /api/v2/mobile-claim/stop-reminders` | No credential, JSON `{"claimToken"}` from a `/claim/stop-reminders#t=` link. Stops reminders. `204`, `400 invalid_request`, `404 not_found`. Allowed while field writes are off. |
 
 Mail settings live under `mobileOAuth.guests.mail`: `provider` (`MR_GUEST_MAIL_PROVIDER`: `none`
 by default, `log` for development, which logs only the template name, or `postmark`),
@@ -294,6 +316,22 @@ by default, `log` for development, which logs only the template name, or `postma
 (`<claimOrigin>/claim#t=<token>`, `/claim/delete#t=`, `/claim/stop-reminders#t=`) so it never
 reaches web server logs. Postmark open and link tracking are off. The templates are copies of the
 project's brand/email set in `conf/mobile-email/`.
+
+An hourly job (`GuestJobService`, started by `GuestJobModule` only while guests are enabled) sends
+the other emails and enforces retention:
+
+- **Reminders.** The first a day after the first link email, the second in the last five days before
+  `expires_at` (a guest who gives an address late gets only the second, and none in its first day).
+  Each at most once (`reminded_1_at`, `reminded_2_at`, set before sending and cleared again if the
+  provider refuses), never after "stop reminders", and only while answers are pending. Each
+  reminder carries a new claim token, so it counts toward the three-per-day send limit and toward
+  the guest's three valid links.
+- **Expiry.** For an unclaimed guest past `expires_at`: pending answers become `expired`, guest
+  access tokens are deleted, the expiry notice is sent, then the address is deleted. A refused
+  notice is retried hourly for a day, then the address is deleted anyway. Claim tokens stay, so an
+  old link can say "expired".
+- **Purge.** Thirty days after `expires_at` the unclaimed guest row is deleted with its tokens;
+  its expired answers stay with `guest_id` NULL for campaign statistics.
 
 ## Account identity
 

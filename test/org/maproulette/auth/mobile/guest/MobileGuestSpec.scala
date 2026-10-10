@@ -95,11 +95,13 @@ class MobileGuestSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll 
   private implicit val ec: ExecutionContext       = system.dispatcher
   override def afterAll(): Unit                   = { await(system.terminate()); super.afterAll() }
 
-  private def settings(guests: Boolean = true) = new MobileOAuthSettings(
-    Configuration(
-      ConfigFactory.parseString(s"""
+  private def settings(guests: Boolean = true, writeControl: Boolean = false) =
+    new MobileOAuthSettings(
+      Configuration(
+        ConfigFactory.parseString(s"""
       mobileOAuth {
         enabled = true
+        writeControlEnabled = $writeControl
         callbackUri = "https://mr.example/oauth/mobile/callback"
         guests.enabled = $guests
         clients = [
@@ -108,8 +110,8 @@ class MobileGuestSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll 
         ]
       }
     """)
+      )
     )
-  )
 
   private class Fixture(guests: Boolean = true) {
     val store  = new MemoryGuestStore
@@ -322,20 +324,23 @@ class MobileGuestSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll 
         GET    -> "/api/v2/task/1",
         GET    -> "/api/v2/tasks/box/1/2/3/4",
         PUT    -> "/api/v2/markers/box/1/2/3/4",
+        GET    -> "/api/v2/task/1/choice/check",
         GET    -> "/api/v2/mobile-guest/me",
+        GET    -> "/api/v2/mobile-guest/pending",
+        DELETE -> "/api/v2/task/1/choice/pending",
         DELETE -> "/api/v2/mobile-guest"
       ).foreach {
         case (method, path) =>
           contentAsString(filter().apply(next)(bearer(method, path))) mustBe guest.id.toString
       }
     }
-    "keep a guest token off writes, choice routes and the identity endpoint" in {
+    "keep a guest token off writes, choice submissions and the identity endpoint" in {
       Seq(
-        GET -> "/api/v2/task/1/start",
-        PUT -> "/api/v2/task/1/1",
-        GET -> "/api/v2/task/1/choice/check",
-        GET -> "/oauth/mobile/me",
-        GET -> "/api/v2/mobile-admin/clients"
+        GET  -> "/api/v2/task/1/start",
+        PUT  -> "/api/v2/task/1/1",
+        POST -> "/api/v2/task/1/skip",
+        GET  -> "/oauth/mobile/me",
+        GET  -> "/api/v2/mobile-admin/clients"
       ).foreach {
         case (method, path) =>
           val result = filter().apply(next)(bearer(method, path))
@@ -345,6 +350,29 @@ class MobileGuestSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll 
     }
     "refuse an unknown token on guest routes" in {
       status(filter().apply(next)(bearer(GET, "/api/v2/mobile-guest/me", "H" * 43))) mustBe UNAUTHORIZED
+    }
+    "take a pending answer shaped like a choice submission" in {
+      def pending(body: String, contentType: String = "application/json") =
+        bearer(POST, "/api/v2/task/1/choice/pending")
+          .withHeaders("Content-Type" -> contentType, "Content-Length" -> body.length.toString)
+          .withBody(body)
+      contentAsString(filter().apply(next)(pending("""{"answers":{"a":"b"}}"""))) mustBe
+        guest.id.toString
+      status(filter().apply(next)(pending("x", "text/plain"))) mustBe BAD_REQUEST
+      status(filter().apply(next)(pending("x" * 2049))) mustBe BAD_REQUEST
+      status(filter().apply(next)(bearer(POST, "/api/v2/task/1/choice/pending"))) mustBe BAD_REQUEST
+    }
+    "allow only limit and after on the pending list" in {
+      contentAsString(
+        filter().apply(next)(bearer(GET, "/api/v2/mobile-guest/pending?limit=5&after=9"))
+      ) mustBe guest.id.toString
+      status(filter().apply(next)(bearer(GET, "/api/v2/mobile-guest/pending?x=1"))) mustBe BAD_REQUEST
+      status(
+        filter().apply(next)(bearer(GET, "/api/v2/mobile-guest/pending?limit=1&limit=2"))
+      ) mustBe BAD_REQUEST
+      status(filter().apply(next)(bearer(GET, "/api/v2/task/1/choice/check?x=1"))) mustBe BAD_REQUEST
+      status(filter().apply(next)(bearer(DELETE, "/api/v2/task/1/choice/pending?x=1"))) mustBe
+        BAD_REQUEST
     }
     "refuse a query or body on the guest's own routes" in {
       status(filter().apply(next)(bearer(GET, "/api/v2/mobile-guest/me?x=1"))) mustBe BAD_REQUEST
@@ -381,6 +409,52 @@ class MobileGuestSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll 
       MobileFieldRoutes.permitsWhenDisabled(FakeRequest(GET, "/api/v2/mobile-guest/me")) mustBe true
       MobileFieldRoutes.permitsWhenDisabled(FakeRequest(DELETE, "/api/v2/mobile-guest")) mustBe true
       MobileFieldRoutes.permitsWhenDisabled(FakeRequest(DELETE, "/api/v2/task/1")) mustBe false
+    }
+    "allow pending answers and the choice check while the field write switch is off" in {
+      Seq(
+        GET    -> "/api/v2/task/1/choice/check",
+        POST   -> "/api/v2/task/1/choice/pending",
+        DELETE -> "/api/v2/task/1/choice/pending",
+        GET    -> "/api/v2/mobile-guest/pending"
+      ).foreach {
+        case (method, path) =>
+          MobileFieldRoutes.permitsWhenDisabled(
+            FakeRequest(method, path).withHeaders("Authorization" -> s"Bearer $token")
+          ) mustBe true
+      }
+      // Without a bearer token nothing could authenticate a guest.
+      MobileFieldRoutes.permitsWhenDisabled(FakeRequest(GET, "/api/v2/task/1/choice/check")) mustBe
+        false
+      MobileFieldRoutes.permitsWhenDisabled(FakeRequest(POST, "/api/v2/task/1/choice")) mustBe false
+    }
+    "give the choice check to guests only while the field write switch is off" in {
+      val policy = mock[MobileWritePolicy]
+      org.mockito.Mockito.when(policy.enabled).thenReturn(false)
+      val oauth = mock[MobileOAuthService]
+      org.mockito.Mockito
+        .when(oauth.authenticate("A" * 43))
+        .thenReturn(
+          Future.successful(
+            Some(MobileGrant("family", 1, "app", "tasks:read", "org.example.app:/cb", "c"))
+          )
+        )
+      org.mockito.Mockito
+        .when(oauth.authenticate(token))
+        .thenReturn(Future.successful(None))
+      val gated = new MobileBearerFilter(
+        settings(writeControl = true),
+        oauth,
+        mock[UserService],
+        MobileAdminCheck.Nobody,
+        null,
+        policy,
+        guests
+      )
+      contentAsString(gated.apply(next)(bearer(GET, "/api/v2/task/1/choice/check"))) mustBe
+        guest.id.toString
+      val app = gated.apply(next)(bearer(GET, "/api/v2/task/1/choice/check", "A" * 43))
+      status(app) mustBe FORBIDDEN
+      contentAsJson(app) mustBe Json.obj("error" -> "mobile_writes_disabled")
     }
   }
 
