@@ -7,7 +7,7 @@ See your edits:
 
 {{notAddedLine}}
 
-Thanks for checking {{nounMany}} with {{organizerName}}. Next time you open Street Tally, it signs in as you, and new answers go straight on the map.
+Thanks for checking {{nounMany}}{{withOrganizer}}. Next time you open Street Tally, it signs in as you, and new answers go straight on the map.
 
 Street Tally
 
