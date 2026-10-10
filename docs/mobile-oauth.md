@@ -270,7 +270,7 @@ Step B2, guest registration and guest tokens:
 | --- | --- |
 | `POST /oauth/mobile/guest` | Form `client_id` (a client with `guest`), no credential. `201 {"guestId", "guestSecret", "expiresAt"}`. The secret (43 characters) is returned once; the app keeps it in secure storage. `401 invalid_client`, `429 rate_limited` (100 per client IP per hour, `Retry-After`). |
 | `POST /oauth/mobile/token` | `grant_type=urn:maproulette:grant-type:guest`, `client_id`, `guest_id`, `guest_secret`. A token response with `scope: "guest"`, `expires_in` as for app tokens, and **no** refresh token: the secret mints the next one. `invalid_grant` (wrong secret, deleted or expired guest), `invalid_client`, or `guest_claimed` once the guest has been claimed. While guests are off the grant is `unsupported_grant_type`. |
-| `GET /api/v2/mobile-guest/me` | Guest bearer. `{"guestId", "state", "email": "none\|pending\|verified", "expiresAt"}`. Never the address. |
+| `GET /api/v2/mobile-guest/me` | Guest bearer. `{"guestId", "state", "email": "none\|pending\|verified", "pending", "published", "expiresAt", "claimedAs"}`: `pending` and `published` count the guest's answers in those states (B3); `claimedAs` is `null` until claiming exists. Never the address. |
 | `DELETE /api/v2/mobile-guest` | Guest bearer. "Delete my data": `204`. |
 
 Step B3, pending answers. A pending answer is held on the backend and changes nothing in OSM or in

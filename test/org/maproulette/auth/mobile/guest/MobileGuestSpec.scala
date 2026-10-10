@@ -118,7 +118,18 @@ class MobileGuestSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll 
     val config = settings(guests)
     val service =
       new MobileGuestService(store, config, new StaticMobileClientRegistry(config), system)
-    val controller = new MobileGuestController(stubControllerComponents(), service)
+    val pendingCounts = new org.maproulette.provider.choice.ChoicePendingStore {
+      def save(
+          write: org.maproulette.provider.choice.PendingWrite,
+          limit: Int,
+          guestExpiresAt: Instant,
+          now: Instant
+      )                                                         = ???
+      def withdraw(guestId: UUID, taskId: Long)                 = ???
+      def counts(guestId: UUID)                                 = Map("pending" -> 2, "published" -> 1, "expired" -> 4)
+      def list(guestId: UUID, limit: Int, before: Option[Long]) = ???
+    }
+    val controller = new MobileGuestController(stubControllerComponents(), service, pendingCounts)
     val oauth = new MobileOAuthController(
       stubControllerComponents(),
       new MobileOAuthService(mock[MobileOAuthStore], config, system),
@@ -261,6 +272,9 @@ class MobileGuestSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll 
       (body \ "guestId").as[String] mustBe guest.id.toString
       (body \ "state").as[String] mustBe "active"
       (body \ "email").as[String] mustBe "none"
+      (body \ "pending").as[Int] mustBe 2
+      (body \ "published").as[Int] mustBe 1
+      (body \ "claimedAs").toOption mustBe Some(play.api.libs.json.JsNull)
     }
     "delete the guest's data and end its tokens" in new Fixture {
       val token = accessToken()

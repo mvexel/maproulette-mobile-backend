@@ -204,6 +204,7 @@ class MobileGuestRepositorySpec extends PlaySpec {
         val rows = pending.list(guest.id, 10, None)
         rows.map(r => (r.taskId, r.state, r.body)) mustBe
           List((1L, "pending", Json.obj("answers" -> Json.obj("backrest" -> "no"))))
+        pending.counts(guest.id) mustBe Map("pending" -> 1)
     }
 
     "never shorten the guest's expiry" in withStore { (store, db) =>
