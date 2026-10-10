@@ -1,6 +1,5 @@
 package org.maproulette.auth.mobile
 
-import akka.util.ByteString
 import javax.inject.Inject
 import play.api.libs.streams.Accumulator
 import play.api.mvc._

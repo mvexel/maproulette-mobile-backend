@@ -252,7 +252,7 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
     "filter template questions using live tags without staling the remaining work" taggedAs ChoiceTag in {
       val (task, node) = benchTask(
         payload = _ ++ Json.obj("liveMissingQuestions" -> true),
-        tags = Map("amenity" -> "bench", "material" -> "wood")
+        tags = Map("amenity"                           -> "bench", "material" -> "wood")
       )
       (check(task).body \ "questionIds").as[List[String]] mustBe List("backrest")
       stale(task) mustBe None
