@@ -4,18 +4,32 @@ This fork (`mvexel/maproulette-mobile-backend`, branch `feat/mobile-oauth`) is
 based on upstream
 [`maproulette/maproulette-backend`](https://github.com/maproulette/maproulette-backend)
 at commit
-[`b9b2e69b`](https://github.com/maproulette/maproulette-backend/commit/b9b2e69b0115cbfb7a1f997a29dfc3b2ca32512a)
-(2026-09-30, "Reject unscoped requests to task cluster endpoint (#1284)").
+[`bbdc2d64`](https://github.com/maproulette/maproulette-backend/commit/bbdc2d6478175911c92d639f139ba335326fa3fe)
+(2026-10-10, "Validate OAuth state in callback"). The fork was first imported
+from an archive of `b9b2e69b`; that commit is recorded as an ancestor, so later
+upstream syncs are ordinary merges of `upstream/main`.
+
+### Evolution numbering
+
+Fork migrations are never renumbered, because deployed databases have already
+applied them. An upstream migration whose number the fork already uses is
+copied to the next free number, with a comment naming the upstream file:
+
+| Upstream file | Fork file | Content |
+| ------------- | --------- | ------- |
+| `129.sql` (synced at `bbdc2d64`) | `133.sql` | `grants_role_valid` check constraint |
+
+Fork-owned migrations continue after the highest number in this table.
 
 The mobile OAuth and field write-control features are opt-in. With
 `mobileOAuth.enabled = false` and `mobileOAuth.writeControlEnabled = false`
-(their defaults in `conf/application.conf`), web sessions, API keys and
+(their defaults in `conf/application.conf`), web sessions and
 existing routes behave as upstream, apart from the general fixes listed under
 [Changed](#changed). No upstream file was removed. To compare the fork with its
 base commit:
 
 ```sh
-git -C <upstream checkout> archive b9b2e69b | tar -x -C /tmp/up
+git -C <upstream checkout> archive bbdc2d64 | tar -x -C /tmp/up
 diff -r /tmp/up . --exclude=.git
 ```
 
