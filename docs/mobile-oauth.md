@@ -283,7 +283,7 @@ the task's status; claiming publishes it later.
 | `GET /api/v2/mobile-guest/pending?limit=&after=` | Guest bearer. Every answer of the guest, newest first: `{"items": [{"taskId", "challengeId", "state", "answeredAt", "holdUntil", "result"}], "next"}`. `limit` 1–100 (default 50); `after` is the previous page's `next`. |
 
 Submit errors: `400 invalid_request`; `403 challenge_not_published` (field writes are off and the
-challenge is not enabled with tag `mobile-survey-v1`); `404 not_found`; `409 task_completed` (status
+challenge is not enabled with tag `mobile-survey-v1`); `404 not_found` (unknown task, or its challenge or project is disabled: preview mode); `409 task_completed` (status
 no longer Created, Skipped or Too hard) or `409 task_ineligible` with `reason` and `detail` as from
 `choice/check`, `key_changed` when a chosen question was answered in OSM meanwhile; `422
 unsupported_task` (no `liveMissingQuestions`, not a choice task, or bundled) or `422

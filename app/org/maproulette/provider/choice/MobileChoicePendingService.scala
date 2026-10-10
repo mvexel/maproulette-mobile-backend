@@ -57,6 +57,14 @@ class MobileChoicePendingService @Inject() (
       .as(SqlParser.scalar[Boolean].single)
   }
 
+  /** Preview mode: a disabled challenge, or one in a disabled project, is a draft. */
+  private def draft(challengeId: Long): Boolean = db.withConnection { implicit c =>
+    SQL"""SELECT NOT (c.enabled AND p.enabled) FROM challenges c
+          JOIN projects p ON p.id = c.parent_id WHERE c.id = $challengeId"""
+      .as(SqlParser.scalar[Boolean].singleOpt)
+      .getOrElse(true)
+  }
+
   private def writesOff: Boolean = settings.writeControlEnabled && !writePolicy.enabled
 
   private def answered(plan: ChoicePlan): List[String] = plan match {
@@ -77,9 +85,14 @@ class MobileChoicePendingService @Inject() (
       case Right(valid) if !open.contains(valid.task.status.getOrElse(Task.STATUS_CREATED)) =>
         done(error(409, "task_completed"))
       case Right(valid) =>
-        Future(writesOff && !published(valid.task.parent)).flatMap {
-          case true => done(error(403, "challenge_not_published"))
-          case false =>
+        Future(
+          if (draft(valid.task.parent)) Some(error(404, "not_found"))
+          else if (writesOff && !published(valid.task.parent))
+            Some(error(403, "challenge_not_published"))
+          else None
+        ).flatMap {
+          case Some(refusal) => done(refusal)
+          case None =>
             choice.check(taskId).flatMap {
               case response if response.status != 200 => done(response)
               case response if !(response.body \ "eligible").asOpt[Boolean].contains(true) =>

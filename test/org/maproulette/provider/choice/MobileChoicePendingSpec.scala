@@ -230,6 +230,15 @@ class MobileChoicePendingSpec(implicit val application: Application) extends Fra
       } finally writesOn = true
     }
 
+    "refuse answers to a draft challenge as not found" taggedAs ChoiceTag in {
+      val g         = guest()
+      val (task, _) = benchTask()
+      challengeDAL.update(Json.obj("enabled" -> false), User.superUser)(challenge.id)
+      try code(submit(g, task, """{"answers":{"backrest":"yes"}}""")) mustBe Some("not_found")
+      finally challengeDAL.update(Json.obj("enabled" -> true), User.superUser)(challenge.id)
+      submit(g, task, """{"answers":{"backrest":"yes"}}""").status mustBe 200
+    }
+
     "refuse answers once the guest is deleted" taggedAs ChoiceTag in {
       val g = guest()
       guests.delete(g.id, Instant.now())
