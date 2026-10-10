@@ -45,8 +45,9 @@ class UserService @Inject() (
   private val logger = LoggerFactory.getLogger(this.getClass)
 
   // The cache manager for the users
-  val cacheManager = new CacheManager[Long, User](config, Config.CACHE_ID_USERS)
-  val superUsers   = scala.collection.mutable.Set[Long]()
+  val cacheManager =
+    new CacheManager[Long, User](config, Config.CACHE_ID_USERS)(User.userReads, User.privateWrites)
+  val superUsers = scala.collection.mutable.Set[Long]()
 
   // On class initialization (called when Play initializes), seed the super user from the existing database entries
   seedSuperUserIds()
@@ -71,10 +72,7 @@ class UserService @Inject() (
     logger.warn(s"Adding superuser role to uid=${user.id} (osm_id=${user.osmProfile.id})")
     val grantName =
       s"Grant superuser role on uid=${user.id} (osm_id=${user.osmProfile.id}), requested by uid=${grantor.id}"
-    val superUserGrant =
-      new Grant(-1, grantName, Grantee.user(user.id), Grant.ROLE_SUPER_USER, GrantTarget.project(0))
-
-    serviceManager.grant.createGrant(superUserGrant, grantor) match {
+    serviceManager.grant.createSuperUserGrant(user.id, grantName, grantor) match {
       case Some(grant) =>
         superUsers += grant.grantee.granteeId
         clearCache(user.id)
@@ -716,6 +714,7 @@ class UserService @Inject() (
       clear: Boolean = false
   ): User = {
     this.permission.hasProjectAccess(this.projectService.retrieve(projectId), user)
+    Grant.validateRole(role, GrantTarget.project(projectId))
     val addedUser = this.cacheManager
       .withUpdatingCache(this.retrieveByOSMId) { cachedUser =>
         if (clear) {
