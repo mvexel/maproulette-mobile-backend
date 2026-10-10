@@ -134,3 +134,62 @@ class MobileGuestTokenController @Inject() (
     }
   }
 }
+
+/**
+  * `POST /api/v2/mobile-claim` and `GET /api/v2/mobile-claim/:id` (deferred sign-up B5), app
+  * bearer: the claim page's grant, or the phone's own after "I already use OSM".
+  */
+class MobileClaimController @Inject() (
+    components: ControllerComponents,
+    guests: MobileGuestAuth,
+    claims: org.maproulette.provider.choice.claim.ClaimService
+)(implicit ec: ExecutionContext)
+    extends AbstractController(components) {
+  private val logger = play.api.Logger(getClass)
+
+  private def handled(request: RequestHeader)(
+      operation: (
+          org.maproulette.framework.model.User,
+          Set[String],
+          String,
+          String
+      ) => Future[Result]
+  ): Future[Result] =
+    if (!guests.enabled) Future.successful(NotFound)
+    else
+      (for {
+        user   <- request.attrs.get(MobileBearerIdentity.UserKey)
+        scopes <- request.attrs.get(MobileBearerIdentity.ScopesKey)
+        family <- request.attrs.get(MobileBearerIdentity.FamilyKey)
+        client <- request.attrs.get(MobileBearerIdentity.ClientKey)
+      } yield (user, scopes, family, client)) match {
+        case None => Future.successful(Unauthorized(Json.obj("error" -> "invalid_token")))
+        case Some((user, scopes, family, client)) =>
+          (try operation(user, scopes, family, client)
+          catch { case NonFatal(e) => Future.failed(e) })
+            .recover {
+              case NonFatal(e) =>
+                logger.error(s"Claim request failed: ${e.getClass.getSimpleName}")
+                InternalServerError(Json.obj("error" -> "server_error"))
+            }
+            .map(_.withHeaders(CACHE_CONTROL -> "no-store", PRAGMA -> "no-cache"))
+      }
+
+  def claim: Action[JsValue] = Action.async(parse.tolerantJson(maxLength = 2048)) { request =>
+    handled(request) { (user, scopes, family, client) =>
+      claims.claim(request.body, user, scopes, family, client).map {
+        case Left(error)           => Status(error.status)(Json.obj("error" -> error.code) ++ error.extra)
+        case Right((status, body)) => Status(status)(body)
+      }
+    }
+  }
+
+  def status(id: Long): Action[AnyContent] = Action.async { request =>
+    handled(request) { (user, _, _, _) =>
+      claims.status(id, user).map {
+        case Some(body) => Ok(body)
+        case None       => NotFound(Json.obj("error" -> "not_found"))
+      }
+    }
+  }
+}

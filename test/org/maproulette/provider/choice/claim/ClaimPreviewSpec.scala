@@ -3,7 +3,7 @@ package org.maproulette.provider.choice.claim
 import java.time.Instant
 import java.util.UUID
 import org.maproulette.auth.mobile.guest.MobileGuest
-import org.maproulette.auth.mobile.{MobileCorsFilter, MobileOAuthSettings}
+import org.maproulette.auth.mobile.{MobileCorsFilter, MobileFieldRoutes, MobileOAuthSettings}
 import org.scalatestplus.play.PlaySpec
 import play.api.Configuration
 import play.api.libs.json._
@@ -175,6 +175,33 @@ class ClaimPreviewSpec extends PlaySpec {
       from("https://admin.example", "POST", "/oauth/mobile/token") mustBe
         AllowOrigin("https://admin.example")
       from("https://claim.example", "GET", "/api/v2/challenges/extendedFind") mustBe Delegate
+    }
+  }
+
+  "The claim routes" should {
+    "need a write grant for the claim and keep guests out of both" in {
+      import org.maproulette.auth.mobile.{MobileGuestRoutes, MobileReadRoutes, MobileWriteRoutes}
+      MobileWriteRoutes.permits("POST", "/api/v2/mobile-claim") mustBe true
+      MobileWriteRoutes.takesBody("POST", "/api/v2/mobile-claim") mustBe true
+      MobileReadRoutes.permits("GET", "/api/v2/mobile-claim/9") mustBe true
+      MobileReadRoutes.bare("GET", "/api/v2/mobile-claim/9") mustBe true
+      MobileGuestRoutes.permits("GET", "/api/v2/mobile-claim/9") mustBe false
+      MobileGuestRoutes.permits("POST", "/api/v2/mobile-claim") mustBe false
+      MobileGuestRoutes.guestOnlyWhenDisabled("GET", "/api/v2/mobile-claim/9") mustBe false
+      MobileFieldRoutes.permitsWhenDisabled(FakeRequest("POST", "/api/v2/mobile-claim")) mustBe false
+    }
+
+    "take a claim token or a guest id and secret, nothing else" in {
+      val service = new ClaimService(null, null)
+      val token   = "a" * 43
+      service.credential(Json.obj("claimToken" -> token), "app") mustBe
+        Some(ByToken(org.maproulette.auth.mobile.MobileSecrets.hash(token)))
+      val id = UUID.randomUUID()
+      service.credential(Json.obj("guestId" -> id.toString, "guestSecret" -> token), "app") mustBe
+        Some(BySecret(id, org.maproulette.auth.mobile.MobileSecrets.hash(token), "app"))
+      service.credential(Json.obj("claimToken" -> token, "x" -> 1), "app") mustBe None
+      service.credential(Json.obj("claimToken" -> "short"), "app") mustBe None
+      service.credential(Json.obj("guestId"    -> "nope", "guestSecret" -> token), "app") mustBe None
     }
   }
 }

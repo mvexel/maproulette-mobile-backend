@@ -66,6 +66,7 @@ object MobileReadRoutes {
     "/api/v2/task/[0-9]+",
     "/api/v2/task/[0-9]+/choice/check",
     s"/api/v2/tasks/box/$box",
+    "/api/v2/mobile-claim/[0-9]+",
     "/oauth/mobile/me"
   ).map(_.r)
 
@@ -75,7 +76,8 @@ object MobileReadRoutes {
 
   /** Reads that take no query string or body. */
   def bare(method: String, path: String): Boolean =
-    method == "GET" && path.matches("/api/v2/task/[0-9]+/choice/check")
+    method == "GET" && (path.matches("/api/v2/task/[0-9]+/choice/check") ||
+      path.matches("/api/v2/mobile-claim/[0-9]+"))
 }
 
 /**
@@ -109,7 +111,8 @@ object MobileGuestRoutes {
     ).contains(path)
 
   def permits(method: String, path: String): Boolean =
-    own(method, path) || (MobileReadRoutes.permits(method, path) && path != "/oauth/mobile/me")
+    own(method, path) || (MobileReadRoutes.permits(method, path) && path != "/oauth/mobile/me" &&
+      !path.startsWith("/api/v2/mobile-claim/"))
 
   /** The one guest route with a body: a pending answer, shaped like a choice submission. */
   def takesBody(method: String, path: String): Boolean = method == "POST" && path.matches(pending)
@@ -131,7 +134,7 @@ object MobileGuestRoutes {
 
   /** Allowed while field writes are off, for guest tokens only (checked after authentication). */
   def guestOnlyWhenDisabled(method: String, path: String): Boolean =
-    MobileReadRoutes.bare(method, path)
+    method == "GET" && path.matches("/api/v2/task/[0-9]+/choice/check")
 }
 
 /**
@@ -146,14 +149,14 @@ object MobileWriteRoutes {
 
   def permits(method: String, path: String): Boolean = method match {
     case "GET"  => path.matches(s"$task/(start|release)")
-    case "POST" => path.matches(s"$task/(skip|choice)")
+    case "POST" => path.matches(s"$task/(skip|choice)") || path == "/api/v2/mobile-claim"
     case "PUT"  => path.matches(s"$task/[1256]")
     case _      => false
   }
 
   /** The only write that carries a body: a small JSON choice submission. */
   def takesBody(method: String, path: String): Boolean =
-    method == "POST" && path.matches(s"$task/choice")
+    method == "POST" && (path.matches(s"$task/choice") || path == "/api/v2/mobile-claim")
 
   def acceptableBody(request: RequestHeader): Boolean = {
     val contentType = request.headers
