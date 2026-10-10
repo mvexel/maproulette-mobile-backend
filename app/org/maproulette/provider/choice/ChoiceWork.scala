@@ -106,11 +106,15 @@ object ChoiceWork {
       fail(s"payload: larger than $MaxBytes bytes")
 
     val root =
-      obj(json, "cooperativeWork", Set("meta", "element", "match", "questions", "outcomes", "liveMissingQuestions"))
+      obj(
+        json,
+        "cooperativeWork",
+        Set("meta", "element", "match", "questions", "outcomes", "liveMissingQuestions")
+      )
     val liveMissingQuestions = root.flatMap(r => (r \ "liveMissingQuestions").toOption) match {
       case None | Some(JsFalse) => false
       case Some(JsTrue)         => true
-      case _ => fail("liveMissingQuestions: must be a boolean"); false
+      case _                    => fail("liveMissingQuestions: must be a boolean"); false
     }
     val meta = root.flatMap(r =>
       (r \ "meta").toOption match {

@@ -211,9 +211,12 @@ class MobileChoiceService @Inject() (
                         )
                       (ChoiceResponse(200, body), markStale(taskId, stale))
                     case Right(found) =>
-                      val liveQuestions = if (work.liveMissingQuestions)
-                        Json.obj("questionIds" -> work.questions.filter(_.holds(found.tags)).map(_.id))
-                      else Json.obj()
+                      val liveQuestions =
+                        if (work.liveMissingQuestions)
+                          Json.obj(
+                            "questionIds" -> work.questions.filter(_.holds(found.tags)).map(_.id)
+                          )
+                        else Json.obj()
                       (
                         ChoiceResponse(
                           200,
@@ -609,9 +612,9 @@ class MobileChoiceService @Inject() (
         staleness(work, observation.read) match {
           case Left(found) => Left(stale(found))
           case Right(found) if work.liveMissingQuestions && (plan match {
-              case edit: EditTags => !edit.answers.forall(_._1.holds(found.tags))
-              case _              => false
-            }) =>
+                case edit: EditTags => !edit.answers.forall(_._1.holds(found.tags))
+                case _              => false
+              }) =>
             Left(changedAnswer())
           case Right(_) if plan == DeleteNode && observation.inUse.contains(true) =>
             Left(error(409, "element_in_use"))
