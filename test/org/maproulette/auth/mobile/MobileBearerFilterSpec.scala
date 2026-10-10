@@ -444,7 +444,7 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
         filter.apply(next)(
           FakeRequest(GET, "/api/v2/task/123")
             .withHeaders("Authorization" -> s"Bearer $token")
-            .withSession("token" -> "legacy-cookie")
+            .withSession("userId" -> "7", "tokenHash" -> "web-session")
         )
       ) mustBe UNAUTHORIZED
       verify(oauth, never()).authenticate(anyString())
