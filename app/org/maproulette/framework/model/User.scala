@@ -6,13 +6,11 @@ package org.maproulette.framework.model
 
 import java.util.Locale
 
-import javax.crypto.{BadPaddingException, IllegalBlockSizeException}
 import org.joda.time.DateTime
 import org.joda.time.format.DateTimeFormat
 import org.maproulette.Config
 import org.maproulette.cache.CacheObject
 import org.maproulette.framework.psql.CommonField
-import org.maproulette.utils.Crypto
 import org.maproulette.data._
 import org.slf4j.LoggerFactory
 import play.api.libs.json._
@@ -125,22 +123,6 @@ object CustomBasemap {
   */
 case class Follower(id: Long, user: User, status: Int) extends Identifiable
 object Follower {
-  implicit val tokenWrites: Writes[RequestToken]            = Json.writes[RequestToken]
-  implicit val tokenReads: Reads[RequestToken]              = Json.reads[RequestToken]
-  implicit val settingsWrites: Writes[UserSettings]         = Json.writes[UserSettings]
-  implicit val settingsReads: Reads[UserSettings]           = Json.reads[UserSettings]
-  implicit val userGrantWrites: Writes[Grant]               = Grant.writes
-  implicit val userGrantReads: Reads[Grant]                 = Grant.reads
-  implicit val locationWrites: Writes[Location]             = Json.writes[Location]
-  implicit val locationReads: Reads[Location]               = Json.reads[Location]
-  implicit val osmWrites: Writes[OSMProfile]                = Json.writes[OSMProfile]
-  implicit val osmReads: Reads[OSMProfile]                  = Json.reads[OSMProfile]
-  implicit val searchResultWrites: Writes[UserSearchResult] = Json.writes[UserSearchResult]
-  implicit val projectManagerWrites: Writes[ProjectManager] = Json.writes[ProjectManager]
-
-  implicit val userWrites: Writes[User] = Json.writes[User]
-  implicit val userReads: Reads[User]   = Json.reads[User]
-
   implicit val writes: Writes[Follower] = Json.writes[Follower]
   implicit val reads: Reads[Follower]   = Json.reads[Follower]
 
@@ -301,9 +283,43 @@ object User extends CommonField {
   val FIELD_NEEDS_REVIEW        = "needs_review"
   val FIELD_IS_REVIEWER         = "is_reviewer"
 
-  implicit val userWrites: Writes[User] = Json.writes[User]
+  /**
+    * Writes every field except the API key (API keys are disabled), including
+    * the user's OSM access token and email. Only used this to return a user's
+    * own record! (e.g. via /api/v2/user/whoami)
+    */
+  val privateWrites: OWrites[User] = Json.writes[User].transform((o: JsObject) => o - "apiKey")
+
+  /**
+    * Writes all fields except OSM access token and API key. Meant only for use
+    * in admin endpoints to allow superusers to view details of other users.
+    */
+  val adminWrites: OWrites[User] = privateWrites.transform(withoutSecrets _)
+
+  /**
+    * Default serializer which only includes the fields in the PublicUser schema
+    * (see conf/swagger.yaml).
+    */
+  implicit val userWrites: Writes[User] = Writes { user =>
+    Json.obj(
+      "id" -> user.id,
+      "osmProfile" -> Json.obj(
+        "id"          -> user.osmProfile.id,
+        "avatarURL"   -> user.osmProfile.avatarURL,
+        "displayName" -> user.osmProfile.displayName
+      ),
+      "name"    -> user.name,
+      "created" -> user.created.toString,
+      "settings" -> Json.obj(
+        "leaderboardOptOut" -> user.settings.leaderboardOptOut.contains(true)
+      )
+    )
+  }
   implicit val userReads: Reads[User]   = Json.reads[User]
   implicit val UserFormat: Format[User] = Format(userReads, userWrites)
+
+  private def withoutSecrets(o: JsObject): JsObject =
+    (o - "apiKey") + ("osmProfile" -> ((o \ "osmProfile").as[JsObject] - "requestToken"))
 
   val DEFAULT_GUEST_USER_ID = -998
   val DEFAULT_SUPER_USER_ID = -999
@@ -392,24 +408,6 @@ object User extends CommonField {
       List(),
       settings = UserSettings(theme = Some(THEME_BLACK))
     )
-
-  def withDecryptedAPIKey(user: User)(implicit crypto: Crypto): User = {
-    user.apiKey match {
-      case Some(key) if key.nonEmpty =>
-        try {
-          val decryptedAPIKey = Some(s"${user.id}|${crypto.decrypt(key)}")
-          user.copy(apiKey = decryptedAPIKey)
-        } catch {
-          case _: BadPaddingException | _: IllegalBlockSizeException =>
-            logger.debug(
-              "Invalid key found, could be that the application secret on server changed."
-            )
-            user
-          case e: Throwable => throw e
-        }
-      case _ => user
-    }
-  }
 
   /**
     * Simple helper function that if the provided Option[User] is None, will return a guest
