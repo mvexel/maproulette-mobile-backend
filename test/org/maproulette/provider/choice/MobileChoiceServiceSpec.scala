@@ -252,7 +252,7 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
     "filter template questions using live tags without staling the remaining work" taggedAs ChoiceTag in {
       val (task, node) = benchTask(
         payload = _ ++ Json.obj("liveMissingQuestions" -> true),
-        tags = Map("amenity" -> "bench", "material" -> "wood")
+        tags = Map("amenity"                           -> "bench", "material" -> "wood")
       )
       (check(task).body \ "questionIds").as[List[String]] mustBe List("backrest")
       stale(task) mustBe None
@@ -759,23 +759,28 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
   "Choice HTTP routes" should {
     import play.api.test.FakeRequest
     import play.api.test.Helpers._
-    val crypto = application.injector.instanceOf[org.maproulette.utils.Crypto]
-    def apiKey(user: User): String = {
-      val raw = UUID.randomUUID().toString
+    // Upstream disabled API keys; a web session is the legacy credential these routes must refuse.
+    def webSession(user: User): Seq[(String, String)] = {
+      val token = UUID.randomUUID().toString
       db.withConnection { implicit c =>
-        SQL"UPDATE users SET api_key = ${crypto.encrypt(raw)} WHERE id = ${user.id}".executeUpdate()
+        SQL"UPDATE users SET oauth_token = $token WHERE id = ${user.id}".executeUpdate()
       }
       serviceManager.user.cacheManager.cache.remove(user.id)
-      s"${user.id}|$raw"
+      Seq(
+        org.maproulette.session.SessionManager.KEY_TOKEN_HASH ->
+          org.maproulette.session.SessionManager.hashToken(token),
+        org.maproulette.session.SessionManager.KEY_USER_ID   -> user.id.toString,
+        org.maproulette.session.SessionManager.KEY_USER_TICK -> System.currentTimeMillis().toString
+      )
     }
 
-    "answer API keys and web sessions with 403 mobile_only" taggedAs ChoiceTag in {
+    "answer web sessions with 403 mobile_only" taggedAs ChoiceTag in {
       val (task, _) = benchTask()
-      val key       = apiKey(defaultUser)
+      val session   = webSession(defaultUser)
       val submitted = route(
         application,
         FakeRequest(POST, s"/api/v2/task/${task.id}/choice")
-          .withHeaders("apiKey" -> key)
+          .withSession(session: _*)
           .withJsonBody(Json.obj("outcome" -> "too-hard"))
       ).get
       status(submitted) mustBe FORBIDDEN
@@ -817,7 +822,7 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
         )
         controller
           .addTasksToChallengeFromFile(target.id, lineByLine, false, None, true, report)
-          .apply(FakeRequest(PUT, "/").withHeaders("apiKey" -> apiKey(defaultUser)).withBody(body))
+          .apply(FakeRequest(PUT, "/").withSession(webSession(defaultUser): _*).withBody(body))
       }
       def featureLine(node: Long, work: Option[JsObject]) =
         Json.stringify(
