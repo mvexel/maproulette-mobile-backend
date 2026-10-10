@@ -28,7 +28,7 @@ case class ChoiceResultRow(
 /**
   * Campaign results for `GET /api/v2/mobile-admin/challenges/:id/results`: every task of a
   * challenge with its status, who completed it and when, its changeset, and from the latest done
-  * mobile choice submission the answers (evolution 133) and the applied tag changes.
+  * mobile choice submission the answers (evolution 134) and the applied tag changes.
   */
 @Singleton
 class ChoiceResultsRepository @Inject() (db: Database) {

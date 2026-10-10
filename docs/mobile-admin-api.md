@@ -95,7 +95,7 @@ best effort: if that insert fails, the error is logged and the response is uncha
 Campaign results, read-only. Every task of the challenge, ordered by task id, with its status,
 who completed it (`completed_by`, OSM name and id) and when (`mapped_on`), its changeset, the
 `choice_stale` reason if any, and from the task's latest done mobile choice submission the chosen
-answers (`{"<question id>": "<option id>"}`, stored since evolution 133; empty for outcomes and
+answers (`{"<question id>": "<option id>"}`, stored since evolution 134; empty for outcomes and
 older submissions) and the applied tag changes. `format` defaults to `csv`; anything other than
 `csv` or `geojson` is 400 `invalid_request`. An unknown challenge is 404 `not_found`.
 
