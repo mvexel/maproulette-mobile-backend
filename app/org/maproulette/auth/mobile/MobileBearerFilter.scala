@@ -79,24 +79,51 @@ object MobileReadRoutes {
 }
 
 /**
-  * Routes for guest access tokens (deferred sign-up), and only for them: the app discovery reads
-  * and the guest's own routes. No task writes, no identity endpoint, no admin routes.
+  * Routes for guest access tokens (deferred sign-up), and only for them: the app discovery reads,
+  * the choice check, pending answers and the guest's own routes. No task writes, no identity
+  * endpoint, no admin routes.
   */
 object MobileGuestRoutes {
-  def own(method: String, path: String): Boolean =
-    (method == "GET" && path == "/api/v2/mobile-guest/me") ||
-      (method == "DELETE" && path == "/api/v2/mobile-guest") || email(method, path)
+  private val pending = "/api/v2/task/[0-9]+/choice/pending"
+  private val list    = "/api/v2/mobile-guest/pending"
+
+  /** Routes that only guests reach. None of them writes OSM or a task status. */
+  def own(method: String, path: String): Boolean = method match {
+    case "GET"    => path == "/api/v2/mobile-guest/me" || path == list
+    case "POST"   => path.matches(pending)
+    case "DELETE" => path == "/api/v2/mobile-guest" || path.matches(pending)
+    case "PUT"    => email(method, path)
+    case _        => false
+  }
 
   /** Setting the claim email (B4): a JSON body, no query string. */
   def email(method: String, path: String): Boolean =
     method == "PUT" && path == "/api/v2/mobile-guest/email"
 
   def permits(method: String, path: String): Boolean =
-    own(method, path) || (MobileReadRoutes.permits(method, path) &&
-      !MobileReadRoutes.bare(method, path) && path != "/oauth/mobile/me")
+    own(method, path) || (MobileReadRoutes.permits(method, path) && path != "/oauth/mobile/me")
 
-  /** Guest routes that take no query string or body. */
-  def bare(method: String, path: String): Boolean = own(method, path) && !email(method, path)
+  /** The one guest route with a body: a pending answer, shaped like a choice submission. */
+  def takesBody(method: String, path: String): Boolean = method == "POST" && path.matches(pending)
+
+  /** Whether the request has the shape its guest route allows. */
+  def acceptable(request: RequestHeader): Boolean =
+    if (takesBody(request.method, request.path)) MobileWriteRoutes.acceptableBody(request)
+    else if (email(request.method, request.path)) request.rawQueryString.isEmpty
+    else if (request.method == "GET" && request.path == list)
+      !request.hasBody && request.queryString.forall {
+        case (key, values) => Set("limit", "after").contains(key) && values.size == 1
+      }
+    else if (own(request.method, request.path) || MobileReadRoutes.bare(
+               request.method,
+               request.path
+             ))
+      request.rawQueryString.isEmpty && !request.hasBody
+    else true
+
+  /** Allowed while field writes are off, for guest tokens only (checked after authentication). */
+  def guestOnlyWhenDisabled(method: String, path: String): Boolean =
+    MobileReadRoutes.bare(method, path)
 }
 
 /**
@@ -150,9 +177,10 @@ object MobileFieldRoutes {
   def permitsWhenDisabled(request: RequestHeader): Boolean = {
     // Challenge preparation is an admin action, not a mapper task or OSM edit.
     // The bearer filter below validates the grant and super-user before forwarding.
-    val adminSetup = request.headers
+    val bearer = request.headers
       .getAll("Authorization")
-      .exists(_.toLowerCase(java.util.Locale.ROOT).startsWith("bearer")) &&
+      .exists(_.toLowerCase(java.util.Locale.ROOT).startsWith("bearer"))
+    val adminSetup = bearer &&
       MobileAdminRoutes.permits(request.method, request.path, request.queryString) &&
       MobileAdminRoutes.stockWrite(request.method, request.path)
     adminSetup || (request.method match {
@@ -161,8 +189,10 @@ object MobileFieldRoutes {
         request.path == "/ping" ||
           Set("/oauth/mobile/authorize", "/oauth/mobile/callback", "/oauth/mobile/me")
             .contains(request.path) ||
-          // A guest's own status. Guests neither write OSM nor change task status.
+          // Guests neither write OSM nor change task status. The choice check is for guest
+          // tokens only while writes are off; the bearer filter refuses it to app grants.
           MobileGuestRoutes.own(request.method, request.path) ||
+          (bearer && MobileGuestRoutes.guestOnlyWhenDisabled(request.method, request.path)) ||
           discovery.contains(request.path) ||
           request.path.matches("/api/v2/task/[0-9]+/tags") ||
           (!request.path.matches("/api/v2/task/[0-9]+/choice/check") &&
@@ -175,8 +205,8 @@ object MobileFieldRoutes {
           "/oauth/mobile/revoke",
           "/oauth/mobile/guest",
           "/api/v2/mobile-admin/clients"
-        ).contains(request.path)
-      case "PATCH" => request.path.matches("/api/v2/mobile-admin/clients/[A-Za-z0-9._-]+")
+        ).contains(request.path) || MobileGuestRoutes.own(request.method, request.path)
+      case "PATCH"  => request.path.matches("/api/v2/mobile-admin/clients/[A-Za-z0-9._-]+")
       case "PUT" =>
         request.path == "/api/v2/mobile-admin/write-policy" ||
           MobileGuestRoutes.email(request.method, request.path)
@@ -282,12 +312,10 @@ class MobileBearerFilter @Inject() (
     val badShape =
       if (write && MobileWriteRoutes.takesBody(request.method, request.path))
         !MobileWriteRoutes.acceptableBody(request)
+      else if (guest && !write && !read) !MobileGuestRoutes.acceptable(request)
       else
-        (write || MobileReadRoutes.bare(request.method, request.path) ||
-        (guest && MobileGuestRoutes.bare(request.method, request.path))) &&
-        (request.rawQueryString.nonEmpty || request.hasBody) ||
-        (guest && MobileGuestRoutes.email(request.method, request.path) &&
-        request.rawQueryString.nonEmpty)
+        (write || MobileReadRoutes.bare(request.method, request.path)) &&
+        (request.rawQueryString.nonEmpty || request.hasBody)
     if (badShape) return denied(400, "invalid_request")
     oauth.authenticate(parts(1)).flatMap { grant =>
       // MobileOAuthService.authenticate has already checked the scopes against the client.
@@ -296,6 +324,9 @@ class MobileBearerFilter @Inject() (
           // Admin grants reach only admin routes; app grants never do.
           val adminGrant = MobileScopes.isAdmin(scopes)
           if (if (adminGrant) !admin else !write && !read) denied(403, "insufficient_scope")
+          else if (!adminGrant && settings.writeControlEnabled &&
+                   MobileGuestRoutes.guestOnlyWhenDisabled(request.method, request.path) &&
+                   !writePolicy.enabled) denied(403, "mobile_writes_disabled")
           else if (write && !scopes.contains(MobileScopes.Write)) denied(403, "insufficient_scope")
           else
             users.retrieve(value.userId).filter(_.id > 0) match {

@@ -9,6 +9,7 @@ import org.maproulette.auth.mobile.{MobileGuestRoutes, MobileOAuthSettings, Mobi
 import org.scalatest.BeforeAndAfterAll
 import org.scalatestplus.play.PlaySpec
 import play.api.Configuration
+import play.api.test.FakeRequest
 import play.api.test.Helpers._
 import scala.collection.mutable
 import scala.concurrent.Future
@@ -245,7 +246,8 @@ class GuestEmailSpec extends PlaySpec with BeforeAndAfterAll {
   "MobileGuestRoutes" should {
     "let a guest token reach the email route with a body" in {
       MobileGuestRoutes.permits("PUT", "/api/v2/mobile-guest/email") mustBe true
-      MobileGuestRoutes.bare("PUT", "/api/v2/mobile-guest/email") mustBe false
+      MobileGuestRoutes.acceptable(FakeRequest("PUT", "/api/v2/mobile-guest/email")) mustBe true
+      MobileGuestRoutes.acceptable(FakeRequest("PUT", "/api/v2/mobile-guest/email?x=1")) mustBe false
       MobileGuestRoutes.permits("POST", "/api/v2/mobile-guest/email") mustBe false
     }
   }

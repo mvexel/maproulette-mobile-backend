@@ -13,6 +13,9 @@ POST    /oauth/mobile/guest                                             @control
 GET     /api/v2/mobile-guest/me                                         @controllers.MobileGuestController.me
 DELETE  /api/v2/mobile-guest                                            @controllers.MobileGuestController.delete
 PUT     /api/v2/mobile-guest/email                                      @controllers.MobileGuestEmailController.setEmail
+GET     /api/v2/mobile-guest/pending                                    @org.maproulette.controllers.api.MobileChoicePendingController.list
+POST    /api/v2/task/:id/choice/pending                                 @org.maproulette.controllers.api.MobileChoicePendingController.submit(id:Long)
+DELETE  /api/v2/task/:id/choice/pending                                 @org.maproulette.controllers.api.MobileChoicePendingController.withdraw(id:Long)
 # Mobile admin API (fork): mobile:admin bearer grants of super-users only, see docs/mobile-admin-api.md
 GET     /api/v2/mobile-admin/clients                                    @controllers.MobileAdminController.listClients
 POST    /api/v2/mobile-admin/clients                                    @controllers.MobileAdminController.createClient

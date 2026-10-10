@@ -36,10 +36,10 @@ class MobileChoiceController @Inject() (
     Future.successful(respond(ChoiceResponse(403, Json.obj("error" -> "mobile_only"))))
 
   def check(taskId: Long): Action[AnyContent] = Action.async { request =>
-    request.attrs.get(MobileBearerIdentity.UserKey) match {
-      case None    => mobileOnly
-      case Some(_) => guarded(taskId)(service.check(taskId))
-    }
+    // App grants and, for pending answers, guest tokens.
+    if (request.attrs.get(MobileBearerIdentity.UserKey).isEmpty &&
+        request.attrs.get(MobileBearerIdentity.GuestKey).isEmpty) mobileOnly
+    else guarded(taskId)(service.check(taskId))
   }
 
   def submit(taskId: Long): Action[akka.util.ByteString] =
