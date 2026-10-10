@@ -163,16 +163,30 @@ class MobileBearerFilter @Inject() (
     users: UserService,
     admins: MobileAdminCheck,
     adminRepository: MobileAdminRepository,
-    writePolicy: MobileWritePolicy
+    writePolicy: MobileWritePolicy,
+    drafts: MobileDrafts
 )(implicit val mat: Materializer, ec: ExecutionContext)
     extends Filter {
   private val logger = play.api.Logger(getClass)
+
+  // Every challenge published: for tests that don't involve preview mode.
+  def this(
+      settings: MobileOAuthSettings,
+      oauth: MobileOAuthService,
+      users: UserService,
+      admins: MobileAdminCheck,
+      adminRepository: MobileAdminRepository,
+      writePolicy: MobileWritePolicy
+  )(
+      implicit mat: Materializer,
+      ec: ExecutionContext
+  ) = this(settings, oauth, users, admins, adminRepository, writePolicy, MobileDrafts.NoDrafts)
 
   // No admins and so no audit log: for tests of app grants only.
   def this(settings: MobileOAuthSettings, oauth: MobileOAuthService, users: UserService)(
       implicit mat: Materializer,
       ec: ExecutionContext
-  ) = this(settings, oauth, users, MobileAdminCheck.Nobody, null, null)
+  ) = this(settings, oauth, users, MobileAdminCheck.Nobody, null, null, MobileDrafts.NoDrafts)
 
   def this(
       settings: MobileOAuthSettings,
@@ -183,13 +197,34 @@ class MobileBearerFilter @Inject() (
   )(
       implicit mat: Materializer,
       ec: ExecutionContext
-  ) = this(settings, oauth, users, admins, adminRepository, null)
+  ) = this(settings, oauth, users, admins, adminRepository, null, MobileDrafts.NoDrafts)
 
   private def denied(status: Int, code: String): Future[Result] = Future.successful(
     Results
       .Status(status)(Json.obj("error" -> code))
       .withHeaders("Cache-Control" -> "no-store", "WWW-Authenticate" -> "Bearer")
   )
+
+  /**
+    * Preview mode: a draft challenge and its tasks read as unknown (404) except to users who may
+    * organize it, for now super-users only. Writes to a draft are refused for everyone.
+    */
+  private def draftGate(
+      user: User,
+      write: Boolean,
+      request: RequestHeader
+  ): Future[Option[Result]] =
+    MobileDraftRoutes.target(request.method, request.path) match {
+      case None => Future.successful(None)
+      case Some(target) =>
+        Future(drafts.draft(target)).flatMap {
+          case false => Future.successful(None)
+          case true if !admins.isAdmin(user) =>
+            Future.successful(Some(Results.NotFound.withHeaders("Cache-Control" -> "no-store")))
+          case true if write => denied(403, "challenge_draft").map(Some(_))
+          case true          => Future.successful(None)
+        }
+    }
 
   /**
     * Admin writes through stock routes: who, which route, and the outcome. Also recorded when the
@@ -259,16 +294,22 @@ class MobileBearerFilter @Inject() (
               case Some(user) if adminGrant && !admins.isAdmin(user) =>
                 denied(403, "admin_required")
               case Some(user) =>
-                val result = next(
-                  request
-                    .addAttr(MobileBearerIdentity.UserKey, user)
-                    .addAttr(MobileBearerIdentity.ScopesKey, scopes)
-                    .addAttr(MobileBearerIdentity.FamilyKey, value.familyId)
-                    .addAttr(MobileBearerIdentity.ClientKey, value.clientId)
-                )
-                if (adminGrant && MobileAdminRoutes.stockWrite(request.method, request.path))
-                  result.transformWith(outcome => auditStockWrite(user, request, outcome))
-                else result
+                val gate =
+                  if (adminGrant) Future.successful(None) else draftGate(user, write, request)
+                gate.flatMap {
+                  case Some(refusal) => Future.successful(refusal)
+                  case None =>
+                    val result = next(
+                      request
+                        .addAttr(MobileBearerIdentity.UserKey, user)
+                        .addAttr(MobileBearerIdentity.ScopesKey, scopes)
+                        .addAttr(MobileBearerIdentity.FamilyKey, value.familyId)
+                        .addAttr(MobileBearerIdentity.ClientKey, value.clientId)
+                    )
+                    if (adminGrant && MobileAdminRoutes.stockWrite(request.method, request.path))
+                      result.transformWith(outcome => auditStockWrite(user, request, outcome))
+                    else result
+                }
               case None => denied(401, "invalid_token")
             }
         case None => denied(401, "invalid_token")

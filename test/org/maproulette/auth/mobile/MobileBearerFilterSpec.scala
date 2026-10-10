@@ -466,4 +466,73 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
       status(filter.apply(next)(request)) mustBe UNAUTHORIZED
     }
   }
+
+  "Mobile preview mode" should {
+    // Challenge 7 and task 70 are a draft; everything else is published.
+    val drafts = new MobileDrafts {
+      def draft(target: MobileDraftRoutes.Target): Boolean = target match {
+        case MobileDraftRoutes.Challenge(id) => id == 7
+        case MobileDraftRoutes.Task(id)      => id == 70
+      }
+    }
+    def draftFilter(superUser: Boolean) = {
+      val oauth = mock[MobileOAuthService]
+      val users = mock[UserService]
+      when(oauth.authenticate(token)).thenReturn(Future.successful(Some(writeGrant)))
+      when(users.retrieve(123)).thenReturn(Some(user))
+      val admins = new MobileAdminCheck {
+        def isAdmin(u: User): Boolean  = superUser
+        def isAdmin(id: Long): Boolean = superUser
+      }
+      new MobileBearerFilter(settings(true), oauth, users, admins, null, null, drafts)
+    }
+    val draftReads = Seq(
+      "/api/v2/challenge/7",
+      "/api/v2/challenge/7/tags",
+      "/api/v2/challenge/7/tasks",
+      "/api/v2/task/70",
+      "/api/v2/task/70/choice/check"
+    )
+    val draftWrites = Seq(
+      GET  -> "/api/v2/task/70/start",
+      POST -> "/api/v2/task/70/skip",
+      PUT  -> "/api/v2/task/70/1",
+      PUT  -> "/api/v2/task/70/6"
+    )
+
+    "answer 404 for a draft's challenge and tasks to everyone but super-users" in {
+      val filter = draftFilter(superUser = false)
+      (draftReads.map(GET -> _) ++ draftWrites).foreach {
+        case (method, path) =>
+          val result = filter.apply(next)(bearer(method, path))
+          status(result) mustBe NOT_FOUND
+          contentAsString(result) mustBe ""
+      }
+      contentAsString(filter.apply(next)(bearer(GET, "/api/v2/challenge/8"))) mustBe "123"
+      contentAsString(filter.apply(next)(bearer(GET, "/api/v2/task/71"))) mustBe "123"
+      contentAsString(filter.apply(next)(bearer(GET, "/api/v2/task/71/start"))) mustBe "123"
+    }
+
+    "let super-users read a draft but refuse their writes to it" in {
+      val filter = draftFilter(superUser = true)
+      draftReads.foreach { path =>
+        contentAsString(filter.apply(next)(bearer(GET, path))) mustBe "123"
+      }
+      draftWrites.foreach {
+        case (method, path) =>
+          val result = filter.apply(next)(bearer(method, path))
+          status(result) mustBe FORBIDDEN
+          contentAsJson(result) mustBe play.api.libs.json.Json.obj("error" -> "challenge_draft")
+      }
+      val submit = bearer(POST, "/api/v2/task/70/choice")
+        .withHeaders("Content-Type" -> "application/json", "Content-Length" -> "2")
+      status(filter.apply(next)(submit)) mustBe FORBIDDEN
+    }
+
+    "leave release open so a lock taken before the challenge was disabled can be dropped" in {
+      contentAsString(
+        draftFilter(superUser = false).apply(next)(bearer(GET, "/api/v2/task/70/release"))
+      ) mustBe "123"
+    }
+  }
 }
