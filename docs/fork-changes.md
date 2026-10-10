@@ -122,7 +122,7 @@ Off by default (`mobileOAuth.guests.enabled`). See [mobile-oauth.md](mobile-oaut
 | What | Where |
 | --- | --- |
 | Client scope `guest` (`MobileScopes.parseClient`); grant scopes never include it | `app/org/maproulette/auth/mobile/MobileOAuthSettings.scala` (`MobileScopes`, `guestsEnabled`), `MobileClientRegistry.scala`, `app/controllers/MobileAdminController.scala` |
-| Tables `mobile_guests`, `mobile_guest_tokens`, `mobile_guest_claim_tokens` | `conf/evolutions/default/133.sql` |
+| Tables `mobile_guests`, `mobile_guest_tokens`, `mobile_guest_claim_tokens` | `conf/evolutions/default/135.sql` |
 | Guest storage: create, mint and authenticate guest tokens, delete with tombstone | `app/org/maproulette/auth/mobile/guest/MobileGuestRepository.scala` |
 
 ### Discovery filters

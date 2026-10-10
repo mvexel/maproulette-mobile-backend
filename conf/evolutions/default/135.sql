@@ -3,7 +3,7 @@
 # --- !Ups
 
 -- Mobile guests (fork only, deferred sign-up). Additive: three new tables, nothing existing is
--- changed. A guest answers choice tasks before having an OSM account; it is not a users row
+-- changed. A guest answers choice tasks before having an OSM account and is not a users row
 -- (users.osm_id is NOT NULL). See docs/mobile-oauth.md "Guests".
 
 -- Credentials are SHA-256 hex digests, as in evolution 129. secret_hash is NULL once the guest
