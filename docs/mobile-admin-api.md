@@ -90,6 +90,23 @@ best effort: if that insert fails, the error is logged and the response is uncha
 `200 {"items": [{"id", "actorUserId", "action", "target", "before", "after", "createdAt"}],
 "page", "limit", "total"}`, newest first. `limit` is 1 to 200; `page` starts at 0.
 
+### `GET /api/v2/mobile-admin/challenges/:id/results?format=csv|geojson`
+
+Campaign results, read-only. Every task of the challenge, ordered by task id, with its status,
+who completed it (`completed_by`, OSM name and id) and when (`mapped_on`), its changeset, the
+`choice_stale` reason if any, and from the task's latest done mobile choice submission the chosen
+answers (`{"<question id>": "<option id>"}`, stored since evolution 133; empty for outcomes and
+older submissions) and the applied tag changes. `format` defaults to `csv`; anything other than
+`csv` or `geojson` is 400 `invalid_request`. An unknown challenge is 404 `not_found`.
+
+- `csv`: `text/csv`, CRLF lines, one `answer:<question id>` column per question answered anywhere
+  in the challenge. `tags_set` is `key=value;…`, `tags_unset` is `key;…`. Text cells that start
+  with `= + - @` get a leading `'` so spreadsheets don't run them.
+- `geojson`: `application/geo+json`, a FeatureCollection of task points with the same fields as
+  properties (`answers` and `tagsSet` as objects).
+
+Both carry `Content-Disposition: attachment; filename="challenge-<id>-results.<format>"`.
+
 ## Field write policy
 
 On deployments using `conf/mobile-field.conf`,
