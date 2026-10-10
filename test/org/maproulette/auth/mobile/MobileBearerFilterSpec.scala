@@ -143,14 +143,18 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
     "allow only bearer admin challenge setup through the disabled policy gate" in {
       Seq(
         POST -> "/api/v2/challenge",
-        PUT -> "/api/v2/challenge/123",
-        PUT -> "/api/v2/challenge/123/addFileTasks?lineByLine=true&report=true"
-      ).foreach { case (method, path) =>
-        MobileFieldRoutes.permitsWhenDisabled(bearer(method, path)) mustBe true
-        MobileFieldRoutes.permitsWhenDisabled(FakeRequest(method, path)) mustBe false
+        PUT  -> "/api/v2/challenge/123",
+        PUT  -> "/api/v2/challenge/123/addFileTasks?lineByLine=true&report=true"
+      ).foreach {
+        case (method, path) =>
+          MobileFieldRoutes.permitsWhenDisabled(bearer(method, path)) mustBe true
+          MobileFieldRoutes.permitsWhenDisabled(FakeRequest(method, path)) mustBe false
       }
       MobileFieldRoutes.permitsWhenDisabled(
-        bearer(PUT, "/api/v2/challenge/123/addFileTasks?lineByLine=true&report=true&removeUnmatched=true")
+        bearer(
+          PUT,
+          "/api/v2/challenge/123/addFileTasks?lineByLine=true&report=true&removeUnmatched=true"
+        )
       ) mustBe false
       MobileFieldRoutes.permitsWhenDisabled(bearer(POST, "/api/v2/task/123/choice")) mustBe false
     }

@@ -126,7 +126,8 @@ object MobileFieldRoutes {
   def permitsWhenDisabled(request: RequestHeader): Boolean = {
     // Challenge preparation is an admin action, not a mapper task or OSM edit.
     // The bearer filter below validates the grant and super-user before forwarding.
-    val adminSetup = request.headers.getAll("Authorization")
+    val adminSetup = request.headers
+      .getAll("Authorization")
       .exists(_.toLowerCase(java.util.Locale.ROOT).startsWith("bearer")) &&
       MobileAdminRoutes.permits(request.method, request.path, request.queryString) &&
       MobileAdminRoutes.stockWrite(request.method, request.path)
