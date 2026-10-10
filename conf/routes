@@ -14,6 +14,8 @@ GET     /api/v2/mobile-guest/me                                         @control
 DELETE  /api/v2/mobile-guest                                            @controllers.MobileGuestController.delete
 PUT     /api/v2/mobile-guest/email                                      @controllers.MobileGuestEmailController.setEmail
 PUT     /api/v2/mobile-guest/reminders                                  @controllers.MobileGuestTokenController.reminders
+POST    /api/v2/mobile-claim                                            @controllers.MobileClaimController.claim
+GET     /api/v2/mobile-claim/:id                                        @controllers.MobileClaimController.status(id:Long)
 POST    /api/v2/mobile-claim/preview                                    @controllers.MobileGuestTokenController.preview
 POST    /api/v2/mobile-claim/delete                                     @controllers.MobileGuestTokenController.delete
 POST    /api/v2/mobile-claim/stop-reminders                             @controllers.MobileGuestTokenController.stopReminders
