@@ -38,6 +38,19 @@ case class StatusOnly(status: Int) extends ChoicePlan
 /** An idempotency row of mobile_choice_submissions. */
 case class SubmissionRow(state: String, changesetId: Option[Long], result: Option[JsObject])
 
+/**
+  * A submission body that parsed and resolved against its task's payload. `body` is the canonical
+  * JSON form, `canonical` the idempotency text and `payloadDigest` the SHA-256 of the payload.
+  */
+case class ValidatedSubmission(
+    task: Task,
+    work: ChoiceWork,
+    payloadDigest: String,
+    body: JsObject,
+    canonical: String,
+    plan: ChoicePlan
+)
+
 /** Why an element no longer matches its payload; `detail` is for diagnostics only. */
 case class Staleness(reason: String, detail: JsArray, version: Option[Long])
 
@@ -211,9 +224,12 @@ class MobileChoiceService @Inject() (
                         )
                       (ChoiceResponse(200, body), markStale(taskId, stale))
                     case Right(found) =>
-                      val liveQuestions = if (work.liveMissingQuestions)
-                        Json.obj("questionIds" -> work.questions.filter(_.holds(found.tags)).map(_.id))
-                      else Json.obj()
+                      val liveQuestions =
+                        if (work.liveMissingQuestions)
+                          Json.obj(
+                            "questionIds" -> work.questions.filter(_.holds(found.tags)).map(_.id)
+                          )
+                        else Json.obj()
                       (
                         ChoiceResponse(
                           200,
@@ -246,13 +262,19 @@ class MobileChoiceService @Inject() (
 
   // ---- submission parsing -------------------------------------------------------------------
 
-  private sealed trait Submission { def canonical: String }
+  private sealed trait Submission { def canonical: String; def json: JsObject }
   private case class Answers(byQuestion: Map[String, String]) extends Submission {
     def canonical: String =
       "answers:" + byQuestion.toSeq.sortBy(_._1).map { case (q, o) => s"$q=$o" }.mkString(",")
+    def json: JsObject =
+      Json.obj("answers" -> JsObject(byQuestion.toSeq.sortBy(_._1).map {
+        case (q, o) => q -> JsString(o)
+      }))
   }
   private case class Outcome(id: String, delete: Option[Boolean]) extends Submission {
     def canonical: String = s"outcome:$id:delete=${delete.contains(true)}"
+    def json: JsObject =
+      Json.obj("outcome" -> id) ++ delete.fold(Json.obj())(flag => Json.obj("delete" -> flag))
   }
 
   /** Strict: one form only, no unknown or duplicate keys, ids re-checked, at most 8 answers. */
@@ -417,6 +439,33 @@ class MobileChoiceService @Inject() (
           }
       }
 
+  /**
+    * Parses a submission body and resolves it against the task's payload, without reading OSM or
+    * writing anything. The same checks, in the same order, as the start of [[submit]].
+    */
+  def validateSubmission(taskId: Long, body: String): Either[ChoiceResponse, ValidatedSubmission] =
+    parse(body) match {
+      case None => Left(error(400, "invalid_request"))
+      case Some(submission) =>
+        load(taskId).flatMap {
+          case (task, work, payload) =>
+            resolve(work, submission) match {
+              case Left(detail) => Left(error(422, "invalid_submission", "detail" -> detail))
+              case Right(plan) =>
+                Right(
+                  ValidatedSubmission(
+                    task,
+                    work,
+                    payload,
+                    submission.json,
+                    submission.canonical,
+                    plan
+                  )
+                )
+            }
+        }
+    }
+
   // ---- submit -------------------------------------------------------------------------------
 
   /** POST /task/:id/choice. The filter has already authenticated a mobile tasks:write grant. */
@@ -427,24 +476,17 @@ class MobileChoiceService @Inject() (
       familyId: String,
       body: String
   ): Future[ChoiceResponse] =
-    parse(body) match {
-      case None => done(error(400, "invalid_request"))
-      case Some(submission) =>
-        load(taskId) match {
-          case Left(response) => done(response)
-          case Right((task, work, payload)) =>
-            resolve(work, submission) match {
-              case Left(detail) => done(error(422, "invalid_submission", "detail" -> detail))
-              case Right(plan) =>
-                val edits = !plan.isInstanceOf[StatusOnly]
-                if (edits && !scopes.contains(MobileScopes.TagFix))
-                  done(error(403, "insufficient_scope", "scope" -> MobileScopes.TagFix))
-                else {
-                  // The payload is part of the key: a re-uploaded task is a new submission.
-                  val key = digest(s"${task.id}\n${user.id}\n$payload\n${submission.canonical}")
-                  run(task, work, plan, user, familyId, key)
-                }
-            }
+    validateSubmission(taskId, body) match {
+      case Left(response) => done(response)
+      case Right(valid) =>
+        val edits = !valid.plan.isInstanceOf[StatusOnly]
+        if (edits && !scopes.contains(MobileScopes.TagFix))
+          done(error(403, "insufficient_scope", "scope" -> MobileScopes.TagFix))
+        else {
+          // The payload is part of the key: a re-uploaded task is a new submission.
+          val key =
+            digest(s"${valid.task.id}\n${user.id}\n${valid.payloadDigest}\n${valid.canonical}")
+          run(valid.task, valid.work, valid.plan, user, familyId, key)
         }
     }
 
@@ -609,9 +651,9 @@ class MobileChoiceService @Inject() (
         staleness(work, observation.read) match {
           case Left(found) => Left(stale(found))
           case Right(found) if work.liveMissingQuestions && (plan match {
-              case edit: EditTags => !edit.answers.forall(_._1.holds(found.tags))
-              case _              => false
-            }) =>
+                case edit: EditTags => !edit.answers.forall(_._1.holds(found.tags))
+                case _              => false
+              }) =>
             Left(changedAnswer())
           case Right(_) if plan == DeleteNode && observation.inUse.contains(true) =>
             Left(error(409, "element_in_use"))
