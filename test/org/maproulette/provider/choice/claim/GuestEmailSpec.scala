@@ -98,7 +98,7 @@ class GuestEmailSpec extends PlaySpec with BeforeAndAfterAll {
     val store  = new MemoryGuestEmailStore
     val cipher = new GuestEmailCipher(oauthSettings(withKey))
     val summaries = new GuestSummaries {
-      def summary(guest: UUID): Option[GuestSummary] = saved
+      def summary(guest: UUID, states: Set[String]): Option[GuestSummary] = saved
     }
     Fixture(
       new GuestEmailService(store, summaries, cipher, mailer, mailSettings, system),

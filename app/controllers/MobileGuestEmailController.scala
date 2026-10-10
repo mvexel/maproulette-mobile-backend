@@ -59,3 +59,70 @@ class MobileGuestEmailController @Inject() (
       }
   }
 }
+
+/**
+  * The routes behind the emailed links (deferred sign-up B4, API plan §3.10), and the app's
+  * reminder switch. The token routes take no credential and answer 404 for an unknown or
+  * superseded token, so token existence isn't disclosed.
+  */
+class MobileGuestTokenController @Inject() (
+    components: ControllerComponents,
+    guests: MobileGuestAuth,
+    tokens: org.maproulette.provider.choice.claim.GuestTokenService
+)(implicit ec: ExecutionContext)
+    extends AbstractController(components) {
+  private val logger = play.api.Logger(getClass)
+
+  private def handled(operation: => Future[Result]): Future[Result] =
+    if (!guests.enabled) Future.successful(NotFound)
+    else
+      (try operation
+      catch { case NonFatal(e) => Future.failed(e) })
+        .recover {
+          case NonFatal(e) =>
+            logger.error(s"Guest token request failed: ${e.getClass.getSimpleName}")
+            InternalServerError(Json.obj("error" -> "server_error"))
+        }
+        .map(_.withHeaders(CACHE_CONTROL -> "no-store", PRAGMA -> "no-cache"))
+
+  private def withToken(request: Request[JsValue])(operation: String => Future[Result]) =
+    handled {
+      (request.body \ "claimToken").asOpt[String] match {
+        case Some(token) if !request.headers.hasHeader(AUTHORIZATION) => operation(token)
+        case _                                                        => Future.successful(BadRequest(Json.obj("error" -> "invalid_request")))
+      }
+    }
+
+  private val notFound = NotFound(Json.obj("error" -> "not_found"))
+
+  /** `POST /api/v2/mobile-claim/delete`, `{"claimToken"}`: same effect as `DELETE /api/v2/mobile-guest`. */
+  def delete: Action[JsValue] = Action.async(parse.tolerantJson(maxLength = 1024)) { request =>
+    withToken(request) { token =>
+      tokens.delete(token).map {
+        case None             => notFound
+        case Some(Left(code)) => Conflict(Json.obj("error" -> code))
+        case Some(Right(_))   => NoContent
+      }
+    }
+  }
+
+  /** `POST /api/v2/mobile-claim/stop-reminders`, `{"claimToken"}`. Deletes nothing. */
+  def stopReminders: Action[JsValue] = Action.async(parse.tolerantJson(maxLength = 1024)) {
+    request =>
+      withToken(request) { token =>
+        tokens.stopReminders(token).map(if (_) NoContent else notFound)
+      }
+  }
+
+  /** `PUT /api/v2/mobile-guest/reminders`, guest bearer, `{"enabled": false}`. */
+  def reminders: Action[JsValue] = Action.async(parse.tolerantJson(maxLength = 512)) { request =>
+    handled {
+      (request.attrs.get(MobileBearerIdentity.GuestKey), (request.body \ "enabled").asOpt[Boolean]) match {
+        case (None, _) => Future.successful(Unauthorized(Json.obj("error" -> "invalid_token")))
+        case (Some(guest), Some(enabled)) =>
+          tokens.setReminders(guest.id, enabled).map(_ => NoContent)
+        case _ => Future.successful(BadRequest(Json.obj("error" -> "invalid_request")))
+      }
+    }
+  }
+}

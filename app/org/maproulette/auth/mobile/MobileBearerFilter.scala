@@ -96,9 +96,14 @@ object MobileGuestRoutes {
     case _        => false
   }
 
-  /** Setting the claim email (B4): a JSON body, no query string. */
+  /** Setting the claim email or the reminder switch (B4): a JSON body, no query string. */
   def email(method: String, path: String): Boolean =
-    method == "PUT" && path == "/api/v2/mobile-guest/email"
+    method == "PUT" && (path == "/api/v2/mobile-guest/email" || path == "/api/v2/mobile-guest/reminders")
+
+  /** The emailed links' routes (B4): a claim token in a JSON body, no credential. */
+  def claimToken(method: String, path: String): Boolean =
+    method == "POST" && (path == "/api/v2/mobile-claim/delete" ||
+      path == "/api/v2/mobile-claim/stop-reminders")
 
   def permits(method: String, path: String): Boolean =
     own(method, path) || (MobileReadRoutes.permits(method, path) && path != "/oauth/mobile/me")
@@ -205,8 +210,9 @@ object MobileFieldRoutes {
           "/oauth/mobile/revoke",
           "/oauth/mobile/guest",
           "/api/v2/mobile-admin/clients"
-        ).contains(request.path) || MobileGuestRoutes.own(request.method, request.path)
-      case "PATCH"  => request.path.matches("/api/v2/mobile-admin/clients/[A-Za-z0-9._-]+")
+        ).contains(request.path) || MobileGuestRoutes.own(request.method, request.path) ||
+          MobileGuestRoutes.claimToken(request.method, request.path)
+      case "PATCH" => request.path.matches("/api/v2/mobile-admin/clients/[A-Za-z0-9._-]+")
       case "PUT" =>
         request.path == "/api/v2/mobile-admin/write-policy" ||
           MobileGuestRoutes.email(request.method, request.path)

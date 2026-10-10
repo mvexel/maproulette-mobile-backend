@@ -304,6 +304,9 @@ Step B4, the claim email:
 | Endpoint | Purpose |
 | --- | --- |
 | `PUT /api/v2/mobile-guest/email` | Guest bearer, JSON `{"email"}` (≤ 254 characters, one `@`, no spaces), no query string. Stores the address AES-256-GCM sealed under `osmTokenKey` with the guest id as associated data, creates a claim token (kept only as a digest) and sends the link email. Can be called again to correct the address; each call sends a new link. `200` with the `GET /api/v2/mobile-guest/me` body (`"email": "pending"`). `400 invalid_request`, `409 guest_claimed`, `409 nothing_saved` (no pending answers yet; the app asks after the first saved stop), `429 email_rate_limited` (3 sends per guest per 24 h), `503 mail_unavailable` (no mail provider or token key, or the provider refused). |
+| `PUT /api/v2/mobile-guest/reminders` | Guest bearer, JSON `{"enabled": false}` (or `true` to resume), no query string. Sets or clears `reminders_stopped_at`; deletes nothing. `204`. |
+| `POST /api/v2/mobile-claim/delete` | No credential (a request with `Authorization` is refused), JSON `{"claimToken"}` from a `/claim/delete#t=` link. Same effect as `DELETE /api/v2/mobile-guest`. `204`, `400 invalid_request`, `404 not_found` (unknown token, or not among the guest's three newest), `409 guest_claimed` (account deletion is MapRoulette's process). Allowed while field writes are off. |
+| `POST /api/v2/mobile-claim/stop-reminders` | No credential, JSON `{"claimToken"}` from a `/claim/stop-reminders#t=` link. Stops reminders. `204`, `400 invalid_request`, `404 not_found`. Allowed while field writes are off. |
 
 Mail settings live under `mobileOAuth.guests.mail`: `provider` (`MR_GUEST_MAIL_PROVIDER`: `none`
 by default, `log` for development, which logs only the template name, or `postmark`),
@@ -313,6 +316,22 @@ by default, `log` for development, which logs only the template name, or `postma
 (`<claimOrigin>/claim#t=<token>`, `/claim/delete#t=`, `/claim/stop-reminders#t=`) so it never
 reaches web server logs. Postmark open and link tracking are off. The templates are copies of the
 project's brand/email set in `conf/mobile-email/`.
+
+An hourly job (`GuestJobService`, started by `GuestJobModule` only while guests are enabled) sends
+the other emails and enforces retention:
+
+- **Reminders.** The first a day after the first link email, the second in the last five days before
+  `expires_at` (a guest who gives an address late gets only the second, and none in its first day).
+  Each at most once (`reminded_1_at`, `reminded_2_at`, set before sending and cleared again if the
+  provider refuses), never after "stop reminders", and only while answers are pending. Each
+  reminder carries a new claim token, so it counts toward the three-per-day send limit and toward
+  the guest's three valid links.
+- **Expiry.** For an unclaimed guest past `expires_at`: pending answers become `expired`, guest
+  access tokens are deleted, the expiry notice is sent, then the address is deleted. A refused
+  notice is retried hourly for a day, then the address is deleted anyway. Claim tokens stay, so an
+  old link can say "expired".
+- **Purge.** Thirty days after `expires_at` the unclaimed guest row is deleted with its tokens;
+  its expired answers stay with `guest_id` NULL for campaign statistics.
 
 ## Account identity
 
