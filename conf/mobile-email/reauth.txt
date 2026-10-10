@@ -1,0 +1,15 @@
+Hi,
+
+We started putting your answers from {{campaignName}} on the map, but OpenStreetMap needs you to sign in again before we can finish.
+
+Your answers are safe, and nothing will be added twice.
+
+Sign in to finish:
+{{claimUrl}}
+
+It takes about a minute on a computer. The link works until {{deadline}}.
+
+--
+Street Tally, for {{campaignName}}
+Delete my data: {{deleteUrl}}
+Privacy: {{privacyUrl}}

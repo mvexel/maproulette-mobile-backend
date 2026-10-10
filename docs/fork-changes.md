@@ -127,6 +127,7 @@ Off by default (`mobileOAuth.guests.enabled`). See [mobile-oauth.md](mobile-oaut
 | Guest registration (per-IP limit), guest token grant, guest authentication | `app/org/maproulette/auth/mobile/guest/MobileGuestService.scala`, `app/controllers/MobileGuestController.scala`, `MobileOAuthController.token` (`guestToken`) |
 | Routes `POST /oauth/mobile/guest`, `GET /api/v2/mobile-guest/me`, `DELETE /api/v2/mobile-guest` | `conf/routes` |
 | Guest bearer branch and `MobileGuestRoutes`; `GuestKey` instead of `UserKey`; field-gate entries | `app/org/maproulette/auth/mobile/MobileBearerFilter.scala` |
+| Claim email (B4): `PUT /api/v2/mobile-guest/email`, sealed address, claim tokens, rate limit, pluggable mail provider (Postmark, log, none) and templates | `app/org/maproulette/provider/choice/claim/` (`ClaimMail.scala`, `GuestEmail.scala`), `app/controllers/MobileGuestEmailController.scala`, `conf/mobile-email/`, `conf/application.conf` (`mobileOAuth.guests.mail`), `conf/routes`, `MobileGuestRoutes.email` |
 
 ### Discovery filters
 
