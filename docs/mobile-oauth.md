@@ -260,7 +260,7 @@ So far (step B1):
 - Scope `guest` is a **client** capability, never part of a grant: an app client's `scopes` may add
   `"guest"` (`["tasks:read", "tasks:write", "osm:tagfix", "guest"]`); admin clients may not.
   `/oauth/mobile/authorize` and refresh still reject `guest` as `invalid_scope`.
-- Evolution 133 adds `mobile_guests`, `mobile_guest_tokens` and `mobile_guest_claim_tokens`. A
+- Evolution 135 adds `mobile_guests`, `mobile_guest_tokens` and `mobile_guest_claim_tokens`. A
   guest is never a `users` row. Secrets and tokens are stored as SHA-256 digests; "delete my data"
   clears the secret, email and tokens and leaves a tombstone.
 

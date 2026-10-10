@@ -38,7 +38,7 @@ class MobileGuestRepositorySpec extends PlaySpec {
         SQL("CREATE TABLE users(id bigint PRIMARY KEY)").execute()
         SQL("INSERT INTO users VALUES(1)").executeUpdate()
         SQL("CREATE TABLE tasks(id bigint PRIMARY KEY)").execute()
-        Seq("129", "130", "131", "133").foreach { version =>
+        Seq("129", "130", "131", "135").foreach { version =>
           val evolution = new String(
             Files.readAllBytes(Paths.get(s"conf/evolutions/default/$version.sql")),
             "UTF-8"
