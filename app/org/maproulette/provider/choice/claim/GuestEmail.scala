@@ -192,7 +192,6 @@ class GuestEmailService @Inject() (
   /** Values every email shares; links only where the email carries a claim token. */
   def values(expiresAt: Instant, summary: GuestSummary): Map[String, String] = Map(
     "campaignName"     -> summary.campaignName,
-    // " with Salt Lake Riders", or empty so the sentence still reads without an organizer.
     "withOrganizer"    -> summary.organizerName.fold("")(name => s" with $name"),
     "eventDate"        -> long.format(summary.firstAnswerAt.atZone(zone)),
     "firstAnswerDate"  -> short.format(summary.firstAnswerAt.atZone(zone)),
