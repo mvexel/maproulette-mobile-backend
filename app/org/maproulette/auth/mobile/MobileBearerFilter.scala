@@ -126,7 +126,8 @@ object MobileFieldRoutes {
   def permitsWhenDisabled(request: RequestHeader): Boolean = {
     // Challenge preparation is an admin action, not a mapper task or OSM edit.
     // The bearer filter below validates the grant and super-user before forwarding.
-    val adminSetup = request.headers.getAll("Authorization")
+    val adminSetup = request.headers
+      .getAll("Authorization")
       .exists(_.toLowerCase(java.util.Locale.ROOT).startsWith("bearer")) &&
       MobileAdminRoutes.permits(request.method, request.path, request.queryString) &&
       MobileAdminRoutes.stockWrite(request.method, request.path)
@@ -221,8 +222,12 @@ class MobileBearerFilter @Inject() (
     val authorizations = request.headers.getAll("Authorization")
     val mobile         = authorizations.exists(_.toLowerCase(java.util.Locale.ROOT).startsWith("bearer"))
     if (!settings.enabled || !mobile) return next(request)
-    if (authorizations.size != 1 || request.headers.get(SessionManager.KEY_API).isDefined ||
-        request.session.get(SessionManager.KEY_TOKEN).isDefined) return denied(401, "invalid_token")
+    // Upstream no longer honours the legacy apiKey header; a bearer request carrying it, or a web
+    // session, is still ambiguous and refused.
+    if (authorizations.size != 1 || request.headers.get("apiKey").isDefined ||
+        request.session.get(SessionManager.KEY_TOKEN_HASH).isDefined ||
+        request.session.get(SessionManager.KEY_USER_ID).isDefined)
+      return denied(401, "invalid_token")
     val parts = authorizations.head.split(" ", -1)
     if (parts.length != 2 || !parts(0).equalsIgnoreCase("Bearer") ||
         !parts(1).matches("[A-Za-z0-9_-]{32,256}")) return denied(401, "invalid_token")
