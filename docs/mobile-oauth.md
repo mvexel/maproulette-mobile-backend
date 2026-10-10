@@ -165,6 +165,13 @@ Without `adminOrigin`, admin paths, token and revoke get no CORS at all. The val
 `https://host[:port]` in lowercase (or `http://` on loopback with `allowInsecureLoopback`);
 anything else stops startup.
 
+With guests enabled, the claim page's origin (`mobileOAuth.guests.mail.claimOrigin`,
+`MR_CLAIM_ORIGIN`, default `https://streettally.osm.lol`, same format rules) gets the same
+credential-free answer on what the claim page calls: `POST` on `/oauth/mobile/token`,
+`/oauth/mobile/revoke`, `/api/v2/mobile-claim`, `/api/v2/mobile-claim/preview`, `/delete` and
+`/stop-reminders`, and `GET` on `/oauth/mobile/me` and `/api/v2/mobile-claim/<id>`. Nothing else.
+`/api/v2/mobile-claim...` answers no other origin.
+
 ## Choice tasks (`osm:tagfix`)
 
 A choice task has `cooperativeWork.meta = {"version": 2, "type": 3, "choiceVersion": 1}`: one OSM
@@ -305,6 +312,7 @@ Step B4, the claim email:
 | --- | --- |
 | `PUT /api/v2/mobile-guest/email` | Guest bearer, JSON `{"email"}` (≤ 254 characters, one `@`, no spaces), no query string. Stores the address AES-256-GCM sealed under `osmTokenKey` with the guest id as associated data, creates a claim token (kept only as a digest) and sends the link email. Can be called again to correct the address; each call sends a new link. `200` with the `GET /api/v2/mobile-guest/me` body (`"email": "pending"`). `400 invalid_request`, `409 guest_claimed`, `409 nothing_saved` (no pending answers yet; the app asks after the first saved stop), `429 email_rate_limited` (3 sends per guest per 24 h), `503 mail_unavailable` (no mail provider or token key, or the provider refused). |
 | `PUT /api/v2/mobile-guest/reminders` | Guest bearer, JSON `{"enabled": false}` (or `true` to resume), no query string. Sets or clears `reminders_stopped_at`; deletes nothing. `204`. |
+| `POST /api/v2/mobile-claim/preview` | No credential, JSON `{"claimToken"}` from a `/claim#t=` link. Read only; does not consume the token. `404 not_found` for an unknown token or one not among the guest's three newest. Otherwise `{"state": "active\|claimed\|expired\|deleted", "expiresAt"}`, and for `active` also `pending`, `challenges` (`id`, `name`, `pending`, `hashtag` from the check-in comment, `wikiUrl` from the info link if https), `tasks` (`taskId`, `challengeId`, `label`, `lat`, `lon`, `answeredAt`, `answers` with `prompt` and `answer` labels), `summary` (per challenge and question: `label`, `options`, and `counts` for every option) and `writesEnabled` (false while task writes or the field write switch are off; the page then says publishing is paused). Allowed while field writes are off. |
 | `POST /api/v2/mobile-claim/delete` | No credential (a request with `Authorization` is refused), JSON `{"claimToken"}` from a `/claim/delete#t=` link. Same effect as `DELETE /api/v2/mobile-guest`. `204`, `400 invalid_request`, `404 not_found` (unknown token, or not among the guest's three newest), `409 guest_claimed` (account deletion is MapRoulette's process). Allowed while field writes are off. |
 | `POST /api/v2/mobile-claim/stop-reminders` | No credential, JSON `{"claimToken"}` from a `/claim/stop-reminders#t=` link. Stops reminders. `204`, `400 invalid_request`, `404 not_found`. Allowed while field writes are off. |
 

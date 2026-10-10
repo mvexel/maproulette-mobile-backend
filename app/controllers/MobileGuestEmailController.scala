@@ -68,7 +68,8 @@ class MobileGuestEmailController @Inject() (
 class MobileGuestTokenController @Inject() (
     components: ControllerComponents,
     guests: MobileGuestAuth,
-    tokens: org.maproulette.provider.choice.claim.GuestTokenService
+    tokens: org.maproulette.provider.choice.claim.GuestTokenService,
+    previews: org.maproulette.provider.choice.claim.ClaimPreviewService
 )(implicit ec: ExecutionContext)
     extends AbstractController(components) {
   private val logger = play.api.Logger(getClass)
@@ -94,6 +95,13 @@ class MobileGuestTokenController @Inject() (
     }
 
   private val notFound = NotFound(Json.obj("error" -> "not_found"))
+
+  /** `POST /api/v2/mobile-claim/preview`, `{"claimToken"}`: what the claim page shows. Read only. */
+  def preview: Action[JsValue] = Action.async(parse.tolerantJson(maxLength = 1024)) { request =>
+    withToken(request) { token =>
+      previews.preview(token).map(_.fold(notFound)(body => Ok(body)))
+    }
+  }
 
   /** `POST /api/v2/mobile-claim/delete`, `{"claimToken"}`: same effect as `DELETE /api/v2/mobile-guest`. */
   def delete: Action[JsValue] = Action.async(parse.tolerantJson(maxLength = 1024)) { request =>
