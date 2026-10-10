@@ -85,14 +85,18 @@ object MobileReadRoutes {
 object MobileGuestRoutes {
   def own(method: String, path: String): Boolean =
     (method == "GET" && path == "/api/v2/mobile-guest/me") ||
-      (method == "DELETE" && path == "/api/v2/mobile-guest")
+      (method == "DELETE" && path == "/api/v2/mobile-guest") || email(method, path)
+
+  /** Setting the claim email (B4): a JSON body, no query string. */
+  def email(method: String, path: String): Boolean =
+    method == "PUT" && path == "/api/v2/mobile-guest/email"
 
   def permits(method: String, path: String): Boolean =
     own(method, path) || (MobileReadRoutes.permits(method, path) &&
       !MobileReadRoutes.bare(method, path) && path != "/oauth/mobile/me")
 
   /** Guest routes that take no query string or body. */
-  def bare(method: String, path: String): Boolean = own(method, path)
+  def bare(method: String, path: String): Boolean = own(method, path) && !email(method, path)
 }
 
 /**
@@ -172,8 +176,10 @@ object MobileFieldRoutes {
           "/oauth/mobile/guest",
           "/api/v2/mobile-admin/clients"
         ).contains(request.path)
-      case "PATCH"  => request.path.matches("/api/v2/mobile-admin/clients/[A-Za-z0-9._-]+")
-      case "PUT"    => request.path == "/api/v2/mobile-admin/write-policy"
+      case "PATCH" => request.path.matches("/api/v2/mobile-admin/clients/[A-Za-z0-9._-]+")
+      case "PUT" =>
+        request.path == "/api/v2/mobile-admin/write-policy" ||
+          MobileGuestRoutes.email(request.method, request.path)
       case "DELETE" => MobileGuestRoutes.own(request.method, request.path)
       case _        => false
     })
@@ -279,7 +285,9 @@ class MobileBearerFilter @Inject() (
       else
         (write || MobileReadRoutes.bare(request.method, request.path) ||
         (guest && MobileGuestRoutes.bare(request.method, request.path))) &&
-        (request.rawQueryString.nonEmpty || request.hasBody)
+        (request.rawQueryString.nonEmpty || request.hasBody) ||
+        (guest && MobileGuestRoutes.email(request.method, request.path) &&
+        request.rawQueryString.nonEmpty)
     if (badShape) return denied(400, "invalid_request")
     oauth.authenticate(parts(1)).flatMap { grant =>
       // MobileOAuthService.authenticate has already checked the scopes against the client.

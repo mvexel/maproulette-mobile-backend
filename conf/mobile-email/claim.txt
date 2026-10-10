@@ -1,0 +1,17 @@
+Hi,
+
+Thanks for checking {{nounMany}} with {{organizerName}} on {{eventDate}}. You checked {{savedStopsText}}.
+
+They're saved, but not on the map yet. To add them to OpenStreetMap, the free map that anyone can use, open this link on a computer:
+
+Put my answers on the map:
+{{claimUrl}}
+
+You'll sign in to OpenStreetMap or create a free account. It takes about 3 minutes. The link works until {{deadline}}.
+
+--
+Street Tally, for {{campaignName}}
+Didn't ask for this? Ignore it and your saved answers will be removed on {{deadline}}.
+Stop reminders: {{stopRemindersUrl}}
+Delete my data: {{deleteUrl}}
+Privacy: {{privacyUrl}}

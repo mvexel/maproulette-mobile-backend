@@ -280,6 +280,21 @@ It is never a MapRoulette user: the bearer filter sets `MobileBearerIdentity.Gue
 routes. Registration and the guest's own routes stay open while the field write switch is off:
 they neither write OSM nor change task status.
 
+Step B4, the claim email:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `PUT /api/v2/mobile-guest/email` | Guest bearer, JSON `{"email"}` (≤ 254 characters, one `@`, no spaces), no query string. Stores the address AES-256-GCM sealed under `osmTokenKey` with the guest id as associated data, creates a claim token (kept only as a digest) and sends the link email. Can be called again to correct the address; each call sends a new link. `200` with the `GET /api/v2/mobile-guest/me` body (`"email": "pending"`). `400 invalid_request`, `409 guest_claimed`, `409 nothing_saved` (no pending answers yet; the app asks after the first saved stop), `429 email_rate_limited` (3 sends per guest per 24 h), `503 mail_unavailable` (no mail provider or token key, or the provider refused). |
+
+Mail settings live under `mobileOAuth.guests.mail`: `provider` (`MR_GUEST_MAIL_PROVIDER`: `none`
+by default, `log` for development, which logs only the template name, or `postmark`),
+`postmark.serverToken` (`MR_POSTMARK_SERVER_TOKEN`), `from` (`MR_GUEST_MAIL_FROM`, default
+`Street Tally <hello@streettally.osm.lol>`) and `claimOrigin` (`MR_CLAIM_ORIGIN`, default
+`https://streettally.osm.lol`). Links put the token in the URL fragment
+(`<claimOrigin>/claim#t=<token>`, `/claim/delete#t=`, `/claim/stop-reminders#t=`) so it never
+reaches web server logs. Postmark open and link tracking are off. The templates are copies of the
+project's brand/email set in `conf/mobile-email/`.
+
 ## Account identity
 
 The mobile callback verifies the person's numeric OSM user ID and looks up the
