@@ -292,6 +292,10 @@ guest); `502 osm_unavailable`; `401 invalid_token` if the guest was deleted, cla
 the meantime. Evolution 137 adds `choice_pending`; "delete my data" deletes the guest's answers that
 are still pending.
 
+Discovery: `excludePending=true` on `tasks/box`, `markers/box` and the cluster routes leaves out
+tasks with a pending answer whose hold has not ended (next to `excludeStale`). `challenge/:id/tasks`
+is not filtered.
+
 A guest token reaches only `MobileGuestRoutes`: the discovery reads of `MobileReadRoutes`, including
 `choice/check` (but not `/oauth/mobile/me`), pending answers and its own routes. It is never a
 MapRoulette user: the bearer filter sets `MobileBearerIdentity.GuestKey`, never `UserKey`, so stock

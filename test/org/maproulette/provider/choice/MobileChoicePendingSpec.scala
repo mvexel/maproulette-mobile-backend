@@ -9,8 +9,15 @@ import org.maproulette.auth.mobile._
 import org.maproulette.auth.mobile.guest.{MobileGuest, MobileGuestRepository}
 import org.maproulette.data.ActionManager
 import org.maproulette.framework.model._
+import org.maproulette.framework.service.TaskClusterService
 import org.maproulette.framework.util.FrameworkHelper
 import org.maproulette.provider.websockets.WebSocketProvider
+import org.maproulette.session.{
+  SearchChallengeParameters,
+  SearchLocation,
+  SearchParameters,
+  SearchTaskParameters
+}
 import play.api.{Application, Configuration}
 import play.api.db.Database
 import play.api.libs.json._
@@ -243,6 +250,36 @@ class MobileChoicePendingSpec(implicit val application: Application) extends Fra
         .foreach {
           case (limit, after) => await(service.list(g, limit, after)).status mustBe 400
         }
+    }
+
+    "hide held tasks from discovery with excludePending until the hold ends" taggedAs ChoiceTag in {
+      val clusters = application.injector.instanceOf[TaskClusterService]
+      def found(excludePending: Boolean): Set[Long] =
+        clusters
+          .getTasksInBoundingBox(
+            User.superUser,
+            SearchParameters(
+              location = Some(SearchLocation(-180, -85, 180, 85)),
+              challengeParams = SearchChallengeParameters(challengeIds = Some(List(challenge.id))),
+              taskParams = SearchTaskParameters(excludePending = Some(excludePending))
+            ),
+            paging = org.maproulette.framework.psql.Paging(5000, 0),
+            ignoreLocked = true
+          )
+          ._2
+          .map(_.id)
+          .toSet
+      val g         = guest()
+      val (task, _) = benchTask()
+      found(true) must contain(task.id)
+      submit(g, task, """{"answers":{"backrest":"yes"}}""").status mustBe 200
+      found(true) must not contain task.id
+      found(false) must contain(task.id)
+      db.withConnection { implicit c =>
+        SQL"UPDATE choice_pending SET hold_until = NOW() - INTERVAL '1 second' WHERE task_id = ${task.id}"
+          .executeUpdate()
+      }
+      found(true) must contain(task.id)
     }
   }
 }

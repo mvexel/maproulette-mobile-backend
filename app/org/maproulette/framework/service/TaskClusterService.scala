@@ -285,8 +285,26 @@ class TaskClusterService @Inject() (repository: TaskClusterRepository)
   /**
     * Fork only: `excludeStale=true` leaves out choice tasks whose OSM element was observed to no
     * longer match the stored payload (table choice_stale). Kept apart from the generic `cct`.
+    * `excludePending=true` also leaves out tasks a guest holds with a pending answer.
     */
   private[service] def excludeStaleChoiceTasks(params: SearchParameters, query: Query): Query =
+    excludePendingChoiceTasks(params, excludeStale(params, query))
+
+  private def excludePendingChoiceTasks(params: SearchParameters, query: Query): Query =
+    if (params.taskParams.excludePending.contains(true))
+      query.addFilterGroup(
+        FilterGroup(
+          List(
+            CustomParameter(
+              """NOT EXISTS (SELECT 1 FROM choice_pending cp WHERE cp.task_id = tasks.id
+                 AND cp.state = 'pending' AND cp.hold_until > NOW())"""
+            )
+          )
+        )
+      )
+    else query
+
+  private def excludeStale(params: SearchParameters, query: Query): Query =
     if (params.taskParams.excludeStale.contains(true))
       query.addFilterGroup(
         FilterGroup(
