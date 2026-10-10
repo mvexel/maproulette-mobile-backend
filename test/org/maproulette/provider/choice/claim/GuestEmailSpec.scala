@@ -112,7 +112,7 @@ class GuestEmailSpec extends PlaySpec with BeforeAndAfterAll {
     "fill every placeholder of every template and escape values in HTML only" in {
       val values = Map(
         "campaignName"       -> "SLC <Bus> Stops",
-        "organizerName"      -> "Riders & Co",
+        "withOrganizer"      -> " with Riders & Co",
         "eventDate"          -> "Thursday, Nov 6",
         "firstAnswerDate"    -> "Nov 6",
         "nounMany"           -> "bus stops",
@@ -145,6 +145,86 @@ class GuestEmailSpec extends PlaySpec with BeforeAndAfterAll {
       claim.subject mustBe "Put your 14 answers from SLC <Bus> Stops on the map"
       claim.text must include("https://claim.example/claim#t=abc")
       claim.html must include("SLC &lt;Bus&gt; Stops")
+    }
+
+    "render each email as brand/email specifies" in {
+      val values = Map(
+        "campaignName"       -> "SLC Bus Stops",
+        "withOrganizer"      -> " with Salt Lake Riders",
+        "eventDate"          -> "Thursday, Nov 6",
+        "firstAnswerDate"    -> "Nov 6",
+        "nounMany"           -> "bus stops",
+        "savedStopsText"     -> "1 bus stop",
+        "savedAnswersText"   -> "1 answer",
+        "deadline"           -> "Nov 30",
+        "reminderSubject"    -> "1 day left to put your bus stops on the map",
+        "claimUrl"           -> "https://claim.example/claim#t=abc",
+        "deleteUrl"          -> "https://claim.example/claim/delete#t=abc",
+        "stopRemindersUrl"   -> "https://claim.example/claim/stop-reminders#t=abc",
+        "publishedStopsText" -> "12 bus stops",
+        "osmUsername"        -> "rosa_slc",
+        "editsUrl"           -> "https://www.openstreetmap.org/user/rosa_slc/history",
+        "notAddedLine"       -> "",
+        "privacyUrl"         -> "https://claim.example/privacy"
+      )
+      def both(name: String) = {
+        val m = ClaimEmails.render(name, "rosa@example.org", values)
+        (m, Seq(m.text, m.html))
+      }
+
+      val (claim, claimBodies) = both(ClaimEmails.Claim)
+      claim.subject mustBe "Put your 1 answer from SLC Bus Stops on the map"
+      claimBodies.foreach { b =>
+        b must include("Thanks for checking bus stops with Salt Lake Riders on Thursday, Nov 6.")
+        b must include("https://claim.example/claim#t=abc")
+        b must include("https://claim.example/claim/delete#t=abc")
+        b must include("https://claim.example/claim/stop-reminders#t=abc")
+        b must include("Nov 30")
+      }
+
+      val (reminder, reminderBodies) = both(ClaimEmails.Reminder)
+      reminder.subject mustBe "1 day left to put your bus stops on the map"
+      reminderBodies.foreach { b =>
+        b must include("https://claim.example/claim#t=abc")
+        b must include("https://claim.example/claim/stop-reminders#t=abc")
+      }
+
+      val (expiry, expiryBodies) = both(ClaimEmails.Expiry)
+      expiry.subject mustBe "Your SLC Bus Stops answers were removed"
+      expiryBodies.foreach { b =>
+        b must include("Thanks for checking bus stops with Salt Lake Riders.")
+        b must not include "#t="
+      }
+
+      val (reauth, reauthBodies) = both(ClaimEmails.Reauth)
+      reauth.subject mustBe "One more step to put your SLC Bus Stops answers on the map"
+      reauthBodies.foreach(_ must include("https://claim.example/claim#t=abc"))
+
+      val (published, publishedBodies) = both(ClaimEmails.Published)
+      published.subject mustBe "Your 12 bus stops are on the map"
+      publishedBodies.foreach { b =>
+        b must include("rosa_slc")
+        b must include("https://www.openstreetmap.org/user/rosa_slc/history")
+        b must include("Thanks for checking bus stops with Salt Lake Riders.")
+        b must not include "#t="
+      }
+
+      // Every footer links the privacy page.
+      Seq(claim, reminder, expiry, reauth, published).foreach { m =>
+        m.text must include("https://claim.example/privacy")
+        m.html must include("https://claim.example/privacy")
+      }
+    }
+
+    "leave out the organizer when the campaign has none" in {
+      val f      = fixture()
+      val values = f.service.claimValues(guest(), fourteen, "abc")
+      values("withOrganizer") mustBe ""
+      val claim = ClaimEmails.render(ClaimEmails.Claim, "rosa@example.org", values)
+      claim.text must include("Thanks for checking bus stops on ")
+      val named    = fourteen.copy(organizerName = Some("Salt Lake Riders"))
+      val withName = f.service.claimValues(guest(), named, "abc")
+      withName("withOrganizer") mustBe " with Salt Lake Riders"
     }
 
     "refuse a missing value" in {
