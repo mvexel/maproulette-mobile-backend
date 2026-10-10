@@ -127,6 +127,11 @@ Off by default (`mobileOAuth.guests.enabled`). See [mobile-oauth.md](mobile-oaut
 | Guest registration (per-IP limit), guest token grant, guest authentication | `app/org/maproulette/auth/mobile/guest/MobileGuestService.scala`, `app/controllers/MobileGuestController.scala`, `MobileOAuthController.token` (`guestToken`) |
 | Routes `POST /oauth/mobile/guest`, `GET /api/v2/mobile-guest/me`, `DELETE /api/v2/mobile-guest` | `conf/routes` |
 | Guest bearer branch and `MobileGuestRoutes`; `GuestKey` instead of `UserKey`; field-gate entries | `app/org/maproulette/auth/mobile/MobileBearerFilter.scala` |
+| Table `choice_pending` | `conf/evolutions/default/137.sql` |
+| Pending answers: submit (validated like a choice submission, live-question tasks only), withdraw, list; published-challenge rule while writes are off | `app/org/maproulette/provider/choice/MobileChoicePendingService.scala`, `ChoicePendingRepository.scala`, `app/org/maproulette/controllers/api/MobileChoicePendingController.scala` |
+| `MobileChoiceService.validateSubmission`: parsing and payload checks shared by submit and pending answers | `app/org/maproulette/provider/choice/MobileChoiceService.scala` |
+| `choice/check` accepts guest tokens | `app/org/maproulette/controllers/api/MobileChoiceController.scala` |
+| Routes `GET /api/v2/mobile-guest/pending`, `POST` and `DELETE /api/v2/task/:id/choice/pending` | `conf/routes` |
 
 ### Discovery filters
 

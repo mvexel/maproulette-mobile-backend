@@ -180,6 +180,10 @@ class MobileGuestRepository @Inject() (db: Database) extends MobileGuestStore {
       SQL("DELETE FROM mobile_guest_tokens WHERE guest_id={id}::uuid")
         .on("id" -> id.toString)
         .executeUpdate()
+      // Answers not yet published; published ones are already in OSM.
+      SQL("DELETE FROM choice_pending WHERE guest_id={id}::uuid AND state='pending'")
+        .on("id" -> id.toString)
+        .executeUpdate()
       SQL("""UPDATE mobile_guests SET secret_hash=NULL, email_ciphertext=NULL, email_nonce=NULL,
         deleted_at={now} WHERE id={id}::uuid AND deleted_at IS NULL""")
         .on("id" -> id.toString, "now" -> stamp(now))
