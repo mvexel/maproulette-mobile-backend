@@ -226,7 +226,8 @@ class MobileBearerFilter @Inject() (
     // session, is still ambiguous and refused.
     if (authorizations.size != 1 || request.headers.get("apiKey").isDefined ||
         request.session.get(SessionManager.KEY_TOKEN_HASH).isDefined ||
-        request.session.get(SessionManager.KEY_USER_ID).isDefined) return denied(401, "invalid_token")
+        request.session.get(SessionManager.KEY_USER_ID).isDefined)
+      return denied(401, "invalid_token")
     val parts = authorizations.head.split(" ", -1)
     if (parts.length != 2 || !parts(0).equalsIgnoreCase("Bearer") ||
         !parts(1).matches("[A-Za-z0-9_-]{32,256}")) return denied(401, "invalid_token")
