@@ -4,6 +4,7 @@ import com.typesafe.config.ConfigFactory
 import java.io.File
 import org.scalatestplus.play.PlaySpec
 import play.api.Configuration
+import scala.jdk.CollectionConverters._
 
 class MobileFieldConfigSpec extends PlaySpec {
   "The production-OSM field config" should {
@@ -40,6 +41,27 @@ class MobileFieldConfigSpec extends PlaySpec {
       settings.clients("maproulette-android-example").scopes mustBe Set("tasks:read")
       settings.clients("maproulette-mobile-admin").redirectUris mustBe
         Set("https://admin.mr-stage.osm.lol/callback")
+    }
+
+    "take mobile task writes from MR_MOBILE_TASK_WRITES_ENABLED, on when it is unset" in {
+      def writes(env: Map[String, String]): Boolean = {
+        val values = ConfigFactory.parseMap(
+          (Map(
+            "MR_PUBLIC_ORIGIN"             -> "https://mr-stage.osm.lol",
+            "MOBILE_OAUTH_CALLBACK_URI"    -> "https://mr-stage.osm.lol/oauth/mobile/callback",
+            "MR_MOBILE_ADMIN_ORIGIN"       -> "https://admin.mr-stage.osm.lol",
+            "MR_MOBILE_ADMIN_CALLBACK_URI" -> "https://admin.mr-stage.osm.lol/callback"
+          ) ++ env).asJava
+        )
+        val config = ConfigFactory
+          .parseFile(new File("conf/mobile-field.conf"))
+          .withFallback(values)
+          .resolve()
+        new MobileOAuthSettings(Configuration(config)).allowTaskWrites
+      }
+      writes(Map("MR_MOBILE_TASK_WRITES_ENABLED" -> "false")) mustBe false
+      writes(Map("MR_MOBILE_TASK_WRITES_ENABLED" -> "true")) mustBe true
+      writes(Map.empty) mustBe true
     }
 
     "trust only loopback and private ranges as proxies, so X-Forwarded-For is the client" in {
