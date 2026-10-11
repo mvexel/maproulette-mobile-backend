@@ -26,7 +26,7 @@ class ClaimMailSettings @Inject() (configuration: Configuration) {
 
   /** Origin of the claim page; links are `<origin>/claim#t=<token>`. */
   val claimOrigin: String = string("mobileOAuth.guests.mail.claimOrigin")
-    .getOrElse("https://streettally.osm.lol")
+    .getOrElse(org.maproulette.auth.mobile.MobileOAuthSettings.DefaultClaimOrigin)
     .stripSuffix("/")
   val postmarkToken: Option[String] = string("mobileOAuth.guests.mail.postmark.serverToken")
   val postmarkStream: String =

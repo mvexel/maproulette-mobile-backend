@@ -100,10 +100,13 @@ object MobileGuestRoutes {
   def email(method: String, path: String): Boolean =
     method == "PUT" && (path == "/api/v2/mobile-guest/email" || path == "/api/v2/mobile-guest/reminders")
 
-  /** The emailed links' routes (B4): a claim token in a JSON body, no credential. */
+  /** The emailed links' routes (B4, B5 preview): a claim token in a JSON body, no credential. */
   def claimToken(method: String, path: String): Boolean =
-    method == "POST" && (path == "/api/v2/mobile-claim/delete" ||
-      path == "/api/v2/mobile-claim/stop-reminders")
+    method == "POST" && Set(
+      "/api/v2/mobile-claim/preview",
+      "/api/v2/mobile-claim/delete",
+      "/api/v2/mobile-claim/stop-reminders"
+    ).contains(path)
 
   def permits(method: String, path: String): Boolean =
     own(method, path) || (MobileReadRoutes.permits(method, path) && path != "/oauth/mobile/me")
