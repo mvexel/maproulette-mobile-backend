@@ -98,12 +98,13 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
         status: Int,
         cs: Option[Long],
         key: String,
-        result: JsObject
+        result: JsObject,
+        answers: Option[JsObject]
     ): Unit = {
       if (failStatus) {
         failStatus = false; throw new RuntimeException("simulated DB failure")
       }
-      super.writeStatus(taskId, user, status, cs, key, result)
+      super.writeStatus(taskId, user, status, cs, key, result, answers)
     }
   }
   private val service = new FlakyChoiceService
@@ -188,6 +189,11 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
   private def rows(task: Task): List[String] = db.withConnection { implicit c =>
     SQL"SELECT state FROM mobile_choice_submissions WHERE task_id = ${task.id}"
       .as(SqlParser.str("state").*)
+  }
+  private def answers(task: Task): Option[JsValue] = db.withConnection { implicit c =>
+    SQL"SELECT answers::text FROM mobile_choice_submissions WHERE task_id = ${task.id} AND state = 'done'"
+      .as(SqlParser.get[Option[String]](1).single)
+      .map(Json.parse)
   }
   private def lastChangeset = osm.synchronized(osm.changesets.last)
 
@@ -345,6 +351,65 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
     }
   }
 
+  "Campaign results" should {
+    "list every task with its answers, applied tags, changeset, completer and stale reason" taggedAs ChoiceTag in {
+      val target = challengeDAL.insert(
+        Challenge(
+          -1,
+          "choiceResults",
+          null,
+          null,
+          general = ChallengeGeneral(User.superUser.osmProfile.id, defaultProject.id, "Results"),
+          creation = ChallengeCreation(),
+          priority = ChallengePriority(),
+          extra = ChallengeExtra()
+        ),
+        User.superUser
+      )
+      val (answered, node) = benchTask(target = target)
+      lock(answered)
+      submit(answered, """{"answers": {"backrest": "no"}}""").status mustBe 200
+      val (outcome, _) = benchTask(target = target)
+      lock(outcome)
+      submit(outcome, """{"outcome": "not-a-bench"}""").status mustBe 200
+      val (gone, goneNode) = benchTask(target = target)
+      osm.elements.remove(("node", goneNode))
+      check(gone)
+      val (untouched, _) = benchTask(target = target)
+
+      val repository = new ChoiceResultsRepository(db)
+      repository.results(Long.MaxValue) mustBe None
+      val rows = repository.results(target.id).get
+      rows.map(_.taskId) mustBe Seq(answered.id, outcome.id, gone.id, untouched.id)
+      val first = rows.head
+      first.element mustBe Some(s"node/$node")
+      first.lon mustBe Some(-111.891)
+      first.lat mustBe Some(40.7608)
+      first.status mustBe Task.STATUS_FIXED
+      first.completedBy mustBe Some("ChoiceMapper")
+      first.completedAt must not be empty
+      first.changesetId mustBe fresh(answered)._2
+      first.answers mustBe Map("backrest" -> "no")
+      first.set mustBe Map("backrest"     -> "no")
+      rows(1).status mustBe Task.STATUS_FALSE_POSITIVE
+      rows(1).answers mustBe empty
+      rows(1).changesetId mustBe None
+      rows(2).stale mustBe Some("element_gone")
+      rows(3).status mustBe Task.STATUS_CREATED
+      rows(3).completedBy mustBe None
+
+      val csv = ChoiceResults.csv(rows).split("\r\n").toSeq
+      csv.head must endWith(",tags_set,tags_unset,answer:backrest")
+      csv(1) must startWith(
+        s"${answered.id},node/$node,node/$node,-111.891,40.7608,1,Fixed,ChoiceMapper,"
+      )
+      csv(1) must endWith(",false,backrest=no,,no")
+      val features = (ChoiceResults.geojson(rows) \ "features").as[Seq[JsObject]]
+      (features.head \ "geometry" \ "coordinates").as[Seq[Double]] mustBe Seq(-111.891, 40.7608)
+      (features.head \ "properties" \ "answers").as[JsObject] mustBe Json.obj("backrest" -> "no")
+    }
+  }
+
   "Choice submit" should {
     "apply several answers in one changeset, then mark the task fixed with its changeset" taggedAs ChoiceTag in {
       val (task, node) = benchTask()
@@ -381,6 +446,7 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
       // Resent after completion (no lock any more): the stored result, nothing touches OSM.
       submit(task, body) mustBe response
       osm.uploadCount mustBe before + 1
+      answers(task) mustBe Some(Json.obj("backrest" -> "yes", "capacity" -> "c3"))
     }
 
     "apply a partial answer and keep tags outside the payload's guards" taggedAs ChoiceTag in {
