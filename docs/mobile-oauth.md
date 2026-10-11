@@ -211,8 +211,18 @@ idempotent, and only hides the task from `excludeStale` discovery.
 
 **Submit.** `POST /api/v2/task/:id/choice` (mobile bearer, `tasks:write`; web sessions and API keys
 get `403 mobile_only`). Body: exactly `{"answers": {"<question>": "<option>", ...}}` (1 to 8) or
-`{"outcome": "<id>"}` (a declared outcome or `too-hard`, plus `"delete": true` only on the delete
-outcome). Answers and deletes need `osm:tagfix`; outcomes without deletion do not touch OSM.
+`{"outcome": "<id>"}` (a declared outcome or a built-in: `too-hard`, `not-here`, `moved`; plus
+`"delete": true` only on the delete outcome). Answers and deletes need `osm:tagfix`; outcomes
+without deletion do not touch OSM.
+
+`moved` needs `"location": {"lat": n, "lon": n, "source": "tap" | "here"}` (exactly those keys,
+rounded to 6 decimals); any other submission with a location is `400`. The spot must be within
+500 m of the task's point (`ST_DistanceSphere`; a task without a point measures 0), else
+`422 {"error": "moved_too_far", "maxM": 500}`. `not-here` and `moved` are reports: status 6, no
+OSM edit, and the stored result carries `report` (`outcome`, `location`, `distanceM`). Exports add
+`outcome`, `outcome_label`, `reported_lat`, `reported_lon`, `reported_source`,
+`reported_distance_m` and `report_count`; GeoJSON adds a `reported_position` point per moved
+task. Challenges can't declare these ids themselves.
 
 1. A completed identical submission (same task, user, payload and body) returns its stored
    result, even after the lock is gone. An `uploaded` one finishes its status write.
@@ -226,7 +236,7 @@ outcome). Answers and deletes need `osm:tagfix`; outcomes without deletion do no
    merged into the fetched element at its version, or one `<delete>`. The changeset is closed on
    every branch. An OSM 409 triggers one re-check (stale → `task_ineligible`; otherwise one retry).
 5. In one transaction: status Fixed (1) after an upload, else the outcome's status (`gone`
-   without deletion → 2, `too-hard` → 6); `tasks.changeset_id`; the idempotency row
+   without deletion → 2, `too-hard`, `not-here` and `moved` → 6); `tasks.changeset_id`; the idempotency row
    (`mobile_choice_submissions`) marked done. The lock is released.
 
 A `500 status_pending` (with `changesetId`) is finished by retrying the same submission, without a

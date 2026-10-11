@@ -399,14 +399,113 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
       rows(3).completedBy mustBe None
 
       val csv = ChoiceResults.csv(rows).split("\r\n").toSeq
-      csv.head must endWith(",tags_set,tags_unset,answer:backrest")
+      csv.head must endWith(
+        ",tags_set,tags_unset,outcome,outcome_label,reported_lat,reported_lon,reported_source," +
+          "reported_distance_m,report_count,answer:backrest"
+      )
       csv(1) must startWith(
         s"${answered.id},node/$node,node/$node,-111.891,40.7608,1,Fixed,ChoiceMapper,"
       )
-      csv(1) must endWith(",false,backrest=no,,no")
+      csv(1) must endWith(",false,backrest=no,,,,,,,,0,no")
       val features = (ChoiceResults.geojson(rows) \ "features").as[Seq[JsObject]]
       (features.head \ "geometry" \ "coordinates").as[Seq[Double]] mustBe Seq(-111.891, 40.7608)
       (features.head \ "properties" \ "answers").as[JsObject] mustBe Json.obj("backrest" -> "no")
+    }
+  }
+
+  "Not here and moved reports" should {
+    // The fixture's task point is (-111.891, 40.7608).
+    val near =
+      """{"outcome": "moved", "location": {"lat": 40.76091234567, "lon": -111.8912, "source": "tap"}}"""
+
+    "record not-here as status 6 with no OSM edit" taggedAs ChoiceTag in {
+      val (task, _) = benchTask()
+      lock(task)
+      val uploads  = osm.uploadCount
+      val response = submit(task, """{"outcome": "not-here"}""", scopes = write)
+      response mustBe ChoiceResponse(
+        200,
+        Json.obj(
+          "status"      -> Task.STATUS_TOO_HARD,
+          "changesetId" -> JsNull,
+          "applied"     -> Json.obj("set" -> Json.obj(), "unset" -> Json.arr(), "deleted" -> false),
+          "outcome"     -> "not-here"
+        )
+      )
+      osm.uploadCount mustBe uploads
+      fresh(task) mustBe ((Task.STATUS_TOO_HARD, None))
+    }
+
+    "record moved with the rounded spot and its distance from the task's point" taggedAs ChoiceTag in {
+      val (task, _) = benchTask()
+      lock(task)
+      val body = submit(task, near, scopes = write).body
+      (body \ "outcome").as[String] mustBe "moved"
+      (body \ "location").as[JsObject] mustBe
+        Json.obj("lat" -> 40.760912, "lon" -> -111.8912, "source" -> "tap")
+      (body \ "distanceM").as[Int] mustBe 21
+      db.withConnection { implicit c =>
+        SQL"SELECT result_json->>'distanceM' FROM mobile_choice_submissions WHERE task_id = ${task.id}"
+          .as(SqlParser.str(1).single)
+      } mustBe "21"
+    }
+
+    "refuse a moved spot more than 500 m away, and a location anywhere else" taggedAs ChoiceTag in {
+      val (task, _) = benchTask()
+      lock(task)
+      val far = submit(
+        task,
+        """{"outcome": "moved", "location": {"lat": 40.7708, "lon": -111.891, "source": "here"}}""",
+        scopes = write
+      )
+      far mustBe ChoiceResponse(422, Json.obj("error" -> "moved_too_far", "maxM" -> 500))
+      Seq(
+        """{"outcome": "moved"}""",
+        """{"outcome": "not-here", "location": {"lat": 40.7608, "lon": -111.891, "source": "tap"}}""",
+        """{"outcome": "moved", "location": {"lat": 40.7608, "lon": -111.891, "source": "gps"}}""",
+        """{"outcome": "moved", "location": {"lat": 91, "lon": -111.891, "source": "tap"}}""",
+        """{"outcome": "moved", "location": {"lat": 40.7608, "lon": -111.891}}""",
+        """{"outcome": "not-here", "delete": true}"""
+      ).foreach { body =>
+        val response = submit(task, body, scopes = write)
+        Set(400, 422) must contain(response.status)
+      }
+      fresh(task) mustBe ((Task.STATUS_CREATED, None))
+    }
+
+    "export the report columns and a second point for a moved stop" taggedAs ChoiceTag in {
+      val target = challengeDAL.insert(
+        Challenge(
+          -1,
+          "choiceReports",
+          null,
+          null,
+          general = ChallengeGeneral(User.superUser.osmProfile.id, defaultProject.id, "Reports"),
+          creation = ChallengeCreation(),
+          priority = ChallengePriority(),
+          extra = ChallengeExtra()
+        ),
+        User.superUser
+      )
+      val (moved, _) = benchTask(target = target)
+      lock(moved)
+      submit(moved, near, scopes = write).status mustBe 200
+      val (notHere, _) = benchTask(target = target)
+      lock(notHere)
+      submit(notHere, """{"outcome": "not-here"}""", scopes = write).status mustBe 200
+      val rows = new ChoiceResultsRepository(db).results(target.id).get
+      rows.map(r => (r.outcome, r.outcomeLabel, r.reportCount)) mustBe Seq(
+        (Some("moved"), Some("It's moved"), 1),
+        (Some("not-here"), Some("It's not here"), 1)
+      )
+      rows.head.reported mustBe Some(ReportLocation(40.760912, -111.8912, "tap"))
+      ChoiceResults.csv(rows).split("\r\n")(1) must include(
+        ",moved,It's moved,40.760912,-111.8912,tap,21,1"
+      )
+      val features = (ChoiceResults.geojson(rows) \ "features").as[Seq[JsObject]]
+      features.size mustBe 3
+      (features(1) \ "properties" \ "kind").as[String] mustBe "reported_position"
+      (features(1) \ "geometry" \ "coordinates").as[Seq[Double]] mustBe Seq(-111.8912, 40.760912)
     }
   }
 
