@@ -226,7 +226,11 @@ class MobileChoicePendingSpec(implicit val application: Application) extends Fra
           SQL"INSERT INTO tags_on_challenges (challenge_id, tag_id) VALUES (${challenge.id}, $tag)"
             .executeUpdate()
         }
-        submit(g, task, """{"answers":{"backrest":"yes"}}""").status mustBe 200
+        val response = submit(g, task, """{"answers":{"backrest":"yes"}}""")
+        response.status mustBe 200
+        (response.body \ "state").as[String] mustBe "pending"
+        status(task) mustBe Task.STATUS_CREATED
+        osm.writeAuth mustBe empty
       } finally writesOn = true
     }
 
