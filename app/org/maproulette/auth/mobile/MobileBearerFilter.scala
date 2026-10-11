@@ -92,8 +92,13 @@ object MobileGuestRoutes {
     case "GET"    => path == "/api/v2/mobile-guest/me" || path == list
     case "POST"   => path.matches(pending)
     case "DELETE" => path == "/api/v2/mobile-guest" || path.matches(pending)
+    case "PUT"    => email(method, path)
     case _        => false
   }
+
+  /** Setting the claim email (B4): a JSON body, no query string. */
+  def email(method: String, path: String): Boolean =
+    method == "PUT" && path == "/api/v2/mobile-guest/email"
 
   def permits(method: String, path: String): Boolean =
     own(method, path) || (MobileReadRoutes.permits(method, path) && path != "/oauth/mobile/me")
@@ -104,6 +109,7 @@ object MobileGuestRoutes {
   /** Whether the request has the shape its guest route allows. */
   def acceptable(request: RequestHeader): Boolean =
     if (takesBody(request.method, request.path)) MobileWriteRoutes.acceptableBody(request)
+    else if (email(request.method, request.path)) request.rawQueryString.isEmpty
     else if (request.method == "GET" && request.path == list)
       !request.hasBody && request.queryString.forall {
         case (key, values) => Set("limit", "after").contains(key) && values.size == 1
@@ -205,7 +211,8 @@ object MobileFieldRoutes {
       // Turning a project on or off lists or hides campaigns; it is not a task or OSM write.
       case "PUT" =>
         request.path == "/api/v2/mobile-admin/write-policy" ||
-          request.path.matches("/api/v2/mobile-admin/projects/[0-9]+/enabled")
+          request.path.matches("/api/v2/mobile-admin/projects/[0-9]+/enabled") ||
+          MobileGuestRoutes.email(request.method, request.path)
       case "DELETE" => MobileGuestRoutes.own(request.method, request.path)
       case _        => false
     })

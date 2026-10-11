@@ -211,8 +211,18 @@ idempotent, and only hides the task from `excludeStale` discovery.
 
 **Submit.** `POST /api/v2/task/:id/choice` (mobile bearer, `tasks:write`; web sessions and API keys
 get `403 mobile_only`). Body: exactly `{"answers": {"<question>": "<option>", ...}}` (1 to 8) or
-`{"outcome": "<id>"}` (a declared outcome or `too-hard`, plus `"delete": true` only on the delete
-outcome). Answers and deletes need `osm:tagfix`; outcomes without deletion do not touch OSM.
+`{"outcome": "<id>"}` (a declared outcome or a built-in: `too-hard`, `not-here`, `moved`; plus
+`"delete": true` only on the delete outcome). Answers and deletes need `osm:tagfix`; outcomes
+without deletion do not touch OSM.
+
+`moved` needs `"location": {"lat": n, "lon": n, "source": "tap" | "here"}` (exactly those keys,
+rounded to 6 decimals); any other submission with a location is `400`. The spot must be within
+500 m of the task's point (`ST_DistanceSphere`; a task without a point measures 0), else
+`422 {"error": "moved_too_far", "maxM": 500}`. `not-here` and `moved` are reports: status 6, no
+OSM edit, and the stored result carries `report` (`outcome`, `location`, `distanceM`). Exports add
+`outcome`, `outcome_label`, `reported_lat`, `reported_lon`, `reported_source`,
+`reported_distance_m` and `report_count`; GeoJSON adds a `reported_position` point per moved
+task. Challenges can't declare these ids themselves.
 
 1. A completed identical submission (same task, user, payload and body) returns its stored
    result, even after the lock is gone. An `uploaded` one finishes its status write.
@@ -226,7 +236,7 @@ outcome). Answers and deletes need `osm:tagfix`; outcomes without deletion do no
    merged into the fetched element at its version, or one `<delete>`. The changeset is closed on
    every branch. An OSM 409 triggers one re-check (stale → `task_ineligible`; otherwise one retry).
 5. In one transaction: status Fixed (1) after an upload, else the outcome's status (`gone`
-   without deletion → 2, `too-hard` → 6); `tasks.changeset_id`; the idempotency row
+   without deletion → 2, `too-hard`, `not-here` and `moved` → 6); `tasks.changeset_id`; the idempotency row
    (`mobile_choice_submissions`) marked done. The lock is released.
 
 A `500 status_pending` (with `changesetId`) is finished by retrying the same submission, without a
@@ -307,6 +317,21 @@ MapRoulette user: the bearer filter sets `MobileBearerIdentity.GuestKey`, never 
 routes see an anonymous request. App grants cannot reach the guest's routes. Registration, the
 guest's routes and, for guest tokens only, `choice/check` stay open while the field write switch is
 off: they neither write OSM nor change task status.
+
+Step B4, the claim email:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `PUT /api/v2/mobile-guest/email` | Guest bearer, JSON `{"email"}` (≤ 254 characters, one `@`, no spaces), no query string. Stores the address AES-256-GCM sealed under `osmTokenKey` with the guest id as associated data, creates a claim token (kept only as a digest) and sends the link email. Can be called again to correct the address; each call sends a new link. `200` with the `GET /api/v2/mobile-guest/me` body (`"email": "pending"`). `400 invalid_request`, `409 guest_claimed`, `409 nothing_saved` (no pending answers yet; the app asks after the first saved stop), `429 email_rate_limited` (3 sends per guest per 24 h), `503 mail_unavailable` (no mail provider or token key, or the provider refused). |
+
+Mail settings live under `mobileOAuth.guests.mail`: `provider` (`MR_GUEST_MAIL_PROVIDER`: `none`
+by default, `log` for development, which logs only the template name, or `postmark`),
+`postmark.serverToken` (`MR_POSTMARK_SERVER_TOKEN`), `from` (`MR_GUEST_MAIL_FROM`, default
+`Street Tally <hello@streettally.osm.lol>`) and `claimOrigin` (`MR_CLAIM_ORIGIN`, default
+`https://streettally.osm.lol`). Links put the token in the URL fragment
+(`<claimOrigin>/claim#t=<token>`, `/claim/delete#t=`, `/claim/stop-reminders#t=`) so it never
+reaches web server logs. Postmark open and link tracking are off. The templates are copies of the
+project's brand/email set in `conf/mobile-email/`.
 
 ## Preview mode (drafts)
 

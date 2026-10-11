@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="x-apple-disable-message-reformatting">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark">
+<title>Put your {{savedAnswersText}} from {{campaignName}} on the map</title>
+<style>
+    :root { color-scheme: light dark; supported-color-schemes: light dark; }
+    body { margin: 0; padding: 0; }
+    a { color: #A84F00; }
+    @media (prefers-color-scheme: dark) {
+      .bg { background-color: #0B1220 !important; }
+      .card { background-color: #16213A !important; }
+      .text { color: #F3F4F6 !important; }
+      .muted { color: #A7B0C0 !important; }
+      .rule { border-color: #26324D !important; }
+      .link { color: #FBBF24 !important; }
+    }
+    [data-ogsc] .bg { background-color: #0B1220 !important; }
+    [data-ogsc] .card { background-color: #16213A !important; }
+    [data-ogsc] .text { color: #F3F4F6 !important; }
+    [data-ogsc] .muted { color: #A7B0C0 !important; }
+    [data-ogsc] .link { color: #FBBF24 !important; }
+    @media (max-width: 620px) { .container { width: 100% !important; } .pad { padding-left: 20px !important; padding-right: 20px !important; } }
+</style>
+</head>
+<body class="bg" style="margin:0;padding:0;background-color:#F4F5F7;">
+<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#F4F5F7;opacity:0;">About 3 minutes on a computer. Works until {{deadline}}.&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;</div>
+<table role="presentation" class="bg" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color:#F4F5F7;">
+  <tr><td align="center" style="padding:24px 12px;">
+    <table role="presentation" class="container" width="600" border="0" cellspacing="0" cellpadding="0" style="width:600px;max-width:600px;">
+      <tr><td bgcolor="#14213D" class="pad" style="background-color:#14213D;border-radius:14px 14px 0 0;padding:20px 32px;">
+        <p style="margin:0;font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;font-size:13px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#F5A524;">{{campaignName}}</p>
+        <p style="margin:4px 0 0 0;font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;font-size:15px;color:#C9CED8;">on <b style="color:#F3F4F6;">Street Tally</b></p>
+      </td></tr>
+      <tr><td bgcolor="#FFFFFF" class="card pad" style="background-color:#FFFFFF;border-radius:0 0 14px 14px;padding:32px 32px 16px 32px;">
+<p class="text" style="margin:0 0 16px 0;font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;font-size:16px;line-height:1.5;color:#14213D;">Hi,</p>
+<p class="text" style="margin:0 0 16px 0;font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;font-size:16px;line-height:1.5;color:#14213D;">Thanks for checking {{nounMany}} with {{organizerName}} on {{eventDate}}. You checked <b>{{savedStopsText}}</b>.</p>
+<p class="text" style="margin:0 0 16px 0;font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;font-size:16px;line-height:1.5;color:#14213D;">They're saved, but not on the map yet. To add them to OpenStreetMap, the free map that anyone can use, open this link on a computer:</p>
+<table role="presentation" border="0" cellspacing="0" cellpadding="0" style="margin:8px 0 24px 0;">
+  <tr><td align="center" bgcolor="#F5A524" style="border-radius:10px;background-color:#F5A524;">
+    <a href="{{claimUrl}}" target="_blank" style="display:inline-block;padding:14px 28px;font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;font-size:17px;font-weight:700;line-height:1.2;color:#14213D;text-decoration:none;border-radius:10px;">Put my answers on the map</a>
+  </td></tr>
+</table>
+<p class="text" style="margin:0 0 16px 0;font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;font-size:16px;line-height:1.5;color:#14213D;">You'll sign in to OpenStreetMap or create a free account. It takes about 3 minutes. The link works until <b>{{deadline}}</b>.</p>
+<p class="muted" style="margin:0 0 16px 0;font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;font-size:14px;line-height:1.5;color:#4A5468;">Button not working? Copy this address into your browser:<br><a class="link" href="{{claimUrl}}" target="_blank" style="color:#A84F00;text-decoration:underline;">{{claimUrl}}</a></p>
+      </td></tr>
+      <tr><td class="pad" style="padding:20px 32px;">
+<p class="muted" style="margin:0 0 16px 0;font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;font-size:13px;line-height:1.5;color:#4A5468;margin:0 0 8px 0;">Street Tally, for {{campaignName}}</p>
+<p class="muted" style="margin:0 0 16px 0;font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;font-size:13px;line-height:1.5;color:#4A5468;margin:0 0 8px 0;">Didn't ask for this? Ignore it and your saved answers will be removed on {{deadline}}.</p>
+<p class="muted" style="margin:0 0 16px 0;font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;font-size:13px;line-height:1.5;color:#4A5468;margin:0 0 8px 0;"><a class="link" href="{{stopRemindersUrl}}" target="_blank" style="color:#A84F00;text-decoration:underline;">Stop reminders</a> · <a class="link" href="{{deleteUrl}}" target="_blank" style="color:#A84F00;text-decoration:underline;">Delete my data</a> · <a class="link" href="{{privacyUrl}}" target="_blank" style="color:#A84F00;text-decoration:underline;">Privacy</a></p>
+      </td></tr>
+    </table>
+  </td></tr>
+</table>
+</body>
+</html>

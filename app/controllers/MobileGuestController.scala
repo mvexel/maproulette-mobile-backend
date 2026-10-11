@@ -74,7 +74,24 @@ class MobileGuestController @Inject() (
       }
     }
 
-  private def status(guest: MobileGuest, counts: Map[String, Int]): JsObject =
+  /** `GET /api/v2/mobile-guest/me`, guest bearer. */
+  def me: Action[AnyContent] = Action.async { request =>
+    guestRequest(request)(guest =>
+      Future(pending.counts(guest.id)).map(counts => Ok(MobileGuestController.status(guest, counts))
+      )
+    )
+  }
+
+  /** `DELETE /api/v2/mobile-guest`, guest bearer: "delete my data". */
+  def delete: Action[AnyContent] = Action.async { request =>
+    guestRequest(request)(guest => guests.delete(guest).map(_ => NoContent))
+  }
+}
+
+object MobileGuestController {
+
+  /** The guest status body of `GET /api/v2/mobile-guest/me`; `PUT /email` answers with it too. */
+  def status(guest: MobileGuest, counts: Map[String, Int]): JsObject =
     Json.obj(
       "guestId" -> guest.id.toString,
       // Only live, unclaimed guests authenticate; claimed and expired states come with claiming.
@@ -88,16 +105,4 @@ class MobileGuestController @Inject() (
       // Set once claiming exists; a claimed guest's token no longer authenticates.
       "claimedAs" -> JsNull
     )
-
-  /** `GET /api/v2/mobile-guest/me`, guest bearer. */
-  def me: Action[AnyContent] = Action.async { request =>
-    guestRequest(request)(guest =>
-      Future(pending.counts(guest.id)).map(counts => Ok(status(guest, counts)))
-    )
-  }
-
-  /** `DELETE /api/v2/mobile-guest`, guest bearer: "delete my data". */
-  def delete: Action[AnyContent] = Action.async { request =>
-    guestRequest(request)(guest => guests.delete(guest).map(_ => NoContent))
-  }
 }

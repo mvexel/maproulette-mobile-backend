@@ -12,6 +12,7 @@ GET     /oauth/mobile/me                                                @control
 POST    /oauth/mobile/guest                                             @controllers.MobileGuestController.register
 GET     /api/v2/mobile-guest/me                                         @controllers.MobileGuestController.me
 DELETE  /api/v2/mobile-guest                                            @controllers.MobileGuestController.delete
+PUT     /api/v2/mobile-guest/email                                      @controllers.MobileGuestEmailController.setEmail
 GET     /api/v2/mobile-guest/pending                                    @org.maproulette.controllers.api.MobileChoicePendingController.list
 POST    /api/v2/task/:id/choice/pending                                 @org.maproulette.controllers.api.MobileChoicePendingController.submit(id:Long)
 DELETE  /api/v2/task/:id/choice/pending                                 @org.maproulette.controllers.api.MobileChoicePendingController.withdraw(id:Long)

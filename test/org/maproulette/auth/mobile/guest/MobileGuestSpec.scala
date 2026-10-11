@@ -3,7 +3,7 @@ package org.maproulette.auth.mobile.guest
 import akka.actor.ActorSystem
 import akka.stream.{Materializer, SystemMaterializer}
 import com.typesafe.config.ConfigFactory
-import controllers.{MobileGuestController, MobileOAuthController}
+import controllers.{MobileGuestController, MobileGuestEmailController, MobileOAuthController}
 import java.time.Instant
 import java.util.UUID
 import org.maproulette.Config
@@ -276,6 +276,46 @@ class MobileGuestSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll 
       (body \ "pending").as[Int] mustBe 2
       (body \ "published").as[Int] mustBe 1
       (body \ "claimedAs").toOption mustBe Some(play.api.libs.json.JsNull)
+    }
+    "answer PUT /email with the same body as GET /me" in new Fixture {
+      import org.maproulette.provider.choice.claim._
+      val key = java.util.Base64.getEncoder.encodeToString(Array.fill[Byte](32)(7))
+      val cipherSettings = new MobileOAuthSettings(
+        Configuration.from(
+          Map(
+            "mobileOAuth.enabled"     -> true,
+            "mobileOAuth.callbackUri" -> "https://mr.example/oauth/mobile/callback",
+            "mobileOAuth.osmTokenKey" -> key
+          )
+        )
+      )
+      val summaries = new GuestSummaries {
+        def summary(guest: UUID): Option[GuestSummary] =
+          Some(GuestSummary("SLC Bus Stops", None, 3, Instant.now()))
+      }
+      val emails = new GuestEmailService(
+        new MemoryGuestEmailStore,
+        summaries,
+        new GuestEmailCipher(cipherSettings),
+        new RecordingMailer(),
+        new ClaimMailSettings(Configuration.from(Map.empty[String, Any])),
+        system
+      )
+      val emailController =
+        new MobileGuestEmailController(stubControllerComponents(), service, emails, pendingCounts)
+      val guest = await(service.authenticate(accessToken())).get
+      val put = emailController.setEmail(
+        guestRequest(PUT, "/api/v2/mobile-guest/email", guest)
+          .withBody(Json.obj("email" -> "ada@example.org"))
+      )
+      status(put) mustBe OK
+      header(CACHE_CONTROL, put) mustBe Some("no-store")
+      val me = controller.me(
+        guestRequest(GET, "/api/v2/mobile-guest/me", guest.copy(emailSet = true))
+      )
+      contentAsJson(put) mustBe contentAsJson(me)
+      (contentAsJson(put) \ "email").as[String] mustBe "pending"
+      (contentAsJson(put) \ "pending").as[Int] mustBe 2
     }
     "delete the guest's data and end its tokens" in new Fixture {
       val token = accessToken()
