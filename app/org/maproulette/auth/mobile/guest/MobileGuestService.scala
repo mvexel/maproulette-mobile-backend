@@ -29,6 +29,12 @@ object GuestError {
   case object RateLimited    extends GuestError(429, "rate_limited")
 }
 
+object MobileGuestService {
+
+  /** Pending answers are kept this long after the last one; a new guest gets the same window. */
+  val Retention: Duration = Duration.ofDays(30)
+}
+
 /** What the bearer filter needs from guests; [[MobileGuestAuth.Disabled]] where guests are off. */
 @com.google.inject.ImplementedBy(classOf[MobileGuestService])
 trait MobileGuestAuth {
@@ -59,8 +65,7 @@ class MobileGuestService @Inject() (
     actorSystem.dispatchers.lookup("mobile-oauth-dispatcher")
   val GrantType = "urn:maproulette:grant-type:guest"
 
-  /** Pending answers are kept this long after the last one; a new guest gets the same window. */
-  val retention: Duration = Duration.ofDays(30)
+  val retention: Duration = MobileGuestService.Retention
 
   /** Registrations per client IP per hour. Sized for one shared venue Wi-Fi with a few dozen phones. */
   val registrationsPerHour = 100
