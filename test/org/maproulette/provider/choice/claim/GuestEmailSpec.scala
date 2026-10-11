@@ -228,8 +228,17 @@ class GuestEmailSpec extends PlaySpec with BeforeAndAfterAll {
       val failing = fixture(mailer = new RecordingMailer(fail = true))
       await(failing.service.setEmail(guest(), "rosa@example.org")) mustBe
         Left(GuestEmailError.MailUnavailable)
-      // A refused send leaves no link behind and doesn't count toward the daily limit.
-      failing.store.tokens mustBe empty
+    }
+
+    "count refused sends toward the daily limit" in {
+      val f = fixture(mailer = new RecordingMailer(fail = true))
+      val g = guest()
+      (1 to 3).foreach(_ =>
+        await(f.service.setEmail(g, "rosa@example.org")) mustBe Left(
+          GuestEmailError.MailUnavailable
+        )
+      )
+      await(f.service.setEmail(g, "rosa@example.org")) mustBe Left(GuestEmailError.RateLimited)
     }
 
     "allow three sends per guest per day" in {
