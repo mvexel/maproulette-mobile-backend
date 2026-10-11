@@ -1,0 +1,15 @@
+Hi,
+
+Your {{savedAnswersText}} from {{campaignName}} are still saved, but not on the map yet. They'll be removed on {{deadline}}.
+
+Put my answers on the map:
+{{claimUrl}}
+
+About 3 minutes on a computer.
+
+--
+Street Tally, for {{campaignName}}
+This is one of two reminders. Stopping them keeps your answers until {{deadline}}.
+Stop reminders: {{stopRemindersUrl}}
+Delete my data: {{deleteUrl}}
+Privacy: {{privacyUrl}}
