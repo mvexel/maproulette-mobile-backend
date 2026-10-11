@@ -130,6 +130,16 @@ repo:
 | A challenge holds only choice tasks or none                                                                                       | `TaskDAL.checkChoiceConsistency` (:564), called from `extractCooperativeWork` (:482)                                                                                                                         |
 | The status write can run extra work inside its transaction (`inTransaction` hook)                                                 | `TaskDAL.setTaskStatus` (:670)                                                                                                                                                                               |
 
+### Guests (deferred sign-up, in progress)
+
+Off by default (`mobileOAuth.guests.enabled`). See [mobile-oauth.md](mobile-oauth.md#guests-deferred-sign-up).
+
+| What | Where |
+| --- | --- |
+| Client scope `guest` (`MobileScopes.parseClient`); grant scopes never include it | `app/org/maproulette/auth/mobile/MobileOAuthSettings.scala` (`MobileScopes`, `guestsEnabled`), `MobileClientRegistry.scala`, `app/controllers/MobileAdminController.scala` |
+| Tables `mobile_guests`, `mobile_guest_tokens`, `mobile_guest_claim_tokens` | `conf/evolutions/default/135.sql` |
+| Guest storage: create, mint and authenticate guest tokens, delete with tombstone | `app/org/maproulette/auth/mobile/guest/MobileGuestRepository.scala` |
+
 ### Discovery filters
 
 | What                                                                                                                       | Where                                                                                                                                                                               |

@@ -16,23 +16,34 @@ case class MobileClient(
   * OAuth scope sets. An app grant includes `tasks:read`; `tasks:write` is an optional addition, and
   * `osm:tagfix` (apply choice answers to OSM) is only valid together with `tasks:write`.
   * `mobile:admin` stands alone: an admin grant has no app scopes, so it reaches only the admin
-  * allowlist, and app grants never reach it.
+  * allowlist, and app grants never reach it. `guest` is never part of a grant: it is a client
+  * capability (the client may register guests, see [[org.maproulette.auth.mobile.guest]]) and the
+  * scope of guest access tokens, which are not OAuth grants.
   */
 object MobileScopes {
   val Read   = "tasks:read"
   val Write  = "tasks:write"
   val TagFix = "osm:tagfix"
   val Admin  = "mobile:admin"
+  val Guest  = "guest"
   // Canonical order for stored and returned scope strings.
-  private val supported = Seq(Read, Write, TagFix, Admin)
+  private val supported = Seq(Read, Write, TagFix, Admin, Guest)
 
   /** Strict RFC 6749 scope parsing: single-space separated, known, unique; read or admin alone. */
   def parse(value: String): Option[Set[String]] = {
     val items = value.split(" ", -1).toSeq
-    val known = items.forall(supported.contains) && items.distinct.size == items.size
+    val known = items.forall(item => item != Guest && supported.contains(item)) &&
+      items.distinct.size == items.size
     val app = items.contains(Read) && !items.contains(Admin) &&
       (!items.contains(TagFix) || items.contains(Write))
     if (known && (app || items == Seq(Admin))) Some(items.toSet) else None
+  }
+
+  /** A client's scopes: a valid grant scope set, plus `guest` on app clients only. */
+  def parseClient(value: String): Option[Set[String]] = {
+    val items = value.split(" ", -1).toSeq
+    if (items.count(_ == Guest) != 1) parse(value)
+    else parse(items.filterNot(_ == Guest).mkString(" ")).filterNot(isAdmin).map(_ + Guest)
   }
 
   def isAdmin(scopes: Set[String]): Boolean = scopes.contains(Admin)
@@ -54,6 +65,13 @@ class MobileOAuthSettings @Inject() (configuration: Configuration) {
     configuration.getOptional[Boolean]("mobileOAuth.allowTaskWrites").getOrElse(true)
   val writeControlEnabled: Boolean =
     configuration.getOptional[Boolean]("mobileOAuth.writeControlEnabled").getOrElse(false)
+
+  /**
+    * Deferred sign-up: clients with the `guest` scope may register guests that answer choice tasks
+    * before signing in. Off by default; off, the guest routes answer 404.
+    */
+  val guestsEnabled: Boolean =
+    enabled && configuration.getOptional[Boolean]("mobileOAuth.guests.enabled").getOrElse(false)
 
   /**
     * AES-256 key for stored OSM tokens (`MR_MOBILE_OSM_TOKEN_KEY`: standard base64 of exactly 32
@@ -105,7 +123,7 @@ class MobileOAuthSettings @Inject() (configuration: Configuration) {
         // The limits of mobile_oauth_clients (evolution 131), so a bad entry fails at startup.
         require(name.nonEmpty && name.length <= 200, "Invalid mobile client name")
         val scopes = MobileScopes
-          .parse(
+          .parseClient(
             entry.getOptional[Seq[String]]("scopes").getOrElse(Seq(MobileScopes.Read)).mkString(" ")
           )
           .getOrElse(throw new IllegalArgumentException("Invalid mobile client scopes"))
