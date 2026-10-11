@@ -399,15 +399,27 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
       rows(3).completedBy mustBe None
 
       val csv = ChoiceResults.csv(rows).split("\r\n").toSeq
-      csv.head must endWith(
+      csv.head mustBe "# Contains OSM usernames; don't publish this file."
+      csv(1) must include(",completed_by,completed_by_osm_id,completed_by_count,completed_at,")
+      csv(1) must endWith(
         ",tags_set,tags_unset,outcome,outcome_label,reported_lat,reported_lon,reported_source," +
           "reported_distance_m,report_count,answer:backrest"
       )
-      csv(1) must startWith(
+      csv(2) must startWith(
         s"${answered.id},node/$node,node/$node,-111.891,40.7608,1,Fixed,ChoiceMapper,"
       )
-      csv(1) must endWith(",false,backrest=no,,,,,,,,0,no")
+      csv(2) must endWith(",false,backrest=no,,,,,,,,0,no")
+      // Two stops are completed by the same mapper; the others have no completer and no count.
+      val counts = ChoiceResults.completedCounts(rows)
+      counts.values.toSeq mustBe Seq(2)
+      csv(2).split(",")(9) mustBe "2"
+      csv(5).split(",", -1)(9) mustBe ""
+      (ChoiceResults.geojson(rows) \ "notice").as[String] mustBe ChoiceResults.Notice
       val features = (ChoiceResults.geojson(rows) \ "features").as[Seq[JsObject]]
+      (features.head \ "properties" \ "completedByCount").as[Int] mustBe 2
+      // The fixture's feature has no name or ref tag.
+      (features.head \ "properties" \ "featureName").get mustBe JsNull
+      first.featureRef mustBe None
       (features.head \ "geometry" \ "coordinates").as[Seq[Double]] mustBe Seq(-111.891, 40.7608)
       (features.head \ "properties" \ "answers").as[JsObject] mustBe Json.obj("backrest" -> "no")
     }
@@ -499,7 +511,7 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
         (Some("not-here"), Some("It's not here"), 1)
       )
       rows.head.reported mustBe Some(ReportLocation(40.760912, -111.8912, "tap"))
-      ChoiceResults.csv(rows).split("\r\n")(1) must include(
+      ChoiceResults.csv(rows).split("\r\n")(2) must include(
         ",moved,It's moved,40.760912,-111.8912,tap,21,1"
       )
       val features = (ChoiceResults.geojson(rows) \ "features").as[Seq[JsObject]]
