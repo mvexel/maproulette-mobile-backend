@@ -180,9 +180,11 @@ class ChoiceWorkSpec extends PlaySpec {
     "check outcomes" in {
       def outcomes(values: JsValue*) = bench ++ Json.obj("outcomes" -> values)
       ChoiceWork.validate(outcomes()).isRight mustBe true
-      errors(outcomes(Json.obj("id" -> "too-hard", "label" -> "X", "status" -> 6))) must contain(
-        "outcomes[0].id: 'too-hard' is built in"
-      )
+      Seq("too-hard", "not-here", "moved").foreach { id =>
+        errors(outcomes(Json.obj("id" -> id, "label" -> "X", "status" -> 6))) must contain(
+          s"outcomes[0].id: '$id' is built in"
+        )
+      }
       Seq(
         Json.obj("id" -> "a", "label" -> "A", "status" -> 5),
         Json.obj("id" -> "a", "label" -> "A", "status" -> 1),
