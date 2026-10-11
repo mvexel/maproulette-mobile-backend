@@ -61,6 +61,9 @@ trait ChoicePendingStore {
   /** Deletes the guest's pending answer for the task; false when there was none. */
   def withdraw(guestId: UUID, taskId: Long): Boolean
 
+  /** How many of the guest's answers are in each state. */
+  def counts(guestId: UUID): Map[String, Int]
+
   /** The guest's answers in every state, newest first, starting below `before` (a row id). */
   def list(guestId: UUID, limit: Int, before: Option[Long]): List[PendingAnswer]
 }
@@ -162,6 +165,15 @@ class ChoicePendingRepository @Inject() (db: Database) extends ChoicePendingStor
         """DELETE FROM choice_pending WHERE guest_id={guest}::uuid AND task_id={task}
            AND state='pending'"""
       ).on("guest" -> guestId.toString, "task" -> taskId).executeUpdate() == 1
+    }
+
+  override def counts(guestId: UUID): Map[String, Int] =
+    db.withConnection { implicit c =>
+      SQL(
+        "SELECT state, count(*)::int AS n FROM choice_pending WHERE guest_id={guest}::uuid GROUP BY state"
+      ).on("guest" -> guestId.toString)
+        .as((SqlParser.str("state") ~ SqlParser.int("n")).map { case state ~ n => state -> n }.*)
+        .toMap
     }
 
   override def list(guestId: UUID, limit: Int, before: Option[Long]): List[PendingAnswer] =

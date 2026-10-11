@@ -4,18 +4,32 @@ This fork (`mvexel/maproulette-mobile-backend`, branch `feat/mobile-oauth`) is
 based on upstream
 [`maproulette/maproulette-backend`](https://github.com/maproulette/maproulette-backend)
 at commit
-[`b9b2e69b`](https://github.com/maproulette/maproulette-backend/commit/b9b2e69b0115cbfb7a1f997a29dfc3b2ca32512a)
-(2026-09-30, "Reject unscoped requests to task cluster endpoint (#1284)").
+[`bbdc2d64`](https://github.com/maproulette/maproulette-backend/commit/bbdc2d6478175911c92d639f139ba335326fa3fe)
+(2026-10-10, "Validate OAuth state in callback"). The fork was first imported
+from an archive of `b9b2e69b`; that commit is recorded as an ancestor, so later
+upstream syncs are ordinary merges of `upstream/main`.
+
+### Evolution numbering
+
+Fork migrations are never renumbered, because deployed databases have already
+applied them. An upstream migration whose number the fork already uses is
+copied to the next free number, with a comment naming the upstream file:
+
+| Upstream file | Fork file | Content |
+| ------------- | --------- | ------- |
+| `129.sql` (synced at `bbdc2d64`) | `133.sql` | `grants_role_valid` check constraint |
+
+Fork-owned migrations continue after the highest number in this table.
 
 The mobile OAuth and field write-control features are opt-in. With
 `mobileOAuth.enabled = false` and `mobileOAuth.writeControlEnabled = false`
-(their defaults in `conf/application.conf`), web sessions, API keys and
+(their defaults in `conf/application.conf`), web sessions and
 existing routes behave as upstream, apart from the general fixes listed under
 [Changed](#changed). No upstream file was removed. To compare the fork with its
 base commit:
 
 ```sh
-git -C <upstream checkout> archive b9b2e69b | tar -x -C /tmp/up
+git -C <upstream checkout> archive bbdc2d64 | tar -x -C /tmp/up
 diff -r /tmp/up . --exclude=.git
 ```
 
@@ -87,6 +101,7 @@ Backend for the admin web app: approved clients in the database, the super-user-
 | Admin allowlist: `/api/v2/mobile-admin/*`, `me`, `POST /challenge`, `PUT /challenge/:id`, `PUT /challenge/:id/addFileTasks?lineByLine=true&report=true`, challenge, challenge tasks and task reads | `MobileBearerFilter.scala:25` (`MobileAdminRoutes`)                                                                             |
 | Authenticated super-user admin bearer grants can prepare challenges and import tasks while the field write switch is off; legacy challenge writes remain blocked                                   | `MobileBearerFilter.scala` (`MobileFieldRoutes`, `MobileAdminRoutes`)                                                           |
 | Optional `liveMissingQuestions` choice templates filter absent-tag questions at check time; selected answers are guarded again immediately before an OSM edit                                      | `ChoiceWork.scala`, `MobileChoiceService.scala`                                                                                 |
+| Campaign results export `GET /api/v2/mobile-admin/challenges/:id/results?format=csv\|geojson`; choice submissions store their answers (`mobile_choice_submissions.answers`) | `conf/routes` → `app/controllers/MobileResultsController.scala`, `app/org/maproulette/provider/choice/ChoiceResults.scala`, `conf/evolutions/default/134.sql` |
 | Routes `GET`/`POST /api/v2/mobile-admin/clients`, `PATCH …/clients/:id[?revokeGrants=true]`, `GET …/audit`                                                                                         | `conf/routes:11-15` → `app/controllers/MobileAdminController.scala:49,53,67,97`                                                 |
 | Client writes and audit entries in one transaction; revocation of a client's grant families                                                                                                        | `MobileAdmin.scala:73` (`MobileAdminRepository`)                                                                                |
 | Admin writes through stock routes are audited as `stock.<METHOD>`                                                                                                                                  | `MobileBearerFilter.scala:142`                                                                                                  |
@@ -131,6 +146,7 @@ Off by default (`mobileOAuth.guests.enabled`). See [mobile-oauth.md](mobile-oaut
 | Table `choice_pending` | `conf/evolutions/default/137.sql` |
 | Pending answers: submit (validated like a choice submission, live-question tasks only), withdraw, list; published-challenge rule while writes are off | `app/org/maproulette/provider/choice/MobileChoicePendingService.scala`, `ChoicePendingRepository.scala`, `app/org/maproulette/controllers/api/MobileChoicePendingController.scala` |
 | `MobileChoiceService.validateSubmission`: parsing and payload checks shared by submit and pending answers | `app/org/maproulette/provider/choice/MobileChoiceService.scala` |
+| `excludePending=true`: leave out tasks held by a pending answer | `SearchParameters.scala` (`excludePending`), `TaskClusterService.scala` (`excludeStaleChoiceTasks`) |
 | `choice/check` accepts guest tokens | `app/org/maproulette/controllers/api/MobileChoiceController.scala` |
 | Routes `GET /api/v2/mobile-guest/pending`, `POST` and `DELETE /api/v2/task/:id/choice/pending` | `conf/routes` |
 
