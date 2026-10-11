@@ -206,7 +206,7 @@ object MobileFieldRoutes {
           "/oauth/mobile/guest",
           "/api/v2/mobile-admin/clients"
         ).contains(request.path) || MobileGuestRoutes.own(request.method, request.path)
-      case "PATCH"  => request.path.matches("/api/v2/mobile-admin/clients/[A-Za-z0-9._-]+")
+      case "PATCH" => request.path.matches("/api/v2/mobile-admin/clients/[A-Za-z0-9._-]+")
       case "PUT" =>
         request.path == "/api/v2/mobile-admin/write-policy" ||
           MobileGuestRoutes.email(request.method, request.path)
