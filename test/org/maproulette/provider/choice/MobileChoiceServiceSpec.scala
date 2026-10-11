@@ -417,6 +417,9 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
       (ChoiceResults.geojson(rows) \ "notice").as[String] mustBe ChoiceResults.Notice
       val features = (ChoiceResults.geojson(rows) \ "features").as[Seq[JsObject]]
       (features.head \ "properties" \ "completedByCount").as[Int] mustBe 2
+      // The fixture's feature has no name or ref tag.
+      (features.head \ "properties" \ "featureName").get mustBe JsNull
+      first.featureRef mustBe None
       (features.head \ "geometry" \ "coordinates").as[Seq[Double]] mustBe Seq(-111.891, 40.7608)
       (features.head \ "properties" \ "answers").as[JsObject] mustBe Json.obj("backrest" -> "no")
     }

@@ -27,7 +27,9 @@ case class ChoiceResultRow(
     outcomeLabel: Option[String] = None,
     reported: Option[ReportLocation] = None,
     reportedDistanceM: Option[Int] = None,
-    reportCount: Int = 0
+    reportCount: Int = 0,
+    featureName: Option[String] = None,
+    featureRef: Option[String] = None
 )
 
 /**
@@ -54,6 +56,8 @@ class ChoiceResultsRepository @Inject() (db: Database) {
     result    <- SqlParser.get[Option[String]]("result")
     payload   <- SqlParser.get[Option[String]]("payload")
     reports   <- SqlParser.int("report_count")
+    fName     <- SqlParser.get[Option[String]]("feature_name")
+    fRef      <- SqlParser.get[Option[String]]("feature_ref")
   } yield {
     val appliedJson = applied.map(Json.parse)
     val resultJson  = result.map(Json.parse)
@@ -84,7 +88,9 @@ class ChoiceResultsRepository @Inject() (db: Database) {
         } yield ReportLocation(lat, lon, source)
       },
       resultJson.flatMap(j => (j \ "distanceM").asOpt[Int]),
-      reports
+      reports,
+      fName.filter(_.trim.nonEmpty),
+      fRef.filter(_.trim.nonEmpty)
     )
   }
 
@@ -107,7 +113,9 @@ class ChoiceResultsRepository @Inject() (db: Database) {
                   + (SELECT count(*) FROM choice_pending p WHERE p.task_id = t.id
                     AND p.state = 'pending' AND p.body->>'outcome' IN ('not-here', 'moved'))
                     AS report_count,
-                  st.reason AS stale
+                  st.reason AS stale,
+                  t.geojson #>> '{features,0,properties,name}' AS feature_name,
+                  t.geojson #>> '{features,0,properties,ref}' AS feature_ref
                 FROM tasks t
                 LEFT JOIN users u ON u.id = t.completed_by
                 LEFT JOIN LATERAL (
@@ -250,6 +258,8 @@ object ChoiceResults {
           "properties" -> Json.obj(
             "taskId"           -> row.taskId,
             "taskName"         -> row.name,
+            "featureName"      -> row.featureName,
+            "featureRef"       -> row.featureRef,
             "element"          -> row.element,
             "status"           -> row.status,
             "statusName"       -> statusName(row.status),

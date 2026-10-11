@@ -108,7 +108,8 @@ thank-yous. It is only in this export, never on the live page or in the app.
   with `= + - @` get a leading `'` so spreadsheets don't run them.
 - `geojson`: `application/geo+json`, a FeatureCollection with the note as a top-level `notice`
   member, of task points with the same fields as properties (`answers` and `tagsSet` as objects,
-  `completedByCount`).
+  `completedByCount`), plus `featureName` and `featureRef` (the task feature's `name` and `ref`
+  tags, or null) so the admin can label stops.
 
 Both carry `Content-Disposition: attachment; filename="challenge-<id>-results.<format>"`.
 
