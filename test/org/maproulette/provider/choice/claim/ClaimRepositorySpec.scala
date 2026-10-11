@@ -41,7 +41,7 @@ class ClaimRepositorySpec extends PlaySpec {
         SQL("INSERT INTO users VALUES(1,'rosa_slc'),(2,'sam')").executeUpdate()
         SQL("CREATE TABLE tasks(id bigint PRIMARY KEY)").execute()
         SQL("INSERT INTO tasks VALUES(1),(2)").executeUpdate()
-        Seq("129", "130", "131", "135", "137", "138").foreach { version =>
+        Seq("129", "130", "131", "135", "137", "138", "139").foreach { version =>
           val evolution = new String(
             Files.readAllBytes(Paths.get(s"conf/evolutions/default/$version.sql")),
             "UTF-8"
@@ -210,6 +210,19 @@ class ClaimRepositorySpec extends PlaySpec {
         store.claim(ByToken(MobileSecrets.hash("newer-3")), rosa, page, now).isRight mustBe true
     }
 
+    "D13: a claim accepted while publishing can't run starts as waiting" in withStore {
+      (store, db) =>
+        val g = guest(db, "w")
+        val result =
+          store.claim(secret(g, "w"), rosa, family(db, rosa, client), now, waiting = true)
+        result.map(_.claim.state) mustBe Right("waiting")
+        db.withConnection { implicit c =>
+          SQL("SELECT waited_at IS NOT NULL FROM mobile_claims WHERE guest_id={g}::uuid")
+            .on("g" -> g.toString)
+            .as(SqlParser.scalar[Boolean].single) mustBe true
+        }
+    }
+
     "claim on the phone with the guest secret, which is spent" in withStore { (store, db) =>
       val g     = guest(db, "c")
       val phone = family(db, rosa, client)
@@ -219,6 +232,7 @@ class ClaimRepositorySpec extends PlaySpec {
         Left(ClaimProblem.NotFound)
       val result = store.claim(secret(g, "c"), rosa, phone, now).toOption.get
       result.claim.familyId mustBe phone
+      result.claim.state mustBe "queued"
       result.pending mustBe 2
       db.withConnection { implicit c =>
         SQL(

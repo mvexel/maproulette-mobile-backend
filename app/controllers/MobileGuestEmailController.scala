@@ -176,7 +176,7 @@ class MobileClaimController @Inject() (
 
   def claim: Action[JsValue] = Action.async(parse.tolerantJson(maxLength = 2048)) { request =>
     handled(request) { (user, scopes, family, client) =>
-      claims.claim(request.body, user, scopes, family, client).map {
+      claims.claim(request.body, user, scopes, family, client, waiting = !publishing.ready).map {
         case Left(error) => Status(error.status)(Json.obj("error" -> error.code) ++ error.extra)
         case Right((status, body)) =>
           if (status == ACCEPTED) publisher.nudge()

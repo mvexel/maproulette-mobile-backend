@@ -52,7 +52,8 @@ trait ClaimStore {
       credential: ClaimCredential,
       userId: Long,
       requestFamily: String,
-      now: Instant
+      now: Instant,
+      waiting: Boolean = false
   ): Either[ClaimProblem, ClaimResult]
 
   def get(id: Long): Option[ClaimRecord]
@@ -148,7 +149,8 @@ class ClaimRepository @Inject() (db: Database) extends ClaimStore {
       credential: ClaimCredential,
       userId: Long,
       requestFamily: String,
-      now: Instant
+      now: Instant,
+      waiting: Boolean
   ): Either[ClaimProblem, ClaimResult] =
     db.withTransaction { implicit c =>
       locate(credential) match {
@@ -223,12 +225,17 @@ class ClaimRepository @Inject() (db: Database) extends ClaimStore {
               .on("g" -> guest.id.toString)
               .executeUpdate()
             val claim =
-              SQL("""INSERT INTO mobile_claims (guest_id,user_id,family_id,created_at,updated_at)
-              VALUES ({g}::uuid,{u},{family},{now},{now}) RETURNING *""")
-                .on(
+              // Accepted while publishing can't run (D13): the claim starts as waiting.
+              SQL(
+                """INSERT INTO mobile_claims
+                (guest_id,user_id,family_id,state,waited_at,created_at,updated_at)
+              VALUES ({g}::uuid,{u},{family},{state},
+                CASE WHEN {state}='waiting' THEN {now}::timestamptz END,{now},{now}) RETURNING *"""
+              ).on(
                   "g"      -> guest.id.toString,
                   "u"      -> userId,
                   "family" -> family,
+                  "state"  -> (if (waiting) "waiting" else "queued"),
                   "now"    -> stamp(now)
                 )
                 .as(record.single)
@@ -366,7 +373,8 @@ class ClaimService @Inject() (store: ClaimStore, actorSystem: ActorSystem) {
       user: User,
       scopes: Set[String],
       family: String,
-      client: String
+      client: String,
+      waiting: Boolean = false
   ): Future[Either[ClaimError, (Int, JsObject)]] =
     if (!scopes.contains(MobileScopes.TagFix))
       Future.successful(Left(ClaimError.InsufficientScope))
@@ -374,7 +382,7 @@ class ClaimService @Inject() (store: ClaimStore, actorSystem: ActorSystem) {
       credential(body, client) match {
         case None => Future.successful(Left(ClaimError.InvalidRequest))
         case Some(value) =>
-          Future(store.claim(value, user.id, family, Instant.now())).map {
+          Future(store.claim(value, user.id, family, Instant.now(), waiting)).map {
             case Left(ClaimProblem.NotFound)       => Left(ClaimError.NotFound)
             case Left(ClaimProblem.Reauth)         => Left(ClaimError.Reauth)
             case Left(ClaimProblem.Claimed(other)) => Left(ClaimError.Claimed(other))
