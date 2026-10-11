@@ -200,11 +200,11 @@ object MobileAdminController {
   }
 
   private def scopes(value: JsValue): Either[String, Set[String]] =
-    strings(value).flatMap(items => MobileScopes.parse(items.mkString(" "))) match {
+    strings(value).flatMap(items => MobileScopes.parseClient(items.mkString(" "))) match {
       case Some(set) => Right(set)
       case None =>
         Left(
-          "scopes: [\"tasks:read\"], [\"tasks:read\",\"tasks:write\"], [\"tasks:read\",\"tasks:write\",\"osm:tagfix\"] or [\"mobile:admin\"]"
+          "scopes: [\"tasks:read\"], [\"tasks:read\",\"tasks:write\"], [\"tasks:read\",\"tasks:write\",\"osm:tagfix\"] or [\"mobile:admin\"]; app scopes may add \"guest\""
         )
     }
 
