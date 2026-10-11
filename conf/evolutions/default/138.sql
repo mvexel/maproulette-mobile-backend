@@ -3,13 +3,13 @@
 # --- !Ups
 
 -- Deferred sign-up (fork only), claims. A guest's pending answers are claimed by an OSM account
--- through the claim page; the publish job then applies them. Additive: one new table and one
+-- through the claim page, and the publish job then applies them. Additive: one new table and one
 -- nullable column on the fork's choice_pending.
 CREATE TABLE mobile_claims (
   id          bigserial PRIMARY KEY,
   guest_id    uuid REFERENCES mobile_guests(id) ON DELETE SET NULL,
   user_id     bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  -- The phone's grant family created by the claim; it holds the copy of the OSM token the
+  -- The phone's grant family created by the claim. It holds the copy of the OSM token the
   -- publish job writes with.
   family_id   text NOT NULL,
   state       text NOT NULL DEFAULT 'queued'
