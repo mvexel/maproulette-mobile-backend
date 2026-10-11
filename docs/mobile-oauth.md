@@ -248,6 +248,61 @@ submission for a task is unfinished, others get `409 submission_pending`.
 | 502 | `osm_unavailable` |
 | 503 | `osm_edits_unavailable` (no token key configured) |
 
+## Guests (deferred sign-up)
+
+*In progress.* A guest answers choice tasks before having an OSM account; the answers wait on the
+backend until the person signs in with OSM and claims them. Design and the full HTTP contract:
+`deferred-signup-api.md` in the project's design folder. This section grows with each step.
+
+So far (step B1):
+
+- `mobileOAuth.guests.enabled` (`MR_MOBILE_GUESTS_ENABLED`, default `false`; needs `enabled`).
+- Scope `guest` is a **client** capability, never part of a grant: an app client's `scopes` may add
+  `"guest"` (`["tasks:read", "tasks:write", "osm:tagfix", "guest"]`); admin clients may not.
+  `/oauth/mobile/authorize` and refresh still reject `guest` as `invalid_scope`.
+- Evolution 135 adds `mobile_guests`, `mobile_guest_tokens` and `mobile_guest_claim_tokens`. A
+  guest is never a `users` row. Secrets and tokens are stored as SHA-256 digests; "delete my data"
+  clears the secret, email and tokens and leaves a tombstone.
+
+Step B2, guest registration and guest tokens:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /oauth/mobile/guest` | Form `client_id` (a client with `guest`), no credential. `201 {"guestId", "guestSecret", "expiresAt"}`. The secret (43 characters) is returned once; the app keeps it in secure storage. `401 invalid_client`, `429 rate_limited` (100 per client IP per hour, `Retry-After`). |
+| `POST /oauth/mobile/token` | `grant_type=urn:maproulette:grant-type:guest`, `client_id`, `guest_id`, `guest_secret`. A token response with `scope: "guest"`, `expires_in` as for app tokens, and **no** refresh token: the secret mints the next one. `invalid_grant` (wrong secret, deleted or expired guest), `invalid_client`, or `guest_claimed` once the guest has been claimed. While guests are off the grant is `unsupported_grant_type`. |
+| `GET /api/v2/mobile-guest/me` | Guest bearer. `{"guestId", "state", "email": "none\|pending\|verified", "pending", "published", "expiresAt", "claimedAs"}`: `pending` and `published` count the guest's answers in those states (B3); `claimedAs` is `null` until claiming exists. Never the address. |
+| `DELETE /api/v2/mobile-guest` | Guest bearer. "Delete my data": `204`. |
+
+Step B3, pending answers. A pending answer is held on the backend and changes nothing in OSM or in
+the task's status; claiming publishes it later.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/v2/task/:id/choice/pending` | Guest bearer, body as for `POST /task/:id/choice` (JSON, 1–2048 bytes). Only for challenges with `liveMissingQuestions`. Runs the choice check (same 60 s cache), then stores the answer and replaces the guest's earlier answer for the task. `200 {"taskId", "state": "pending", "answeredAt", "holdUntil", "expiresAt"}`: the hold is 7 days and the guest's expiry moves to at least 30 days after this answer. |
+| `DELETE /api/v2/task/:id/choice/pending` | Guest bearer. Withdraws the guest's pending answer: `204`, or `404 not_found`. |
+| `GET /api/v2/mobile-guest/pending?limit=&after=` | Guest bearer. Every answer of the guest, newest first: `{"items": [{"taskId", "challengeId", "state", "answeredAt", "holdUntil", "result"}], "next"}`. `limit` 1–100 (default 50); `after` is the previous page's `next`. |
+
+Submit errors: `400 invalid_request`; `403 challenge_not_published` (field writes are off and the
+challenge is not enabled with tag `mobile-survey-v1`); `404 not_found` (unknown task, or its challenge or project is disabled: preview mode); `409 task_completed` (status
+no longer Created, Skipped or Too hard) or `409 task_ineligible` with `reason` and `detail` as from
+`choice/check`, `key_changed` when a chosen question was answered in OSM meanwhile; `422
+unsupported_task` (no `liveMissingQuestions`, not a choice task, or bundled) or `422
+invalid_submission` (including `"delete": true`); `429 pending_limit` (200 pending answers per
+guest); `502 osm_unavailable`; `401 invalid_token` if the guest was deleted, claimed or expired in
+the meantime. Evolution 137 adds `choice_pending`; "delete my data" deletes the guest's answers that
+are still pending.
+
+Discovery: `excludePending=true` on `tasks/box`, `markers/box` and the cluster routes leaves out
+tasks with a pending answer whose hold has not ended (next to `excludeStale`). `challenge/:id/tasks`
+is not filtered.
+
+A guest token reaches only `MobileGuestRoutes`: the discovery reads of `MobileReadRoutes`, including
+`choice/check` (but not `/oauth/mobile/me`), pending answers and its own routes. It is never a
+MapRoulette user: the bearer filter sets `MobileBearerIdentity.GuestKey`, never `UserKey`, so stock
+routes see an anonymous request. App grants cannot reach the guest's routes. Registration, the
+guest's routes and, for guest tokens only, `choice/check` stay open while the field write switch is
+off: they neither write OSM nor change task status.
+
 ## Account identity
 
 The mobile callback verifies the person's numeric OSM user ID and looks up the

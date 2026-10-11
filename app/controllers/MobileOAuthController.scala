@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets
 import java.time.Instant
 import org.maproulette.Config
 import org.maproulette.auth.mobile._
+import org.maproulette.auth.mobile.guest.MobileGuestService
 import org.maproulette.framework.service.UserService
 import play.api.libs.json.Json
 import play.api.libs.ws.WSClient
@@ -14,10 +15,16 @@ import play.twirl.api.HtmlFormat
 import scala.concurrent.{ExecutionContext, Future}
 import scala.concurrent.duration._
 import scala.util.control.NonFatal
-import scalaoauth2.provider.{InvalidClient, InvalidGrant, InvalidRequest, OAuthError}
+import scalaoauth2.provider.{
+  InvalidClient,
+  InvalidGrant,
+  InvalidRequest,
+  OAuthError,
+  UnsupportedGrantType
+}
 
 /** A separate browser authorization flow. No existing web login routes or cookies are changed. */
-class MobileOAuthController @Inject() (
+class MobileOAuthController(
     components: ControllerComponents,
     service: MobileOAuthService,
     settings: MobileOAuthSettings,
@@ -25,9 +32,37 @@ class MobileOAuthController @Inject() (
     cipher: MobileOsmTokenCipher,
     users: UserService,
     config: Config,
-    ws: WSClient
+    ws: WSClient,
+    guests: Option[MobileGuestService]
 )(implicit ec: ExecutionContext)
     extends AbstractController(components) {
+
+  @Inject() def this(
+      components: ControllerComponents,
+      service: MobileOAuthService,
+      settings: MobileOAuthSettings,
+      identity: MobileOSMIdentity,
+      cipher: MobileOsmTokenCipher,
+      users: UserService,
+      config: Config,
+      ws: WSClient,
+      guests: MobileGuestService
+  )(implicit ec: ExecutionContext) =
+    this(components, service, settings, identity, cipher, users, config, ws, Some(guests))
+
+  // Without guests: for tests of the OAuth flow.
+  def this(
+      components: ControllerComponents,
+      service: MobileOAuthService,
+      settings: MobileOAuthSettings,
+      identity: MobileOSMIdentity,
+      cipher: MobileOsmTokenCipher,
+      users: UserService,
+      config: Config,
+      ws: WSClient
+  )(implicit ec: ExecutionContext) =
+    this(components, service, settings, identity, cipher, users, config, ws, None)
+
   private val logger     = play.api.Logger(getClass)
   private val cookieName = "mr_mobile_oauth"
   private val cookiePath = "/oauth/mobile"
@@ -353,20 +388,49 @@ class MobileOAuthController @Inject() (
   def token: Action[Map[String, Seq[String]]] =
     Action.async(parse.formUrlEncoded(maxLength = 8192)) { request =>
       handled {
-        service.exchange(request.body, request.headers.get(AUTHORIZATION).isDefined).map {
-          case Left(problem) => error(problem)
-          case Right(grant) =>
-            Ok(
-              Json.obj(
-                "access_token"  -> grant.accessToken,
-                "token_type"    -> grant.tokenType,
-                "expires_in"    -> grant.expiresIn,
-                "refresh_token" -> grant.refreshToken,
-                "scope"         -> grant.scope
-              )
-            )
+        val guestGrant = guests.filter(_.enabled).map(_.GrantType)
+        service.parameters(request.body) match {
+          case Right(params) if guestGrant.exists(params.get("grant_type").contains) =>
+            guestToken(params, request.headers.get(AUTHORIZATION).isDefined)
+          case Right(params) if params.get("grant_type").exists(_.startsWith("urn:maproulette:")) =>
+            Future.successful(error(new UnsupportedGrantType()))
+          case _ => exchange(request.body, request.headers.get(AUTHORIZATION).isDefined)
         }
       }
+    }
+
+  /** Deferred sign-up: a guest access token for the guest id and secret. No refresh token. */
+  private def guestToken(params: Map[String, String], hasAuthorization: Boolean): Future[Result] =
+    if (hasAuthorization || params.contains("client_secret"))
+      Future.successful(error(new InvalidClient()))
+    else
+      guests.get.token(params).map {
+        case Left(problem) =>
+          Status(problem.status)(Json.obj("error" -> problem.code))
+        case Right(token) =>
+          Ok(
+            Json.obj(
+              "access_token" -> token.token,
+              "token_type"   -> "Bearer",
+              "expires_in"   -> token.expiresIn,
+              "scope"        -> MobileScopes.Guest
+            )
+          )
+      }
+
+  private def exchange(body: Map[String, Seq[String]], hasAuthorization: Boolean): Future[Result] =
+    service.exchange(body, hasAuthorization).map {
+      case Left(problem) => error(problem)
+      case Right(grant) =>
+        Ok(
+          Json.obj(
+            "access_token"  -> grant.accessToken,
+            "token_type"    -> grant.tokenType,
+            "expires_in"    -> grant.expiresIn,
+            "refresh_token" -> grant.refreshToken,
+            "scope"         -> grant.scope
+          )
+        )
     }
 
   def revoke: Action[Map[String, Seq[String]]] =

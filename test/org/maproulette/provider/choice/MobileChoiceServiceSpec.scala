@@ -258,7 +258,8 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
     "filter template questions using live tags without staling the remaining work" taggedAs ChoiceTag in {
       val (task, node) = benchTask(
         payload = _ ++ Json.obj("liveMissingQuestions" -> true),
-        tags = Map("amenity"                           -> "bench", "material" -> "wood")
+        // The fixture's capacity question is answered too, so backrest is the only one left.
+        tags = Map("amenity" -> "bench", "material" -> "wood", "capacity" -> "2")
       )
       (check(task).body \ "questionIds").as[List[String]] mustBe List("backrest")
       stale(task) mustBe None
@@ -269,7 +270,10 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
     }
 
     "reject an answer whose tag appeared while leaving other live questions available" taggedAs ChoiceTag in {
-      val (task, node) = benchTask(payload = _ ++ Json.obj("liveMissingQuestions" -> true))
+      val (task, node) = benchTask(
+        payload = _ ++ Json.obj("liveMissingQuestions" -> true),
+        tags = Map("amenity"                           -> "bench", "capacity" -> "2")
+      )
       lock(task)
       osm.edit("node", node)(_ + ("backrest" -> "yes"))
       val response = submit(task, """{"answers":{"backrest":"no"}}""")
