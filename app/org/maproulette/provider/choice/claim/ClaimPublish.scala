@@ -9,7 +9,12 @@ import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.{Inject, Singleton}
-import org.maproulette.auth.mobile.{MobileOAuthSettings, MobileSecrets}
+import org.maproulette.auth.mobile.{
+  MobileClaimRoutes,
+  MobileClientRegistry,
+  MobileOAuthSettings,
+  MobileSecrets
+}
 import org.maproulette.framework.model.User
 import org.maproulette.framework.service.UserService
 import org.maproulette.provider.choice.{MobileChoiceService, PendingOutcome, PendingPublish}
@@ -177,6 +182,7 @@ class ClaimPublishService @Inject() (
     choice: MobileChoiceService,
     users: UserService,
     preview: ClaimPreviewService,
+    clients: MobileClientRegistry,
     summaries: GuestSummaries,
     cipher: GuestEmailCipher,
     mailer: ClaimMailer,
@@ -189,11 +195,18 @@ class ClaimPublishService @Inject() (
   private implicit lazy val ec: ExecutionContext =
     actorSystem.dispatchers.lookup("mobile-oauth-dispatcher")
 
+  /**
+    * Writes are on and the claim page's client is enabled (D13 (4)); otherwise claims wait. Read on
+    * every run and before every answer (D13 (2)).
+    */
+  def ready: Boolean =
+    preview.writesEnabled && clients.get(MobileClaimRoutes.ClientId).isDefined
+
   private sealed trait Step
   private case object Next      extends Step
   private case object Published extends Step
 
-  /** Why a claim's run stopped early: writes went off, or OSM refused the claim's token. */
+  /** Why a claim's run stopped early: not ready (writes off or claim client disabled), or OSM refused the token. */
   private sealed trait Stop        extends Step
   private case object WritesOff    extends Stop
   private case object TokenRefused extends Stop
@@ -209,7 +222,7 @@ class ClaimPublishService @Inject() (
   }
 
   private def publishRow(claim: OpenClaim, user: User, item: ClaimRow, now: Instant): Future[Step] =
-    if (!preview.writesEnabled) {
+    if (!ready) {
       store.setState(claim.id, "waiting", now)
       Future.successful(WritesOff)
     } else
@@ -304,7 +317,7 @@ class ClaimPublishService @Inject() (
     }
 
   private def publish(claim: OpenClaim, now: Instant): Future[(Int, Int, Boolean)] =
-    if (!preview.writesEnabled) {
+    if (!ready) {
       if (claim.state != "waiting") store.setState(claim.id, "waiting", now)
       Future.successful((0, 0, true))
     } else

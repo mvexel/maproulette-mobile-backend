@@ -41,7 +41,7 @@ class ClaimRepositorySpec extends PlaySpec {
         SQL("INSERT INTO users VALUES(1,'rosa_slc'),(2,'sam')").executeUpdate()
         SQL("CREATE TABLE tasks(id bigint PRIMARY KEY)").execute()
         SQL("INSERT INTO tasks VALUES(1),(2)").executeUpdate()
-        Seq("129", "130", "131", "135", "137", "138").foreach { version =>
+        Seq("129", "130", "131", "135", "137", "138", "139").foreach { version =>
           val evolution = new String(
             Files.readAllBytes(Paths.get(s"conf/evolutions/default/$version.sql")),
             "UTF-8"
@@ -210,6 +210,19 @@ class ClaimRepositorySpec extends PlaySpec {
         store.claim(ByToken(MobileSecrets.hash("newer-3")), rosa, page, now).isRight mustBe true
     }
 
+    "D13: a claim accepted while publishing can't run starts as waiting" in withStore {
+      (store, db) =>
+        val g = guest(db, "w")
+        val result =
+          store.claim(secret(g, "w"), rosa, family(db, rosa, client), now, waiting = true)
+        result.map(_.claim.state) mustBe Right("waiting")
+        db.withConnection { implicit c =>
+          SQL("SELECT waited_at IS NOT NULL FROM mobile_claims WHERE guest_id={g}::uuid")
+            .on("g" -> g.toString)
+            .as(SqlParser.scalar[Boolean].single) mustBe true
+        }
+    }
+
     "claim on the phone with the guest secret, which is spent" in withStore { (store, db) =>
       val g     = guest(db, "c")
       val phone = family(db, rosa, client)
@@ -219,6 +232,7 @@ class ClaimRepositorySpec extends PlaySpec {
         Left(ClaimProblem.NotFound)
       val result = store.claim(secret(g, "c"), rosa, phone, now).toOption.get
       result.claim.familyId mustBe phone
+      result.claim.state mustBe "queued"
       result.pending mustBe 2
       db.withConnection { implicit c =>
         SQL(
@@ -230,6 +244,67 @@ class ClaimRepositorySpec extends PlaySpec {
       // Someone else with the (now spent) secret learns nothing.
       store.claim(secret(g, "c"), sam, family(db, sam, client), now) mustBe
         Left(ClaimProblem.NotFound)
+    }
+
+    "retry failed rows, reopen the claim and re-seal a new grant's OSM token" in withStore {
+      (store, db) =>
+        val g      = guest(db, "r")
+        val page   = family(db, rosa, "maproulette-claim")
+        val result = store.claim(link("r"), rosa, page, now).toOption.get
+        val claim  = result.claim
+        db.withConnection { implicit c =>
+          SQL("""UPDATE choice_pending SET state='failed', attempts=5,
+            result=CAST({result} AS jsonb) WHERE claim_id={id}""")
+            .on("id" -> claim.id, "result" -> """{"error":"osm_unavailable"}""")
+            .executeUpdate()
+          SQL("UPDATE mobile_claims SET state='done' WHERE id={id}")
+            .on("id" -> claim.id)
+            .executeUpdate()
+        }
+        def rows() = db.withConnection { implicit c =>
+          SQL(
+            "SELECT task_id, state, attempts FROM choice_pending WHERE claim_id={id} ORDER BY task_id"
+          ).on("id" -> claim.id)
+            .as((SqlParser.long(1) ~ SqlParser.str(2) ~ SqlParser.int(3)).map {
+              case t ~ st ~ a => (t, st, a)
+            }.*)
+        }
+        store.retry(claim.id, sam, page, None, waiting = false, now) mustBe Left(
+          ClaimProblem.NotFound
+        )
+        store.retry(
+          claim.id,
+          rosa,
+          family(db, rosa, "maproulette-claim", withToken = false),
+          None,
+          waiting = false,
+          now
+        ) mustBe Left(ClaimProblem.Reauth)
+        store.retry(claim.id, rosa, page, Some(Set(2L)), waiting = true, now).map {
+          case (c, n) => (c.state, n)
+        } mustBe Right(("waiting", 1))
+        rows() mustBe List((1L, "failed", 5), (2L, "pending", 0))
+        // A fresh sign-in: its token replaces the claim family's.
+        val fresh = family(db, rosa, "maproulette-claim")
+        db.withConnection { implicit c =>
+          SQL(
+            "UPDATE mobile_osm_tokens SET ciphertext=decode('0909','hex') WHERE grant_family_id={f}"
+          ).on("f" -> fresh)
+            .executeUpdate()
+        }
+        store.retry(claim.id, rosa, fresh, None, waiting = false, now).map {
+          case (c, n) => (c.state, n)
+        } mustBe Right(("queued", 1))
+        rows() mustBe List((1L, "pending", 0), (2L, "pending", 0))
+        db.withConnection { implicit c =>
+          SQL("SELECT encode(ciphertext,'hex') FROM mobile_osm_tokens WHERE grant_family_id={f}")
+            .on("f" -> claim.familyId)
+            .as(SqlParser.scalar[String].single) mustBe "0909"
+        }
+        // Nothing failed and the claim isn't failed: left alone.
+        store.retry(claim.id, rosa, page, None, waiting = false, now).map {
+          case (c, n) => (c.state, n)
+        } mustBe Right(("queued", 0))
     }
   }
 }

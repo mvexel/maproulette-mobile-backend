@@ -4,7 +4,12 @@ import akka.actor.ActorSystem
 import com.typesafe.config.ConfigFactory
 import java.time.Instant
 import java.util.UUID
-import org.maproulette.auth.mobile.MobileOAuthSettings
+import org.maproulette.auth.mobile.{
+  MobileClaimRoutes,
+  MobileClient,
+  MobileClientRegistry,
+  MobileOAuthSettings
+}
 import org.maproulette.framework.model.User
 import org.maproulette.framework.service.UserService
 import org.maproulette.provider.choice.{MobileChoiceService, PendingOutcome, PendingPublish}
@@ -96,7 +101,11 @@ class ClaimPublishSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll
     PendingPublish(id, 1000L + id, Json.obj("answers" -> Json.obj()), "0" * 64)
   private val published = PendingOutcome.Published(Json.obj("status" -> 1, "dropped" -> Json.arr()))
 
-  private class Fixture(outcomes: Map[Long, Seq[PendingOutcome]], var writes: Boolean = true) {
+  private class Fixture(
+      outcomes: Map[Long, Seq[PendingOutcome]],
+      var writes: Boolean = true,
+      var claimClient: Boolean = true
+  ) {
     val store   = new MemoryClaimPublishStore
     val jobs    = new MemoryGuestJobStore
     val emails  = new MemoryGuestEmailStore
@@ -126,6 +135,11 @@ class ClaimPublishSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll
       choice,
       users,
       preview,
+      new MobileClientRegistry {
+        def all: Seq[MobileClient] = Seq(
+          MobileClient(MobileClaimRoutes.ClientId, "Claim", Set.empty, Set.empty, claimClient)
+        )
+      },
       summaries,
       cipher,
       mailer,
@@ -233,6 +247,19 @@ class ClaimPublishSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll
       store.state(1) mustBe "published"
       store.state(2) mustBe "pending"
       store.claims(9).state mustBe "waiting"
+    }
+
+    "D13 (4): keep claims waiting while the claim page's client is disabled" in new Fixture(
+      Map(1L -> Seq(published), 2L -> Seq(published)),
+      claimClient = false
+    ) {
+      claim()
+      run().waiting mustBe 1
+      store.claims(9).state mustBe "waiting"
+      calls mustBe empty
+      claimClient = true
+      run()
+      store.claims(9).state mustBe "done"
     }
 
     "stay waiting, not failed, when writes come back on right after parking a claim" in new Fixture(
