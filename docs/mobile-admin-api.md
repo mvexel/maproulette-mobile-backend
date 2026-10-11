@@ -105,11 +105,15 @@ thank-yous. It is only in this export, never on the live page or in the app.
 
 - `csv`: `text/csv`, CRLF lines. The first line is the note as `# …`, then the header row. One
   `answer:<question id>` column per question answered anywhere in the challenge. `tags_set` is `key=value;…`, `tags_unset` is `key;…`. Text cells that start
-  with `= + - @` get a leading `'` so spreadsheets don't run them.
+  with `= + - @` get a leading `'` so spreadsheets don't run them. After the answer columns:
+  `pending_count` (guests' answers waiting to be published, `choice_pending` state `pending`),
+  `pending_outcomes` and one `pending:<question id>` column per question guests answered, each a
+  tally such as `hinged 2;sliding 1`, most given first.
 - `geojson`: `application/geo+json`, a FeatureCollection with the note as a top-level `notice`
   member, of task points with the same fields as properties (`answers` and `tagsSet` as objects,
   `completedByCount`), plus `featureName` and `featureRef` (the task feature's `name` and `ref`
-  tags, or null) so the admin can label stops.
+  tags, or null) so the admin can label stops, and `pending`: the waiting answers as
+  `{answers, outcome, outcomeLabel}`. Neither format carries guest ids or addresses.
 
 Both carry `Content-Disposition: attachment; filename="challenge-<id>-results.<format>"`.
 
