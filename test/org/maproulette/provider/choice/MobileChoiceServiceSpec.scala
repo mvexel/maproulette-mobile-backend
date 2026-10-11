@@ -1250,6 +1250,9 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
       .filter(_.trim.nonEmpty)
       .map(Json.parse(_).as[JsObject])
       .toList
+    lazy val survey = Json
+      .parse(scala.io.Source.fromFile("test/fixtures/woodbine-survey.json").mkString)
+      .as[JsObject]
     lazy val woodbine = challengeDAL.insert(
       Challenge(
         -1,
@@ -1261,9 +1264,8 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
           defaultProject.id,
           "Survey the door at the mapped entrance node.",
           enabled = true,
-          checkinComment =
-            "Street Tally: entrance doors near Woodbine Food Hall #StreetTallyWoodbine",
-          checkinSource = "survey"
+          checkinComment = (survey \ "challenge" \ "checkinComment").as[String],
+          checkinSource = (survey \ "challenge" \ "checkinSource").as[String]
         ),
         creation = ChallengeCreation(),
         priority = ChallengePriority(),
@@ -1330,7 +1332,13 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
           Set("door", "automatic_door") must contain(option.setTags.keys.head)
           osm.elements(("node", node)).tags mustBe snapshot(line) ++ option.setTags
           lastChangeset._2.tags("source") mustBe "survey"
-          lastChangeset._2.tags("comment") must include("#StreetTallyWoodbine")
+          lastChangeset._2.tags("comment") mustBe
+            (survey \ "challenge" \ "checkinComment").as[String]
+          // One upload, modifying only this entrance node.
+          val change = scala.xml.XML.loadString(osm.synchronized(osm.uploads.last._2))
+          change.child.collect { case e: scala.xml.Elem => e.label } mustBe Seq("modify")
+          (change \ "modify" \ "_").map(e => (e.label, (e \ "@id").text)) mustBe
+            Seq(("node", node.toString))
           fresh(task)._1 mustBe Task.STATUS_FIXED
         }
       }
