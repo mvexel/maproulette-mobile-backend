@@ -671,7 +671,12 @@ class ChallengeDAL @Inject() (
       case _ => throw new InvalidException(s"Cannot create challenge. Project is invalid.")
     }
 
-    this.permission.hasObjectWriteAccess(challenge, user)
+    // Check the parent project to make sure the user has write access to it
+    this.permission.hasWriteAccess(ProjectType(), user)(challenge.general.parent)
+    challenge.extra.ownerTeamId.foreach(
+      this.serviceManager.team.requireTeamManager(_, user, "challenges")
+    )
+    val featured = challenge.general.featured && this.permission.isSuperUser(user)
 
     // Check for existing non-deleted challenge with same name in same project
     this.withMRConnection { implicit c =>
@@ -719,7 +724,7 @@ class ChallengeDAL @Inject() (
               VALUES (${challenge.name}, ${challenge.general.owner}, ${challenge.general.parent},
                       ${challenge.general.difficulty},
                       ${challenge.description}, ${challenge.infoLink}, ${challenge.general.blurb}, ${challenge.general.instruction},
-                      ${challenge.general.enabled}, ${challenge.general.featured},
+                      ${challenge.general.enabled}, ${featured},
                       ${challenge.general.checkinComment}, ${challenge.general.checkinSource}, ${challenge.creation.overpassQL}, ${challenge.creation.remoteGeoJson},
                       ${challenge.creation.overpassTargetType}, ${challenge.status},
                       ${challenge.statusMessage}, ${challenge.priority.defaultPriority}, ${highPriorityRule},
@@ -784,32 +789,6 @@ class ChallengeDAL @Inject() (
     * @param id      The id of the object that you are updating
     * @return An optional object, it will return None if no object found with a matching id that was supplied
     */
-  /**
-    * Taking a challenge away from the team that owns it is that team's call.
-    *
-    * Being able to edit a challenge is not the same as being entitled to move
-    * it: a project admin can edit everything in their project, but the team
-    * whose name and image the challenge carries is the one that gets to decide
-    * it should stop. So a change of owning team -- including handing it back to
-    * nobody -- needs the mover to run the team it is leaving, while a challenge
-    * nobody owns can be given to any team the user runs.
-    *
-    * The team it is going *to* is checked separately, when the request arrives.
-    */
-  private def requireOwningTeamConsent(
-      existing: Challenge,
-      updates: JsValue,
-      user: User
-  ): Unit = {
-    val requested = (updates \ "ownerTeamId").toOption
-
-    for {
-      currentTeamId  <- existing.ownerTeamId
-      requestedValue <- requested
-      if !requestedValue.asOpt[Long].contains(currentTeamId)
-    } this.serviceManager.team.requireTeamManager(currentTeamId, user, "work")
-  }
-
   override def update(
       updates: JsValue,
       user: User
@@ -818,7 +797,46 @@ class ChallengeDAL @Inject() (
     val updatedChallenge = this.cacheManager.withUpdatingCache(Long => retrieveById) {
       implicit cachedItem =>
         this.permission.hasObjectWriteAccess(cachedItem, user)
-        this.requireOwningTeamConsent(cachedItem, updates, user)
+
+        val parentId = (updates \ "parentId").asOpt[Long].getOrElse(cachedItem.general.parent)
+        if (parentId != cachedItem.general.parent) {
+          throw new InvalidException(
+            s"Challenge [${cachedItem.id}] cannot be moved to a different project by an update; use the move endpoint"
+          )
+        }
+
+        val ownerId = (updates \ "ownerId").asOpt[Long].getOrElse(cachedItem.general.owner)
+        if (ownerId != cachedItem.general.owner) {
+          this.permission.hasObjectAdminAccess(cachedItem, user)
+        }
+
+        val featured = (updates \ "featured").asOpt[Boolean].getOrElse(cachedItem.general.featured)
+        if (featured != cachedItem.general.featured && !this.permission.isSuperUser(user)) {
+          throw new IllegalAccessException("Only super users can feature challenges")
+        }
+
+        // Update the owning team, or remove it if an explicit `null` is set in
+        // the JSON. But if it's omitted, leave it alone.
+        val ownerTeamId = (updates \ "ownerTeamId").toOption match {
+          case None         => cachedItem.extra.ownerTeamId
+          case Some(JsNull) => None
+          case Some(value) =>
+            Some(
+              value
+                .asOpt[Long]
+                .getOrElse(throw new InvalidException("ownerTeamId must be a number"))
+            )
+        }
+
+        // Changing the owning team requires challenge admin, and the caller must
+        // also manage both the team it's leaving and the team it's being given to.
+        if (ownerTeamId != cachedItem.extra.ownerTeamId) {
+          this.permission.hasObjectAdminAccess(cachedItem, user)
+          (cachedItem.extra.ownerTeamId ++ ownerTeamId).foreach(
+            this.serviceManager.team.requireTeamManager(_, user, "challenges")
+          )
+        }
+
         val highPriorityRule = (updates \ "highPriorityRule")
           .asOpt[String]
           .getOrElse(cachedItem.priority.highPriorityRule.getOrElse("")) match {
@@ -860,12 +878,9 @@ class ChallengeDAL @Inject() (
         }
 
         this.withMRTransaction { implicit c =>
-          val name     = (updates \ "name").asOpt[String].getOrElse(cachedItem.name)
-          val ownerId  = (updates \ "ownerId").asOpt[Long].getOrElse(cachedItem.general.owner)
-          val parentId = (updates \ "parentId").asOpt[Long].getOrElse(cachedItem.general.parent)
+          val name = (updates \ "name").asOpt[String].getOrElse(cachedItem.name)
 
-          // Check if name or parent changed and if so, validate uniqueness
-          if (name != cachedItem.name || parentId != cachedItem.general.parent) {
+          if (name != cachedItem.name) {
             val existingChallenge = SQL"""
               SELECT id FROM challenges 
               WHERE parent_id = $parentId 
@@ -893,8 +908,6 @@ class ChallengeDAL @Inject() (
           val instruction =
             (updates \ "instruction").asOpt[String].getOrElse(cachedItem.general.instruction)
           val enabled = (updates \ "enabled").asOpt[Boolean].getOrElse(cachedItem.general.enabled)
-          val featured =
-            (updates \ "featured").asOpt[Boolean].getOrElse(cachedItem.general.featured)
           val checkinComment =
             (updates \ "checkinComment").asOpt[String].getOrElse(cachedItem.general.checkinComment)
           val checkinSource =
@@ -998,15 +1011,6 @@ class ChallengeDAL @Inject() (
           val paused = (updates \ "paused")
             .asOpt[Boolean]
             .getOrElse(cachedItem.extra.paused)
-
-          // An explicit null detaches the image; omitting the key leaves the
-          // challenge's current image alone, so a save that never touched the
-          // image picker can't silently clear it.
-          val ownerTeamId = (updates \ "ownerTeamId").toOption match {
-            case Some(JsNull) => Option.empty[Long]
-            case Some(value)  => value.asOpt[Long]
-            case None         => cachedItem.extra.ownerTeamId
-          }
 
           val reviewSetting = (updates \ "reviewSetting")
             .asOpt[Int]
@@ -1785,7 +1789,8 @@ class ChallengeDAL @Inject() (
       boundingBox: Option[(Double, Double, Double, Double)] = None
   )(implicit c: Option[Connection] = None): String = {
     this.withMRConnection { implicit c =>
-      val filters = new StringBuilder()
+      val filters          = new StringBuilder()
+      val filterParameters = ListBuffer.empty[NamedParameter]
 
       // Verify timzone offset is valid (eg. -10:00 or +04:00 or 06:30:00)
       val tzOffset =
@@ -1825,11 +1830,13 @@ class ChallengeDAL @Inject() (
         case Some(p) =>
           p.taskParams.taskPropertySearch match {
             case Some(tps) =>
+              val (tpsSql, tpsParameters) = tps.toSQLWithParameters
+              filterParameters ++= tpsParameters
               filters.append(s""" AND t.id IN (
                   SELECT id FROM tasks,
                                  jsonb_array_elements(geojson->'features') features
                   WHERE parent_id IN ($challengeId)
-                  AND (${tps.toSQL}))
+                  AND (${tpsSql}))
                  """)
             case None => // do nothing
           }
@@ -1841,22 +1848,24 @@ class ChallengeDAL @Inject() (
 
           p.reviewer match {
             case Some(r) =>
+              filterParameters += NamedParameter("reviewerName", s"%${r}%")
               filters.append(s""" AND t.id IN (
                   SELECT subTR.task_id FROM task_review subTR
                   INNER JOIN users u2 ON u2.id = subTR.reviewed_by
                   WHERE subTR.task_id=t.id AND
-                  LOWER(u2.name) LIKE LOWER('%${r}%')
+                  LOWER(u2.name) LIKE LOWER({reviewerName})
                 )""")
             case _ => // do nothing
           }
 
           p.owner match {
             case Some(o) =>
+              filterParameters += NamedParameter("ownerName", s"%${o}%")
               filters.append(s""" AND t.id IN (
                   SELECT subTR.task_id FROM task_review subTR
                   INNER JOIN users u3 ON u3.id = subTR.review_requested_by
                   WHERE subTR.task_id=t.id AND
-                  LOWER(u3.name) LIKE LOWER('%${o}%')
+                  LOWER(u3.name) LIKE LOWER({ownerName})
                 )""")
             case _ => // do nothing
           }
@@ -1946,7 +1955,7 @@ class ChallengeDAL @Inject() (
                             ) AS subT ) as t
                     ) As f
             )  As fc"""
-      val challengeGeometry = query.as(str("geometries").single)
+      val challengeGeometry = query.on(filterParameters.toSeq: _*).as(str("geometries").single)
       if (StringUtils.isEmpty(challengeGeometry)) {
         this.updateGeometry(challengeId)
       }
@@ -2063,21 +2072,14 @@ class ChallengeDAL @Inject() (
       implicit c: Option[Connection] = None
   ): List[Long] = {
     this.withMRConnection { implicit c =>
-      try {
-        val ids = challengeIds.mkString(",")
-        val query =
-          s"""UPDATE challenges
-             |	SET is_archived = ${archive}
-             |	WHERE id IN (${ids});""".stripMargin
-        SQL(query).executeUpdate()
+      val ids = challengeIds.mkString(",")
+      val query =
+        s"""UPDATE challenges
+           |	SET is_archived = ${archive}
+           |	WHERE id IN (${ids});""".stripMargin
+      SQL(query).executeUpdate()
 
-        challengeIds
-      } catch {
-        case e: Exception =>
-          logger.error(e.getMessage, e)
-          throw e
-      }
-
+      challengeIds
     }
   }
 
