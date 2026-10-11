@@ -107,6 +107,43 @@ older submissions) and the applied tag changes. `format` defaults to `csv`; anyt
 
 Both carry `Content-Disposition: attachment; filename="challenge-<id>-results.<format>"`.
 
+## Projects and campaigns
+
+Reads and project writes for the admin's project picker and Campaigns list. A campaign is a
+choice challenge (`cooperative_type` 3); deleted challenges and projects are left out. Project
+writes go through the stock `ProjectService` and add `project.create`, `project.enable` or
+`project.disable` audit rows (`after` = the change). The project writes stay open while a field
+deployment's write switch is off, like the client routes.
+
+### `GET /api/v2/mobile-admin/projects`
+
+`200 {"projects": [{"id", "name", "displayName", "enabled", "campaigns", "listed"}]}`, by display
+name. Virtual projects are left out. `campaigns` counts the project's choice campaigns; `listed`
+counts those the app shows now (campaign enabled, tagged `mobile-survey-v1`, project on).
+
+### `POST /api/v2/mobile-admin/projects`
+
+`{"name", "displayName"}`, nothing else. `name` is 1 to 100 letters, digits, `.`, `_` or `-`;
+`displayName` is 1 to 100 characters. Creates an enabled project owned by the admin: `201` with
+the project as above. 400 `invalid_request` with `detail`; 409 `project_exists` when the name is
+taken (case-insensitive).
+
+### `PUT /api/v2/mobile-admin/projects/:id/enabled`
+
+`{"enabled": bool}`, nothing else. `200 {"project": {…}, "campaigns": [{"id", "name"}]}`, where
+`campaigns` are the project's enabled, tagged campaigns: the ones that appear in or leave the app
+with it. Setting the current value writes nothing. 404 `not_found` for an unknown project.
+
+### `GET /api/v2/mobile-admin/campaigns` and `GET /api/v2/mobile-admin/campaigns/:id`
+
+`200 {"campaigns": [campaign]}`, most recently changed first, or one campaign (404 `not_found`
+when the id is not a choice campaign). A campaign is `{"id", "name", "projectId", "projectName",
+"projectEnabled", "enabled", "published", "inApp", "tasks", "checked", "needsAnotherLook",
+"updatedAt"}`. `published` means tagged `mobile-survey-v1`. `inApp` is `draft` (campaign
+disabled), `not_published` (enabled, no tag), `project_off` (would be listed but the project is
+off) or `listed`. `tasks` leaves out deleted and disabled tasks; `checked` counts Fixed, Not an
+issue and Already fixed; `needsAnotherLook` counts Too hard.
+
 ## Field write policy
 
 On deployments using `conf/mobile-field.conf`,

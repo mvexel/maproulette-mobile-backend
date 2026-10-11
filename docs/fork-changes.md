@@ -214,6 +214,7 @@ bearer grants are narrower than a web session in either configuration:
 | The field gate allows anonymous challenge and task discovery reads. It excludes `GET /task/:id/choice/check`, which performs a fresh OSM read and may record staleness                                                                                                                    | `MobileFieldRoutes.permitsWhenDisabled`                                                           |
 | Each stage/prod admin site changes only its matching backend's policy. The switch starts off; a current super-user with a `mobile:admin` grant is required to change it                                                                                                                   | `MobileAdminController.scala`, `MobileWritePolicy.scala`, `conf/mobile-field.conf`                |
 | Preview mode: for an app bearer grant, a draft challenge (challenge or project disabled) and its tasks answer a bare 404, as an unknown id does, except to super-users (organizers once `mobile:organize` exists). Nobody may start, skip, submit a choice for or set the status of a draft's task (403 `challenge_draft`); release stays open. Web sessions and API keys are unchanged | `MobileDrafts.scala`, `MobileBearerFilter.scala` (`draftGate`) |
+| Admin project picker and Campaigns list: list, create and turn projects on or off, and list choice campaigns with in-app state and progress (`/api/v2/mobile-admin/projects`, `/campaigns`) | `MobileCampaignsController.scala`, `MobileCampaigns.scala` |
 
 ## Proposed upstream
 
