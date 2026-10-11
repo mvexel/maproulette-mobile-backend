@@ -403,12 +403,12 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
       csv(1) must include(",completed_by,completed_by_osm_id,completed_by_count,completed_at,")
       csv(1) must endWith(
         ",tags_set,tags_unset,outcome,outcome_label,reported_lat,reported_lon,reported_source," +
-          "reported_distance_m,report_count,answer:backrest"
+          "reported_distance_m,report_count,answer:backrest,pending_count,pending_outcomes"
       )
       csv(2) must startWith(
         s"${answered.id},node/$node,node/$node,-111.891,40.7608,1,Fixed,ChoiceMapper,"
       )
-      csv(2) must endWith(",false,backrest=no,,,,,,,,0,no")
+      csv(2) must endWith(",false,backrest=no,,,,,,,,0,no,0,")
       // Two stops are completed by the same mapper; the others have no completer and no count.
       val counts = ChoiceResults.completedCounts(rows)
       counts.values.toSeq mustBe Seq(2)

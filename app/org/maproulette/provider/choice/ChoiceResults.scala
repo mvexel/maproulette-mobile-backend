@@ -29,7 +29,15 @@ case class ChoiceResultRow(
     reportedDistanceM: Option[Int] = None,
     reportCount: Int = 0,
     featureName: Option[String] = None,
-    featureRef: Option[String] = None
+    featureRef: Option[String] = None,
+    pending: Seq[PendingResult] = Nil
+)
+
+/** A guest's answer that waits to be published (choice_pending, state pending). No guest id. */
+case class PendingResult(
+    answers: Map[String, String],
+    outcome: Option[String],
+    outcomeLabel: Option[String]
 )
 
 /**
@@ -58,6 +66,7 @@ class ChoiceResultsRepository @Inject() (db: Database) {
     reports   <- SqlParser.int("report_count")
     fName     <- SqlParser.get[Option[String]]("feature_name")
     fRef      <- SqlParser.get[Option[String]]("feature_ref")
+    pending   <- SqlParser.get[Option[String]]("pending")
   } yield {
     val appliedJson = applied.map(Json.parse)
     val resultJson  = result.map(Json.parse)
@@ -90,7 +99,15 @@ class ChoiceResultsRepository @Inject() (db: Database) {
       resultJson.flatMap(j => (j \ "distanceM").asOpt[Int]),
       reports,
       fName.filter(_.trim.nonEmpty),
-      fRef.filter(_.trim.nonEmpty)
+      fRef.filter(_.trim.nonEmpty),
+      pending.toSeq.flatMap(Json.parse(_).as[Seq[JsObject]]).map { p =>
+        val outcome = (p \ "outcome").asOpt[String]
+        PendingResult(
+          (p \ "answers").asOpt[Map[String, String]].getOrElse(Map.empty),
+          outcome,
+          outcome.map(id => ChoiceResults.outcomeLabel(id, payload.map(Json.parse)))
+        )
+      }
     )
   }
 
@@ -115,7 +132,11 @@ class ChoiceResultsRepository @Inject() (db: Database) {
                     AS report_count,
                   st.reason AS stale,
                   t.geojson #>> '{features,0,properties,name}' AS feature_name,
-                  t.geojson #>> '{features,0,properties,ref}' AS feature_ref
+                  t.geojson #>> '{features,0,properties,ref}' AS feature_ref,
+                  (SELECT json_agg(json_build_object('answers', p.body->'answers',
+                      'outcome', p.body->>'outcome') ORDER BY p.id)::text
+                    FROM choice_pending p WHERE p.task_id = t.id AND p.state = 'pending')
+                    AS pending
                 FROM tasks t
                 LEFT JOIN users u ON u.id = t.completed_by
                 LEFT JOIN LATERAL (
@@ -153,6 +174,19 @@ object ChoiceResults {
   private def questionIds(rows: Seq[ChoiceResultRow]): Seq[String] =
     rows.flatMap(_.answers.keys).distinct.sorted
 
+  /** Question ids guests answered in still-waiting answers, in a stable order. */
+  private def pendingQuestionIds(rows: Seq[ChoiceResultRow]): Seq[String] =
+    rows.flatMap(_.pending.flatMap(_.answers.keys)).distinct.sorted
+
+  /** "hinged 2;sliding 1": each value with how many waiting answers gave it, most first. */
+  def tally(values: Seq[String]): String =
+    values
+      .groupBy(identity)
+      .toSeq
+      .sortBy { case (value, all) => (-all.size, value) }
+      .map { case (value, all) => s"$value ${all.size}" }
+      .mkString(";")
+
   /** RFC 4180 quoting; text a spreadsheet would run as a formula gets a leading apostrophe. */
   private def text(value: String): String = {
     val safe = if (value.headOption.exists("=+-@\t\r".contains(_))) s"'$value" else value
@@ -168,6 +202,7 @@ object ChoiceResults {
 
   def csv(rows: Seq[ChoiceResultRow]): String = {
     val questions = questionIds(rows)
+    val waiting   = pendingQuestionIds(rows)
     val counts    = completedCounts(rows)
     val header = Seq(
       "task_id",
@@ -193,7 +228,8 @@ object ChoiceResults {
       "reported_source",
       "reported_distance_m",
       "report_count"
-    ) ++ questions.map(q => text(s"answer:$q"))
+    ) ++ questions.map(q => text(s"answer:$q")) ++ Seq("pending_count", "pending_outcomes") ++
+      waiting.map(q => text(s"pending:$q"))
     val lines = rows.map { row =>
       Seq(
         row.taskId.toString,
@@ -219,7 +255,10 @@ object ChoiceResults {
         row.reported.map(_.source).getOrElse(""),
         row.reportedDistanceM.map(_.toString).getOrElse(""),
         row.reportCount.toString
-      ) ++ questions.map(q => text(row.answers.getOrElse(q, "")))
+      ) ++ questions.map(q => text(row.answers.getOrElse(q, ""))) ++ Seq(
+        row.pending.size.toString,
+        text(tally(row.pending.flatMap(_.outcomeLabel)))
+      ) ++ waiting.map(q => text(tally(row.pending.flatMap(_.answers.get(q)))))
     }
     (Seq(s"# $Notice") +: header +: lines).map(_.mkString(",")).mkString("", "\r\n", "\r\n")
   }
@@ -275,7 +314,14 @@ object ChoiceResults {
             "deleted"          -> row.deleted,
             "outcome"          -> row.outcome,
             "outcomeLabel"     -> row.outcomeLabel,
-            "reportCount"      -> row.reportCount
+            "reportCount"      -> row.reportCount,
+            "pending" -> row.pending.map(p =>
+              Json.obj(
+                "answers"      -> p.answers,
+                "outcome"      -> p.outcome,
+                "outcomeLabel" -> p.outcomeLabel
+              )
+            )
           )
         ) +: reportedFeature(row).toSeq
       }

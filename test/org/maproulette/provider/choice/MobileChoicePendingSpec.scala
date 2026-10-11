@@ -169,6 +169,42 @@ class MobileChoicePendingSpec(implicit val application: Application) extends Fra
       (listed \ "next").toOption mustBe Some(JsNull)
     }
 
+    "show waiting answers in the campaign results, tallied, without guest ids" taggedAs ChoiceTag in {
+      val (task, _) = benchTask()
+      submit(guest(), task, """{"answers":{"backrest":"yes","material":"wood"}}""").status mustBe 200
+      submit(guest(), task, """{"answers":{"backrest":"yes"}}""").status mustBe 200
+      submit(guest(), task, """{"answers":{"backrest":"no"}}""").status mustBe 200
+      submit(guest(), task, """{"outcome":"not-a-bench"}""").status mustBe 200
+      val rows = new ChoiceResultsRepository(db).results(challenge.id).get
+      val row  = rows.find(_.taskId == task.id).get
+      row.pending.size mustBe 4
+      row.pending.flatMap(_.outcomeLabel) mustBe Seq("Not a bench")
+      row.answers mustBe empty
+
+      val csv    = ChoiceResults.csv(Seq(row)).split("\r\n").toSeq
+      val header = csv(1).split(",").toSeq
+      header.takeRight(4) mustBe Seq(
+        "pending_count",
+        "pending_outcomes",
+        "pending:backrest",
+        "pending:material"
+      )
+      csv(2).split(",", -1).takeRight(4).toSeq mustBe Seq(
+        "4",
+        "Not a bench 1",
+        "yes 2;no 1",
+        "wood 1"
+      )
+      val properties =
+        (ChoiceResults.geojson(Seq(row)) \ "features" \ 0 \ "properties").as[JsObject]
+      (properties \ "pending")
+        .as[Seq[JsObject]]
+        .map(p => (p \ "answers").as[JsObject]) must contain(
+        Json.obj("backrest" -> "yes", "material" -> "wood")
+      )
+      Json.stringify(properties) must not include ("guest")
+    }
+
     "replace a resubmitted answer and withdraw it once" taggedAs ChoiceTag in {
       val g         = guest()
       val (task, _) = benchTask()
