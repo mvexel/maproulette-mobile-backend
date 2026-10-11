@@ -308,6 +308,24 @@ routes see an anonymous request. App grants cannot reach the guest's routes. Reg
 guest's routes and, for guest tokens only, `choice/check` stay open while the field write switch is
 off: they neither write OSM nor change task status.
 
+## Preview mode (drafts)
+
+A challenge is a draft while it, or its project, is disabled. For app bearer
+grants and guest tokens:
+
+- `GET /challenge/:id`, `/challenge/:id/tags`, `/challenge/:id/tasks`,
+  `/task/:id` and `/task/:id/choice/check` on a draft answer a bare 404, the same
+  as an unknown id, unless the user is a super-user (a guest never is). Organizers
+  get the same access once `mobile:organize` lands. A guest's pending answer to a
+  draft gets `404 not_found`.
+- Task writes on a draft (`start`, `skip`, `choice`, status) are refused for
+  everyone: 404 for other users, 403 `challenge_draft` for super-users.
+  `release` stays open, so a lock taken before the challenge was disabled can be
+  dropped.
+
+Discovery (`tasks/box`, `markers/box`, `extendedFind`) already lists enabled
+challenges in enabled projects only. Admin grants and web sessions are unchanged.
+
 ## Account identity
 
 The mobile callback verifies the person's numeric OSM user ID and looks up the
