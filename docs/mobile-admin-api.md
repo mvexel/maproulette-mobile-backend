@@ -107,6 +107,40 @@ older submissions) and the applied tag changes. `format` defaults to `csv`; anyt
 
 Both carry `Content-Disposition: attachment; filename="challenge-<id>-results.<format>"`.
 
+## Campaigns and projects
+
+For the admin app's Campaigns list and project picker. A campaign is a choice challenge
+(`cooperative_type` 3). Lists are capped at 500 rows.
+
+### `GET /api/v2/mobile-admin/campaigns`
+
+`200 {"campaigns": [{"id", "name", "enabled", "published", "listed", "modified", "project": {"id",
+"name", "displayName", "enabled"}, "tasks": {"total", "checked", "needsLook"}}]}`, most recently
+changed first. `published` means the challenge carries the `mobile-survey-v1` tag (the admin
+app's Publish). `listed` is what the app shows: the challenge is enabled and published, and its
+project is on. Progress uses the app's rule: `checked` counts status 1, 2 or 5 and tasks held by a
+live pending guest answer; `needsLook` counts status 6 without one; `total` leaves out deleted (4)
+and disabled (9) tasks.
+
+### `GET /api/v2/mobile-admin/projects`
+
+`200 {"projects": [{"id", "name", "displayName", "enabled", "campaigns", "published"}]}` by name,
+leaving out deleted, archived and virtual projects. `campaigns` counts the project's choice
+challenges, and `published` counts those that are enabled and published.
+
+### `POST /api/v2/mobile-admin/projects`
+
+`{"name", "displayName"?}`, each 1 to 200 characters. Creates the project **on**, owned by the
+signed-in super-user, and records `project.create`. `201` with the project as listed above, `409
+project_exists` (names are unique, ignoring case), or `400 invalid_request`.
+
+### `PUT /api/v2/mobile-admin/projects/:id/enabled`
+
+Exactly `{"enabled": true|false}`. Turning a project off hides all its campaigns in the app;
+turning it on lists those that are enabled and published. Records `project.enable` or
+`project.disable` with the project after the change. Repeating the current value is a no-op.
+`200` with the project, or `404 not_found`.
+
 ## Field write policy
 
 On deployments using `conf/mobile-field.conf`,
