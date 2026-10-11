@@ -78,8 +78,12 @@ object ChoiceWork {
   def validTag(value: String): Boolean =
     length(value) >= 1 && length(value) <= 255 && !value.exists(Character.isISOControl)
 
-  /** Applies every rule in spec §2 and reports all failures, not just the first. */
-  def validate(json: JsValue): Either[List[String], ChoiceWork] = {
+  /**
+    * Applies every rule in spec §2 and reports all failures, not just the first. `onWrite` adds the
+    * rules that only new and updated payloads must meet, so tasks stored before a rule existed still
+    * load.
+    */
+  def validate(json: JsValue, onWrite: Boolean = false): Either[List[String], ChoiceWork] = {
     val errors                      = List.newBuilder[String]
     def fail(message: String): Unit = errors += message
 
@@ -267,7 +271,12 @@ object ChoiceWork {
             obj(item, path, Set("id", "label", "description", "status", "delete")).flatMap { o =>
               val oid = id(o, path)
               oid.filter(BuiltIn).foreach(builtIn => fail(s"$path.id: '$builtIn' is built in"))
-              val label       = text(o, "label", path, 60, required = true)
+              val label = text(o, "label", path, 60, required = true)
+              // The results download tallies outcome labels as "label count;label count".
+              if (onWrite) label.foreach { l =>
+                if (l.contains(';')) fail(s"$path.label: must not contain ';'")
+                if (l.strip != l) fail(s"$path.label: must not start or end with whitespace")
+              }
               val description = text(o, "description", path, 300, required = false)
               val status      = (o \ "status").toOption
               val delete      = (o \ "delete").toOption
