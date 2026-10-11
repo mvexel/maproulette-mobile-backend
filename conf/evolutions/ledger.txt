@@ -1,0 +1,28 @@
+# Evolution ledger for conf/evolutions/default/.
+#
+# Play applies N.sql from 1 upward and stops at the first missing number, so the fork
+# and upstream share one gapless sequence. This file says who owns each number above the
+# upstream base. EvolutionLedgerSpec checks it against the files; the procedure for
+# claiming a number and for upstream syncs is in docs/upstream-sync.md.
+#
+# base <n>                 1..n are upstream's own files, unchanged.
+# synced <commit> <n>      Last upstream sync: upstream commit and its highest evolution.
+# <n> fork <note>          A fork migration.
+# <n> upstream:<m> <note>  Upstream's m.sql, copied to n because the fork already used m.
+# <n> reserved <note>      Claimed by an open PR. No file yet. The PR that adds n.sql
+#                          changes the row to "fork".
+
+base 128
+synced bbdc2d64 129
+
+129 fork mobile OAuth tables
+130 fork OSM tokens, choice submissions, choice_stale
+131 fork mobile OAuth clients, admin audit
+132 fork field write policy
+133 upstream:129 grants_role_valid check constraint
+134 fork choice submission answers
+135 fork guests and guest tokens
+136 fork choice_stale already_tagged reason
+137 fork choice_pending
+138 reserved backend #14 (Scala)
+139 reserved backend #17 (Scala)

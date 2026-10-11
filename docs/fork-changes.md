@@ -13,13 +13,15 @@ upstream syncs are ordinary merges of `upstream/main`.
 
 Fork migrations are never renumbered, because deployed databases have already
 applied them. An upstream migration whose number the fork already uses is
-copied to the next free number, with a comment naming the upstream file:
+copied to the next free number, with a comment naming the upstream file. Who
+owns each number above upstream's 128 is in
+[`conf/evolutions/ledger.txt`](../conf/evolutions/ledger.txt), and
+`EvolutionLedgerSpec` checks it. How to claim a number and how to sync upstream:
+[upstream-sync.md](upstream-sync.md).
 
 | Upstream file | Fork file | Content |
 | ------------- | --------- | ------- |
 | `129.sql` (synced at `bbdc2d64`) | `133.sql` | `grants_role_valid` check constraint |
-
-Fork-owned migrations continue after the highest number in this table.
 
 The mobile OAuth and field write-control features are opt-in. With
 `mobileOAuth.enabled = false` and `mobileOAuth.writeControlEnabled = false`
