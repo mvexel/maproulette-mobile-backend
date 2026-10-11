@@ -110,7 +110,8 @@ Both carry `Content-Disposition: attachment; filename="challenge-<id>-results.<f
 ## Campaigns and projects
 
 For the admin app's Campaigns list and project picker. A campaign is a choice challenge
-(`cooperative_type` 3). Lists are capped at 500 rows.
+(`cooperative_type` 3). Lists are capped at 500 rows. These routes, including the two project
+writes, work while a field deployment's task write policy is off.
 
 ### `GET /api/v2/mobile-admin/campaigns`
 

@@ -307,6 +307,10 @@ class MobileAdminSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll 
       POST  -> "/api/v2/mobile-admin/clients",
       PATCH -> "/api/v2/mobile-admin/clients/app",
       GET   -> "/api/v2/mobile-admin/audit?limit=5",
+      GET   -> "/api/v2/mobile-admin/projects",
+      POST  -> "/api/v2/mobile-admin/projects",
+      PUT   -> "/api/v2/mobile-admin/projects/3/enabled",
+      GET   -> "/api/v2/mobile-admin/campaigns",
       GET   -> "/oauth/mobile/me",
       POST  -> "/api/v2/challenge",
       PUT   -> "/api/v2/challenge/7",
@@ -555,6 +559,34 @@ class MobileAdminSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll 
       Seq((0, 0), (201, 0), (10, -1)).foreach {
         case (limit, page) =>
           status(controller.audit(limit, page).apply(request)) mustBe BAD_REQUEST
+      }
+    }
+  }
+
+  "The field gate" should {
+    "pass the admin project reads and writes while field writes are off" in {
+      def bearer(method: String, path: String) =
+        FakeRequest(method, path).withHeaders("Authorization" -> "Bearer t")
+      Seq(
+        GET  -> "/api/v2/mobile-admin/projects",
+        POST -> "/api/v2/mobile-admin/projects",
+        PUT  -> "/api/v2/mobile-admin/projects/3/enabled",
+        GET  -> "/api/v2/mobile-admin/campaigns"
+      ).foreach {
+        case (method, path) =>
+          withClue(s"$method $path")(
+            MobileFieldRoutes.permitsWhenDisabled(bearer(method, path)) mustBe true
+          )
+      }
+      Seq(
+        PUT    -> "/api/v2/mobile-admin/projects/x/enabled",
+        PATCH  -> "/api/v2/mobile-admin/projects/3",
+        DELETE -> "/api/v2/mobile-admin/projects/3"
+      ).foreach {
+        case (method, path) =>
+          withClue(s"$method $path")(
+            MobileFieldRoutes.permitsWhenDisabled(bearer(method, path)) mustBe false
+          )
       }
     }
   }
