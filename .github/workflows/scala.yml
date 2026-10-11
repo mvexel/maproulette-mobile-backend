@@ -47,6 +47,11 @@ jobs:
           POSTGRES_DB: mr_test
           POSTGRES_USER: osm
           POSTGRES_PASSWORD: osm
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U osm -d mr_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     strategy:
       matrix:
         java: [ 17 ]
@@ -59,6 +64,15 @@ jobs:
           distribution: 'temurin'
           cache: sbt
       - uses: sbt/setup-sbt@v1
+      - name: Prepare disposable mobile auth test database
+        env:
+          POSTGIS_CONTAINER: ${{ job.services.postgis.id }}
+        run: |
+          # Keep UUID-schema mobile tests separate from FrameworkMasterSuite's mr_test cleanup.
+          docker exec "$POSTGIS_CONTAINER" psql -U osm -d postgres -v ON_ERROR_STOP=1 \
+            -c 'CREATE DATABASE mobile_oauth_ci OWNER osm'
+          docker exec "$POSTGIS_CONTAINER" psql -U osm -d mobile_oauth_ci -v ON_ERROR_STOP=1 \
+            -c 'CREATE EXTENSION postgis'
       - name: Run sbt tests with jacoco analysis
         env:
           APPLICATION_SECRET: ${{ needs.generate_app_secret.outputs.application_secret }}
@@ -66,6 +80,10 @@ jobs:
           MR_TEST_DB_NAME: "mr_test"
           MR_TEST_DB_USER: "osm"
           MR_TEST_DB_PASSWORD: "osm"
+          # Synthetic credentials for this job's disposable service only; never stage/prod.
+          MOBILE_OAUTH_TEST_DATABASE_URL: "jdbc:postgresql://localhost:5432/mobile_oauth_ci"
+          MOBILE_OAUTH_TEST_DATABASE_USER: "osm"
+          MOBILE_OAUTH_TEST_DATABASE_PASSWORD: "osm"
         run: |
           sbt -Dsbt.log.format=false jacoco
 

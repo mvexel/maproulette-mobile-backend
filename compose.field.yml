@@ -47,6 +47,15 @@ services:
       MOBILE_OAUTH_CALLBACK_URI: https://${MR_API_HOST:?Set the deployment API host}/oauth/mobile/callback
       MR_MOBILE_ADMIN_ORIGIN: https://${MR_ADMIN_HOST:?Set the deployment admin host}
       MR_MOBILE_ADMIN_CALLBACK_URI: https://${MR_ADMIN_HOST:?Set the deployment admin host}/callback
+      # Deferred sign-up (docs/mobile-oauth.md "Guests"). Off unless set; empty values keep the app defaults.
+      MR_MOBILE_GUESTS_ENABLED: ${MR_MOBILE_GUESTS_ENABLED:-false}
+      MR_GUEST_MAIL_PROVIDER: ${MR_GUEST_MAIL_PROVIDER:-none}
+      MR_GUEST_MAIL_FROM: ${MR_GUEST_MAIL_FROM:-}
+      MR_CLAIM_ORIGIN: ${MR_CLAIM_ORIGIN:-}
+      MR_POSTMARK_SERVER_TOKEN: ${MR_POSTMARK_SERVER_TOKEN:-}
+      MR_POSTMARK_MESSAGE_STREAM: ${MR_POSTMARK_MESSAGE_STREAM:-}
+      # Deployment gate for mobile task writes (mobileOAuth.allowTaskWrites); false for the D13 check.
+      MR_MOBILE_TASK_WRITES_ENABLED: ${MR_MOBILE_TASK_WRITES_ENABLED:-true}
       MR_SUPER_ACCOUNTS: ${MR_SUPER_ACCOUNTS:-}
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--max-time", "5", "http://127.0.0.1:80/ping"]
