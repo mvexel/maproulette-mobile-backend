@@ -22,7 +22,14 @@ case class ChoiceResultRow(
     set: Map[String, String],
     unset: Seq[String],
     deleted: Boolean,
-    stale: Option[String]
+    stale: Option[String],
+    outcome: Option[String] = None,
+    outcomeLabel: Option[String] = None,
+    reported: Option[ReportLocation] = None,
+    reportedDistanceM: Option[Int] = None,
+    reportCount: Int = 0,
+    featureName: Option[String] = None,
+    featureRef: Option[String] = None
 )
 
 /**
@@ -46,8 +53,15 @@ class ChoiceResultsRepository @Inject() (db: Database) {
     answers   <- SqlParser.get[Option[String]]("answers")
     applied   <- SqlParser.get[Option[String]]("applied")
     stale     <- SqlParser.get[Option[String]]("stale")
+    result    <- SqlParser.get[Option[String]]("result")
+    payload   <- SqlParser.get[Option[String]]("payload")
+    reports   <- SqlParser.int("report_count")
+    fName     <- SqlParser.get[Option[String]]("feature_name")
+    fRef      <- SqlParser.get[Option[String]]("feature_ref")
   } yield {
     val appliedJson = applied.map(Json.parse)
+    val resultJson  = result.map(Json.parse)
+    val outcome     = resultJson.flatMap(j => (j \ "outcome").asOpt[String])
     ChoiceResultRow(
       id,
       name,
@@ -63,7 +77,20 @@ class ChoiceResultsRepository @Inject() (db: Database) {
       appliedJson.flatMap(j => (j \ "set").asOpt[Map[String, String]]).getOrElse(Map.empty),
       appliedJson.flatMap(j => (j \ "unset").asOpt[Seq[String]]).getOrElse(Seq.empty),
       appliedJson.flatMap(j => (j \ "deleted").asOpt[Boolean]).getOrElse(false),
-      stale
+      stale,
+      outcome,
+      outcome.map(id => ChoiceResults.outcomeLabel(id, payload.map(Json.parse))),
+      resultJson.flatMap(j => (j \ "location").toOption).flatMap { l =>
+        for {
+          lat    <- (l \ "lat").asOpt[Double]
+          lon    <- (l \ "lon").asOpt[Double]
+          source <- (l \ "source").asOpt[String]
+        } yield ReportLocation(lat, lon, source)
+      },
+      resultJson.flatMap(j => (j \ "distanceM").asOpt[Int]),
+      reports,
+      fName.filter(_.trim.nonEmpty),
+      fRef.filter(_.trim.nonEmpty)
     )
   }
 
@@ -80,7 +107,15 @@ class ChoiceResultsRepository @Inject() (db: Database) {
                   to_json(t.mapped_on)#>>'{}' AS mapped_on,
                   u.name AS user_name, u.osm_id::bigint AS osm_id,
                   s.answers::text AS answers, (s.result_json->'applied')::text AS applied,
-                  st.reason AS stale
+                  s.result_json::text AS result, t.cooperative_work_json::text AS payload,
+                  (SELECT count(*) FROM mobile_choice_submissions r WHERE r.task_id = t.id
+                    AND r.state = 'done' AND r.result_json->>'outcome' IN ('not-here', 'moved'))
+                  + (SELECT count(*) FROM choice_pending p WHERE p.task_id = t.id
+                    AND p.state = 'pending' AND p.body->>'outcome' IN ('not-here', 'moved'))
+                    AS report_count,
+                  st.reason AS stale,
+                  t.geojson #>> '{features,0,properties,name}' AS feature_name,
+                  t.geojson #>> '{features,0,properties,ref}' AS feature_ref
                 FROM tasks t
                 LEFT JOIN users u ON u.id = t.completed_by
                 LEFT JOIN LATERAL (
@@ -96,6 +131,20 @@ class ChoiceResultsRepository @Inject() (db: Database) {
 }
 
 object ChoiceResults {
+
+  /** The built-in reports' labels, or the label a campaign outcome declares in its payload. */
+  def outcomeLabel(id: String, payload: Option[JsValue]): String = id match {
+    case ChoiceWork.NotHere => "It's not here"
+    case ChoiceWork.Moved   => "It's moved"
+    case ChoiceWork.TooHard => "I can't check this"
+    case other =>
+      payload
+        .flatMap(p => (p \ "outcomes").asOpt[Seq[JsObject]])
+        .flatMap(_.find(o => (o \ "id").asOpt[String].contains(other)))
+        .flatMap(o => (o \ "label").asOpt[String])
+        .getOrElse(other)
+  }
+
   private def statusName(status: Int): String = Task.getStatusName(status).getOrElse("")
   private def pairs(tags: Map[String, String]): String =
     tags.toSeq.sorted.map { case (k, v) => s"$k=$v" }.mkString(";")
@@ -110,8 +159,16 @@ object ChoiceResults {
     if (safe.exists(",\"\r\n".contains(_))) "\"" + safe.replace("\"", "\"\"") + "\"" else safe
   }
 
+  /** The note at the top of every export (i16): it names people. */
+  val Notice = "Contains OSM usernames; don't publish this file."
+
+  /** How many of the export's stops each person completed, keyed by OSM id (i16). */
+  def completedCounts(rows: Seq[ChoiceResultRow]): Map[Long, Int] =
+    rows.flatMap(_.completedByOsmId).groupBy(identity).map { case (id, ids) => id -> ids.size }
+
   def csv(rows: Seq[ChoiceResultRow]): String = {
     val questions = questionIds(rows)
+    val counts    = completedCounts(rows)
     val header = Seq(
       "task_id",
       "task_name",
@@ -122,12 +179,20 @@ object ChoiceResults {
       "status_name",
       "completed_by",
       "completed_by_osm_id",
+      "completed_by_count",
       "completed_at",
       "changeset_id",
       "stale_reason",
       "deleted",
       "tags_set",
-      "tags_unset"
+      "tags_unset",
+      "outcome",
+      "outcome_label",
+      "reported_lat",
+      "reported_lon",
+      "reported_source",
+      "reported_distance_m",
+      "report_count"
     ) ++ questions.map(q => text(s"answer:$q"))
     val lines = rows.map { row =>
       Seq(
@@ -140,46 +205,80 @@ object ChoiceResults {
         statusName(row.status),
         text(row.completedBy.getOrElse("")),
         row.completedByOsmId.map(_.toString).getOrElse(""),
+        row.completedByOsmId.flatMap(counts.get).map(_.toString).getOrElse(""),
         row.completedAt.getOrElse(""),
         row.changesetId.map(_.toString).getOrElse(""),
         row.stale.getOrElse(""),
         row.deleted.toString,
         text(pairs(row.set)),
-        text(row.unset.mkString(";"))
+        text(row.unset.mkString(";")),
+        text(row.outcome.getOrElse("")),
+        text(row.outcomeLabel.getOrElse("")),
+        row.reported.map(_.lat.toString).getOrElse(""),
+        row.reported.map(_.lon.toString).getOrElse(""),
+        row.reported.map(_.source).getOrElse(""),
+        row.reportedDistanceM.map(_.toString).getOrElse(""),
+        row.reportCount.toString
       ) ++ questions.map(q => text(row.answers.getOrElse(q, "")))
     }
-    (header +: lines).map(_.mkString(",")).mkString("", "\r\n", "\r\n")
+    (Seq(s"# $Notice") +: header +: lines).map(_.mkString(",")).mkString("", "\r\n", "\r\n")
   }
 
-  def geojson(rows: Seq[ChoiceResultRow]): JsObject = Json.obj(
-    "type" -> "FeatureCollection",
-    "features" -> rows.map { row =>
-      val geometry = (row.lon, row.lat) match {
-        case (Some(lon), Some(lat)) =>
-          Json.obj("type" -> "Point", "coordinates" -> Json.arr(lon, lat))
-        case _ => JsNull
-      }
-      Json.obj(
-        "type"     -> "Feature",
-        "id"       -> row.taskId,
-        "geometry" -> geometry,
-        "properties" -> Json.obj(
-          "taskId"           -> row.taskId,
-          "taskName"         -> row.name,
-          "element"          -> row.element,
-          "status"           -> row.status,
-          "statusName"       -> statusName(row.status),
-          "completedBy"      -> row.completedBy,
-          "completedByOsmId" -> row.completedByOsmId,
-          "completedAt"      -> row.completedAt,
-          "changesetId"      -> row.changesetId,
-          "staleReason"      -> row.stale,
-          "answers"          -> row.answers,
-          "tagsSet"          -> row.set,
-          "tagsUnset"        -> row.unset,
-          "deleted"          -> row.deleted
-        )
+  /** For a `moved` report, a second point at the reported spot, so both load into an editor. */
+  private def reportedFeature(row: ChoiceResultRow): Option[JsObject] = row.reported.map { at =>
+    Json.obj(
+      "type"     -> "Feature",
+      "id"       -> s"${row.taskId}-reported",
+      "geometry" -> Json.obj("type" -> "Point", "coordinates" -> Json.arr(at.lon, at.lat)),
+      "properties" -> Json.obj(
+        "kind"      -> "reported_position",
+        "taskId"    -> row.taskId,
+        "element"   -> row.element,
+        "source"    -> at.source,
+        "distanceM" -> row.reportedDistanceM
       )
-    }
-  )
+    )
+  }
+
+  def geojson(rows: Seq[ChoiceResultRow]): JsObject = {
+    val counts = completedCounts(rows)
+    Json.obj(
+      "type"   -> "FeatureCollection",
+      "notice" -> Notice,
+      "features" -> rows.flatMap { row =>
+        val geometry = (row.lon, row.lat) match {
+          case (Some(lon), Some(lat)) =>
+            Json.obj("type" -> "Point", "coordinates" -> Json.arr(lon, lat))
+          case _ => JsNull
+        }
+        Json.obj(
+          "type"     -> "Feature",
+          "id"       -> row.taskId,
+          "geometry" -> geometry,
+          "properties" -> Json.obj(
+            "taskId"           -> row.taskId,
+            "taskName"         -> row.name,
+            "featureName"      -> row.featureName,
+            "featureRef"       -> row.featureRef,
+            "element"          -> row.element,
+            "status"           -> row.status,
+            "statusName"       -> statusName(row.status),
+            "completedBy"      -> row.completedBy,
+            "completedByOsmId" -> row.completedByOsmId,
+            "completedByCount" -> row.completedByOsmId.flatMap(counts.get),
+            "completedAt"      -> row.completedAt,
+            "changesetId"      -> row.changesetId,
+            "staleReason"      -> row.stale,
+            "answers"          -> row.answers,
+            "tagsSet"          -> row.set,
+            "tagsUnset"        -> row.unset,
+            "deleted"          -> row.deleted,
+            "outcome"          -> row.outcome,
+            "outcomeLabel"     -> row.outcomeLabel,
+            "reportCount"      -> row.reportCount
+          )
+        ) +: reportedFeature(row).toSeq
+      }
+    )
+  }
 }

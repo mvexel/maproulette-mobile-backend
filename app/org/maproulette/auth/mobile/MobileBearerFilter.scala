@@ -233,12 +233,13 @@ class MobileBearerFilter @Inject() (
     admins: MobileAdminCheck,
     adminRepository: MobileAdminRepository,
     writePolicy: MobileWritePolicy,
-    guests: MobileGuestAuth
+    guests: MobileGuestAuth,
+    drafts: MobileDrafts
 )(implicit val mat: Materializer, ec: ExecutionContext)
     extends Filter {
   private val logger = play.api.Logger(getClass)
 
-  // Without guests: for tests of app and admin grants.
+  // Without guests, every challenge published: for tests of app and admin grants.
   def this(
       settings: MobileOAuthSettings,
       oauth: MobileOAuthService,
@@ -249,13 +250,81 @@ class MobileBearerFilter @Inject() (
   )(
       implicit mat: Materializer,
       ec: ExecutionContext
-  ) = this(settings, oauth, users, admins, adminRepository, writePolicy, MobileGuestAuth.Disabled)
+  ) =
+    this(
+      settings,
+      oauth,
+      users,
+      admins,
+      adminRepository,
+      writePolicy,
+      MobileGuestAuth.Disabled,
+      MobileDrafts.NoDrafts
+    )
+
+  // Every challenge published: for guest tests.
+  def this(
+      settings: MobileOAuthSettings,
+      oauth: MobileOAuthService,
+      users: UserService,
+      admins: MobileAdminCheck,
+      adminRepository: MobileAdminRepository,
+      writePolicy: MobileWritePolicy,
+      guests: MobileGuestAuth
+  )(
+      implicit mat: Materializer,
+      ec: ExecutionContext
+  ) =
+    this(
+      settings,
+      oauth,
+      users,
+      admins,
+      adminRepository,
+      writePolicy,
+      guests,
+      MobileDrafts.NoDrafts
+    )
+
+  // Without guests: for preview mode tests.
+  def this(
+      settings: MobileOAuthSettings,
+      oauth: MobileOAuthService,
+      users: UserService,
+      admins: MobileAdminCheck,
+      adminRepository: MobileAdminRepository,
+      writePolicy: MobileWritePolicy,
+      drafts: MobileDrafts
+  )(
+      implicit mat: Materializer,
+      ec: ExecutionContext
+  ) =
+    this(
+      settings,
+      oauth,
+      users,
+      admins,
+      adminRepository,
+      writePolicy,
+      MobileGuestAuth.Disabled,
+      drafts
+    )
 
   // No admins and so no audit log: for tests of app grants only.
   def this(settings: MobileOAuthSettings, oauth: MobileOAuthService, users: UserService)(
       implicit mat: Materializer,
       ec: ExecutionContext
-  ) = this(settings, oauth, users, MobileAdminCheck.Nobody, null, null, MobileGuestAuth.Disabled)
+  ) =
+    this(
+      settings,
+      oauth,
+      users,
+      MobileAdminCheck.Nobody,
+      null,
+      null,
+      MobileGuestAuth.Disabled,
+      MobileDrafts.NoDrafts
+    )
 
   def this(
       settings: MobileOAuthSettings,
@@ -266,13 +335,45 @@ class MobileBearerFilter @Inject() (
   )(
       implicit mat: Materializer,
       ec: ExecutionContext
-  ) = this(settings, oauth, users, admins, adminRepository, null, MobileGuestAuth.Disabled)
+  ) =
+    this(
+      settings,
+      oauth,
+      users,
+      admins,
+      adminRepository,
+      null,
+      MobileGuestAuth.Disabled,
+      MobileDrafts.NoDrafts
+    )
 
   private def denied(status: Int, code: String): Future[Result] = Future.successful(
     Results
       .Status(status)(Json.obj("error" -> code))
       .withHeaders("Cache-Control" -> "no-store", "WWW-Authenticate" -> "Bearer")
   )
+
+  /**
+    * Preview mode: a draft challenge and its tasks read as unknown (404) except to users who may
+    * organize it, for now super-users only (never guests, `user` None). Writes to a draft are
+    * refused for everyone.
+    */
+  private def draftGate(
+      user: Option[User],
+      write: Boolean,
+      request: RequestHeader
+  ): Future[Option[Result]] =
+    MobileDraftRoutes.target(request.method, request.path) match {
+      case None => Future.successful(None)
+      case Some(target) =>
+        Future(drafts.draft(target)).flatMap {
+          case false => Future.successful(None)
+          case true if !user.exists(u => admins.isAdmin(u)) =>
+            Future.successful(Some(Results.NotFound.withHeaders("Cache-Control" -> "no-store")))
+          case true if write => denied(403, "challenge_draft").map(Some(_))
+          case true          => Future.successful(None)
+        }
+    }
 
   /**
     * Admin writes through stock routes: who, which route, and the outcome. Also recorded when the
@@ -347,24 +448,34 @@ class MobileBearerFilter @Inject() (
               case Some(user) if adminGrant && !admins.isAdmin(user) =>
                 denied(403, "admin_required")
               case Some(user) =>
-                val result = next(
-                  request
-                    .addAttr(MobileBearerIdentity.UserKey, user)
-                    .addAttr(MobileBearerIdentity.ScopesKey, scopes)
-                    .addAttr(MobileBearerIdentity.FamilyKey, value.familyId)
-                    .addAttr(MobileBearerIdentity.ClientKey, value.clientId)
-                )
-                if (adminGrant && MobileAdminRoutes.stockWrite(request.method, request.path))
-                  result.transformWith(outcome => auditStockWrite(user, request, outcome))
-                else result
+                val gate =
+                  if (adminGrant) Future.successful(None) else draftGate(Some(user), write, request)
+                gate.flatMap {
+                  case Some(refusal) => Future.successful(refusal)
+                  case None =>
+                    val result = next(
+                      request
+                        .addAttr(MobileBearerIdentity.UserKey, user)
+                        .addAttr(MobileBearerIdentity.ScopesKey, scopes)
+                        .addAttr(MobileBearerIdentity.FamilyKey, value.familyId)
+                        .addAttr(MobileBearerIdentity.ClientKey, value.clientId)
+                    )
+                    if (adminGrant && MobileAdminRoutes.stockWrite(request.method, request.path))
+                      result.transformWith(outcome => auditStockWrite(user, request, outcome))
+                    else result
+                }
               case None => denied(401, "invalid_token")
             }
         // Not an app grant: maybe a guest access token. Guests reach only MobileGuestRoutes.
         case None if guests.enabled =>
           guests.authenticate(parts(1)).flatMap {
-            case Some(value) if guest => next(request.addAttr(MobileBearerIdentity.GuestKey, value))
-            case Some(_)              => denied(403, "insufficient_scope")
-            case None                 => denied(401, "invalid_token")
+            case Some(value) if guest =>
+              draftGate(None, write = false, request).flatMap {
+                case Some(refusal) => Future.successful(refusal)
+                case None          => next(request.addAttr(MobileBearerIdentity.GuestKey, value))
+              }
+            case Some(_) => denied(403, "insufficient_scope")
+            case None    => denied(401, "invalid_token")
           }
         case None => denied(401, "invalid_token")
       }

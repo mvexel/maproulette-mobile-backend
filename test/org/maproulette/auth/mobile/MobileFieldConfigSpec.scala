@@ -41,5 +41,20 @@ class MobileFieldConfigSpec extends PlaySpec {
       settings.clients("maproulette-mobile-admin").redirectUris mustBe
         Set("https://admin.mr-stage.osm.lol/callback")
     }
+
+    "trust only loopback and private ranges as proxies, so X-Forwarded-For is the client" in {
+      Seq("conf/mobile-field.conf", "conf/mobile-staging.conf").foreach { file =>
+        ConfigFactory
+          .parseFile(new File(file))
+          .getStringList("play.http.forwarded.trustedProxies") mustBe java.util.List.of(
+          "127.0.0.1",
+          "::1",
+          "10.0.0.0/8",
+          "172.16.0.0/12",
+          "192.168.0.0/16",
+          "fc00::/7"
+        )
+      }
+    }
   }
 }

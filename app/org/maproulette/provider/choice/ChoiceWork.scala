@@ -52,9 +52,19 @@ case class ChoiceWork(
 }
 
 object ChoiceWork {
-  val CooperativeType        = 3
-  val MaxBytes               = 16384
-  val TooHard                = "too-hard"
+  val CooperativeType = 3
+  val MaxBytes        = 16384
+  val TooHard         = "too-hard"
+
+  /** Built-in reports (status 6, no OSM edit); `moved` carries the spot the mapper saw it at. */
+  val NotHere = "not-here"
+  val Moved   = "moved"
+
+  /** Outcome ids every choice task has; a payload can't declare them. */
+  val BuiltIn: Set[String] = Set(TooHard, NotHere, Moved)
+
+  /** How far from the task's point a `moved` report may be, in meters. */
+  val MovedMaxMeters         = 500
   val IdPattern              = "^[a-z0-9][a-z0-9-]{0,31}$"
   private val ElementPattern = "^(node|way|relation)/([1-9][0-9]{0,15})$".r
 
@@ -256,7 +266,7 @@ object ChoiceWork {
             val path = s"outcomes[$i]"
             obj(item, path, Set("id", "label", "description", "status", "delete")).flatMap { o =>
               val oid = id(o, path)
-              if (oid.contains(TooHard)) fail(s"$path.id: '$TooHard' is built in")
+              oid.filter(BuiltIn).foreach(builtIn => fail(s"$path.id: '$builtIn' is built in"))
               val label       = text(o, "label", path, 60, required = true)
               val description = text(o, "description", path, 300, required = false)
               val status      = (o \ "status").toOption
