@@ -264,6 +264,22 @@ So far (step B1):
   guest is never a `users` row. Secrets and tokens are stored as SHA-256 digests; "delete my data"
   clears the secret, email and tokens and leaves a tombstone.
 
+Step B2, guest registration and guest tokens:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /oauth/mobile/guest` | Form `client_id` (a client with `guest`), no credential. `201 {"guestId", "guestSecret", "expiresAt"}`. The secret (43 characters) is returned once; the app keeps it in secure storage. `401 invalid_client`, `429 rate_limited` (100 per client IP per hour, `Retry-After`). |
+| `POST /oauth/mobile/token` | `grant_type=urn:maproulette:grant-type:guest`, `client_id`, `guest_id`, `guest_secret`. A token response with `scope: "guest"`, `expires_in` as for app tokens, and **no** refresh token: the secret mints the next one. `invalid_grant` (wrong secret, deleted or expired guest), `invalid_client`, or `guest_claimed` once the guest has been claimed. While guests are off the grant is `unsupported_grant_type`. |
+| `GET /api/v2/mobile-guest/me` | Guest bearer. `{"guestId", "state", "email": "none\|pending\|verified", "expiresAt"}`. Never the address. |
+| `DELETE /api/v2/mobile-guest` | Guest bearer. "Delete my data": `204`. |
+
+A guest token reaches only `MobileGuestRoutes`: the discovery reads of `MobileReadRoutes` (not
+`choice/check` yet, and not `/oauth/mobile/me`) and its own routes, which take no query or body.
+It is never a MapRoulette user: the bearer filter sets `MobileBearerIdentity.GuestKey`, never
+`UserKey`, so stock routes see an anonymous request. App grants cannot reach the guest's own
+routes. Registration and the guest's own routes stay open while the field write switch is off:
+they neither write OSM nor change task status.
+
 ## Account identity
 
 The mobile callback verifies the person's numeric OSM user ID and looks up the
