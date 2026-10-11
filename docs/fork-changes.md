@@ -124,7 +124,7 @@ repo:
 | `POST /api/v2/task/:id/choice`: lock check, idempotency, re-check, one OSM changeset, status and changeset id in one transaction  | `MobileChoiceController.scala:45` → `MobileChoiceService.submit` (:418)                                                                                                                                      |
 | OSM reads and uploads for choice tasks                                                                                            | `app/org/maproulette/provider/choice/ChoiceOsmClient.scala:28`                                                                                                                                               |
 | The user's OSM token (`read_prefs write_api`), AES-256-GCM encrypted per grant family, key from `MR_MOBILE_OSM_TOKEN_KEY`         | `app/org/maproulette/auth/mobile/MobileOsmTokenCipher.scala:18`, `conf/application.conf` (`osmTokenKey`)                                                                                                     |
-| Tables `mobile_osm_tokens`, `mobile_choice_submissions` and `choice_stale`, plus OSM-token columns on `mobile_oauth_interactions` | `conf/evolutions/default/130.sql`                                                                                                                                                                            |
+| Tables `mobile_osm_tokens`, `mobile_choice_submissions` and `choice_stale`, plus OSM-token columns on `mobile_oauth_interactions` | `conf/evolutions/default/130.sql`, `136.sql` (adds the `already_tagged` reason)                                                                                                                              |
 | Stale tasks are recorded in `choice_stale` (insert-only; no task status is written)                                               | `MobileChoiceService.markStale` (:149)                                                                                                                                                                       |
 | A replaced payload clears its `choice_stale` row                                                                                  | `app/org/maproulette/models/dal/TaskDAL.scala:428`                                                                                                                                                           |
 | A challenge holds only choice tasks or none                                                                                       | `TaskDAL.checkChoiceConsistency` (:564), called from `extractCooperativeWork` (:482)                                                                                                                         |
@@ -142,6 +142,12 @@ Off by default (`mobileOAuth.guests.enabled`). See [mobile-oauth.md](mobile-oaut
 | Guest registration (per-IP limit), guest token grant, guest authentication | `app/org/maproulette/auth/mobile/guest/MobileGuestService.scala`, `app/controllers/MobileGuestController.scala`, `MobileOAuthController.token` (`guestToken`) |
 | Routes `POST /oauth/mobile/guest`, `GET /api/v2/mobile-guest/me`, `DELETE /api/v2/mobile-guest` | `conf/routes` |
 | Guest bearer branch and `MobileGuestRoutes`; `GuestKey` instead of `UserKey`; field-gate entries | `app/org/maproulette/auth/mobile/MobileBearerFilter.scala` |
+| Table `choice_pending` | `conf/evolutions/default/137.sql` |
+| Pending answers: submit (validated like a choice submission, live-question tasks only), withdraw, list; published-challenge rule while writes are off | `app/org/maproulette/provider/choice/MobileChoicePendingService.scala`, `ChoicePendingRepository.scala`, `app/org/maproulette/controllers/api/MobileChoicePendingController.scala` |
+| `MobileChoiceService.validateSubmission`: parsing and payload checks shared by submit and pending answers | `app/org/maproulette/provider/choice/MobileChoiceService.scala` |
+| `excludePending=true`: leave out tasks held by a pending answer | `SearchParameters.scala` (`excludePending`), `TaskClusterService.scala` (`excludeStaleChoiceTasks`) |
+| `choice/check` accepts guest tokens | `app/org/maproulette/controllers/api/MobileChoiceController.scala` |
+| Routes `GET /api/v2/mobile-guest/pending`, `POST` and `DELETE /api/v2/task/:id/choice/pending` | `conf/routes` |
 
 ### Discovery filters
 

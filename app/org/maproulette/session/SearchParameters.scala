@@ -60,7 +60,9 @@ case class SearchTaskParameters(
     excludeTaskIds: Option[List[Long]] = None,
     taskMappedOn: Option[String] = None,
     // Fork only: leave out choice tasks recorded in choice_stale (`excludeStale=true`).
-    excludeStale: Option[Boolean] = None
+    excludeStale: Option[Boolean] = None,
+    // Fork only: leave out choice tasks a guest holds with a pending answer (`excludePending=true`).
+    excludePending: Option[Boolean] = None
 )
 
 case class SearchLeaderboardParameters(
@@ -518,7 +520,12 @@ object SearchParameters {
 
         this.getStringParameter(request.getQueryString("mo"), params.taskParams.taskMappedOn),
         //excludeStale
-        this.getBooleanParameter(request.getQueryString("excludeStale"), params.taskParams.excludeStale)
+        this.getBooleanParameter(request.getQueryString("excludeStale"), params.taskParams.excludeStale),
+        //excludePending
+        this.getBooleanParameter(
+          request.getQueryString("excludePending"),
+          params.taskParams.excludePending
+        )
       ),
       // Search Review Parameters
       new SearchReviewParameters(

@@ -5,6 +5,8 @@ import java.nio.file.{Files, Paths}
 import java.time.Instant
 import java.util.UUID
 import org.maproulette.auth.mobile.MobileSecrets
+import org.maproulette.provider.choice.{ChoicePendingRepository, PendingProblem, PendingWrite}
+import play.api.libs.json.Json
 import org.scalatestplus.play.PlaySpec
 import play.api.db.{Database, Databases}
 
@@ -38,7 +40,7 @@ class MobileGuestRepositorySpec extends PlaySpec {
         SQL("CREATE TABLE users(id bigint PRIMARY KEY)").execute()
         SQL("INSERT INTO users VALUES(1)").executeUpdate()
         SQL("CREATE TABLE tasks(id bigint PRIMARY KEY)").execute()
-        Seq("129", "130", "131", "135").foreach { version =>
+        Seq("129", "130", "131", "135", "137").foreach { version =>
           val evolution = new String(
             Files.readAllBytes(Paths.get(s"conf/evolutions/default/$version.sql")),
             "UTF-8"
@@ -168,6 +170,106 @@ class MobileGuestRepositorySpec extends PlaySpec {
       intercept[java.sql.SQLException] {
         store.create(UUID.randomUUID(), "unknown", hash("s"), now.plusSeconds(60), now)
       }
+    }
+  }
+
+  "ChoicePendingRepository" should {
+    def tasks(db: Database, ids: Long*): Unit = db.withConnection { implicit c =>
+      ids.foreach(id => SQL"INSERT INTO tasks VALUES ($id)".executeUpdate())
+    }
+    def write(guest: MobileGuest, task: Long, answer: String = "yes") =
+      PendingWrite(
+        guest.id,
+        task,
+        7,
+        Json.obj("answers" -> Json.obj("backrest" -> answer)),
+        hash("payload"),
+        3,
+        now.plusSeconds(7 * 86400)
+      )
+    val retention = now.plusSeconds(30 * 86400)
+
+    "store one pending answer per guest and task, replacing it, and extend the guest" in withStore {
+      (store, db) =>
+        tasks(db, 1)
+        val guest            = register(store, "p")
+        val pending          = new ChoicePendingRepository(db)
+        val (first, expires) = pending.save(write(guest, 1), 200, retention, now).toOption.get
+        expires mustBe retention
+        store.get(guest.id).get.expiresAt mustBe retention
+        val (second, _) =
+          pending.save(write(guest, 1, "no"), 200, retention, now.plusSeconds(5)).toOption.get
+        second.id mustBe first.id
+        second.answeredAt mustBe now.plusSeconds(5)
+        val rows = pending.list(guest.id, 10, None)
+        rows.map(r => (r.taskId, r.state, r.body)) mustBe
+          List((1L, "pending", Json.obj("answers" -> Json.obj("backrest" -> "no"))))
+        pending.counts(guest.id) mustBe Map("pending" -> 1)
+    }
+
+    "never shorten the guest's expiry" in withStore { (store, db) =>
+      tasks(db, 1)
+      val guest   = register(store, "s")
+      val pending = new ChoicePendingRepository(db)
+      pending.save(write(guest, 1), 200, now.plusSeconds(3600), now).toOption.get._2 mustBe
+        now.plusSeconds(86400)
+    }
+
+    "enforce the per-guest limit on new tasks only" in withStore { (store, db) =>
+      tasks(db, 1, 2)
+      val guest   = register(store, "l")
+      val pending = new ChoicePendingRepository(db)
+      pending.save(write(guest, 1), 1, retention, now).isRight mustBe true
+      pending.save(write(guest, 2), 1, retention, now) mustBe Left(PendingProblem.Limit)
+      pending.save(write(guest, 1, "no"), 1, retention, now).isRight mustBe true
+    }
+
+    "refuse answers from a deleted, claimed or expired guest" in withStore { (store, db) =>
+      tasks(db, 1)
+      val pending = new ChoicePendingRepository(db)
+      val deleted = register(store, "d")
+      store.delete(deleted.id, now)
+      pending.save(write(deleted, 1), 200, retention, now) mustBe Left(PendingProblem.GuestGone)
+      val claimed = register(store, "c")
+      db.withConnection { implicit c =>
+        SQL("UPDATE mobile_guests SET claimed_user_id=1 WHERE id={id}::uuid")
+          .on("id" -> claimed.id.toString)
+          .executeUpdate()
+      }
+      pending.save(write(claimed, 1), 200, retention, now) mustBe Left(PendingProblem.GuestGone)
+      val expired = register(store, "e")
+      pending.save(write(expired, 1), 200, retention, now.plusSeconds(86401)) mustBe
+        Left(PendingProblem.GuestGone)
+    }
+
+    "withdraw only the guest's own pending answer" in withStore { (store, db) =>
+      tasks(db, 1)
+      val pending = new ChoicePendingRepository(db)
+      val a       = register(store, "a")
+      val b       = register(store, "b")
+      pending.save(write(a, 1), 200, retention, now)
+      pending.withdraw(b.id, 1) mustBe false
+      pending.withdraw(a.id, 1) mustBe true
+      pending.withdraw(a.id, 1) mustBe false
+    }
+
+    "page the guest's answers newest first" in withStore { (store, db) =>
+      tasks(db, 1, 2, 3)
+      val pending = new ChoicePendingRepository(db)
+      val guest   = register(store, "n")
+      Seq(1L, 2L, 3L).foreach(task => pending.save(write(guest, task), 200, retention, now))
+      val page = pending.list(guest.id, 2, None)
+      page.map(_.taskId) mustBe List(3L, 2L)
+      pending.list(guest.id, 2, Some(page.last.id)).map(_.taskId) mustBe List(1L)
+    }
+
+    "delete pending answers with the guest's data" in withStore { (store, db) =>
+      tasks(db, 1)
+      val pending = new ChoicePendingRepository(db)
+      val guest   = register(store, "x")
+      pending.save(write(guest, 1), 200, retention, now)
+      store.delete(guest.id, now)
+      pending.list(guest.id, 10, None) mustBe Nil
     }
   }
 }
