@@ -51,7 +51,12 @@ case class Report(kind: String, location: Option[ReportLocation], distanceM: Opt
 }
 
 /** An idempotency row of mobile_choice_submissions. */
-case class SubmissionRow(state: String, changesetId: Option[Long], result: Option[JsObject])
+case class SubmissionRow(
+    state: String,
+    changesetId: Option[Long],
+    result: Option[JsObject],
+    answers: Option[JsObject] = None
+)
 
 /**
   * A submission body that parsed and resolved against its task's payload. `body` is the canonical
@@ -68,6 +73,32 @@ case class ValidatedSubmission(
 
 /** Why an element no longer matches its payload; `detail` is for diagnostics only. */
 case class Staleness(reason: String, detail: JsArray, version: Option[Long])
+
+/** A claimed guest answer for the publish job: a choice_pending row. */
+case class PendingPublish(id: Long, taskId: Long, body: JsObject, payloadDigest: String)
+
+/** What publishing one pending answer came to; the publish job maps it to the row's state. */
+sealed trait PendingOutcome
+object PendingOutcome {
+
+  /** Applied (or a status-only outcome written); `dropped` names answers whose guard failed. */
+  case class Published(result: JsObject) extends PendingOutcome
+
+  /** The task moved on (another status, a new payload, gone); `agrees` compares the answers. */
+  case class Superseded(agrees: Option[Boolean]) extends PendingOutcome
+
+  /** The element no longer matches, or no answer's guard holds. */
+  case class SkippedStale(reason: String) extends PendingOutcome
+
+  /** Try again on a later run (OSM down, another mapper's lock, an unfinished submission). */
+  case class Retry(code: String) extends PendingOutcome
+
+  /** The claim's OSM token was refused. */
+  case object Reauth extends PendingOutcome
+
+  /** Will not succeed by retrying. */
+  case class Failed(code: String) extends PendingOutcome
+}
 
 /**
   * Mobile choice tasks: the uncached eligibility check and the submission that applies answers to
@@ -383,13 +414,20 @@ class MobileChoiceService @Inject() (
 
   private def row(taskId: Long, userId: Long, key: String): Option[SubmissionRow] =
     db.withConnection { implicit c =>
-      SQL"""SELECT state, changeset_id, result_json::text AS result FROM mobile_choice_submissions
+      SQL"""SELECT state, changeset_id, result_json::text AS result, answers::text AS answers
+            FROM mobile_choice_submissions
             WHERE task_id = $taskId AND user_id = $userId AND submission_key = $key"""
         .as(
           (SqlParser.str("state") ~ SqlParser.get[Option[Long]]("changeset_id") ~
-            SqlParser.get[Option[String]]("result")).map {
-            case state ~ changeset ~ result =>
-              SubmissionRow(state, changeset, result.map(Json.parse(_).as[JsObject]))
+            SqlParser.get[Option[String]]("result") ~ SqlParser
+            .get[Option[String]]("answers")).map {
+            case state ~ changeset ~ result ~ answers =>
+              SubmissionRow(
+                state,
+                changeset,
+                result.map(Json.parse(_).as[JsObject]),
+                answers.map(Json.parse(_).as[JsObject])
+              )
           }.singleOpt
         )
     }
@@ -436,6 +474,18 @@ class MobileChoiceService @Inject() (
               WHERE task_id = $taskId AND user_id = $userId AND submission_key = $key
               AND attempt = $attempt AND state = 'started'""".executeUpdate(),
       "record a changeset"
+    )
+
+    /** The answers about to be uploaded, so a resumed attempt reports what reached OSM. */
+    def uploading(answers: JsObject): Unit = fenced(
+      implicit c => {
+        val json = Json.stringify(answers)
+        SQL"""UPDATE mobile_choice_submissions SET answers = CAST($json AS jsonb),
+              updated_at = NOW()
+              WHERE task_id = $taskId AND user_id = $userId AND submission_key = $key
+              AND attempt = $attempt AND state = 'started'""".executeUpdate()
+      },
+      "record the answers"
     )
     def uploaded(cs: Long): Unit = fenced(
       implicit c =>
@@ -558,33 +608,119 @@ class MobileChoiceService @Inject() (
         }
     }
 
+  /**
+    * Publishes one claimed guest answer for the claim's user (API plan §6). The same path as
+    * [[submit]] with one changeset per task, except: no lock of the user's own is needed (another
+    * mapper's lock means later), answers whose guard fails are dropped instead of refusing the
+    * whole answer, and the row's id is the idempotency key, so a rerun after an unknown upload
+    * outcome resumes rather than uploading twice.
+    */
+  def publishPending(row: PendingPublish, user: User, familyId: String): Future[PendingOutcome] =
+    validateSubmission(row.taskId, Json.stringify(row.body)) match {
+      case Left(ChoiceResponse(404, _)) => Future.successful(PendingOutcome.Superseded(None))
+      // The task's payload changed so that the answer no longer resolves.
+      case Left(ChoiceResponse(422, _)) => Future.successful(PendingOutcome.Superseded(None))
+      case Left(response) =>
+        Future.successful(PendingOutcome.Failed((response.body \ "error").as[String]))
+      case Right(valid) if valid.payloadDigest != row.payloadDigest =>
+        Future.successful(PendingOutcome.Superseded(None))
+      case Right(valid) =>
+        val key = digest(s"pending:${row.id}")
+        // This answer's own submission row first: if an earlier run uploaded it, or even wrote the
+        // status, the task is no longer open because of this answer, and the row says how it went.
+        val ours = this.row(valid.task.id, user.id, key).isDefined
+        if (!ours && !PendingOpenStatuses.contains(
+              valid.task.status.getOrElse(Task.STATUS_CREATED)
+            ))
+          Future.successful(PendingOutcome.Superseded(agrees(valid.task.id, valid.body)))
+        else
+          run(valid.task, valid.work, valid.plan, user, familyId, key, pendingPublish = true)
+            .map(pendingOutcome)
+    }
+
+  /**
+    * The plan an earlier attempt actually uploaded, from the answers it recorded: a pending answer
+    * may have dropped some (step 3), and a resume must report those as dropped, not applied.
+    */
+  private def uploadedPlan(
+      plan: ChoicePlan,
+      recorded: Option[JsObject],
+      pendingPublish: Boolean
+  ): (ChoicePlan, JsObject) =
+    (plan, recorded) match {
+      case (edit: EditTags, Some(sent)) if pendingPublish =>
+        val (kept, lost) = edit.answers.partition { case (q, _) => sent.keys.contains(q.id) }
+        (EditTags(kept), Json.obj("dropped" -> lost.map(_._1.id)))
+      case _ if pendingPublish => (plan, Json.obj("dropped" -> Json.arr()))
+      case _                   => (plan, Json.obj())
+    }
+
+  /** Task statuses a pending answer may still complete: Created, Skipped and Too hard. */
+  private val PendingOpenStatuses =
+    Set(Task.STATUS_CREATED, Task.STATUS_SKIPPED, Task.STATUS_TOO_HARD)
+
+  /** Whether the answers match those of the submission that completed the task, if any. */
+  private def agrees(taskId: Long, body: JsObject): Option[Boolean] =
+    (body \ "answers").asOpt[JsObject].flatMap { mine =>
+      db.withConnection { implicit c =>
+          SQL"""SELECT answers::text FROM mobile_choice_submissions
+                WHERE task_id = $taskId AND state = 'done' AND answers IS NOT NULL
+                ORDER BY updated_at DESC LIMIT 1"""
+            .as(SqlParser.str(1).singleOpt)
+        }
+        .map(Json.parse(_).as[JsObject])
+        .map { applied =>
+          mine.keys.intersect(applied.keys).forall(q => mine(q) == applied(q))
+        }
+    }
+
+  private def pendingOutcome(response: ChoiceResponse): PendingOutcome = {
+    val code = (response.body \ "error").asOpt[String]
+    (response.status, code) match {
+      case (200, _) => PendingOutcome.Published(response.body)
+      case (409, Some("task_ineligible")) =>
+        PendingOutcome.SkippedStale((response.body \ "reason").asOpt[String].getOrElse("stale"))
+      case (409, Some("element_in_use"))     => PendingOutcome.SkippedStale("element_in_use")
+      case (409, Some("invalid_transition")) => PendingOutcome.Superseded(None)
+      case (401, _)                          => PendingOutcome.Reauth
+      case (409, Some("lock_required" | "submission_pending" | "osm_conflict")) | (502 | 503, _) |
+          (500, Some("status_pending")) =>
+        PendingOutcome.Retry(code.getOrElse("osm_unavailable"))
+      case (_, other) => PendingOutcome.Failed(other.getOrElse("server_error"))
+    }
+  }
+
   private def run(
       task: Task,
       work: ChoiceWork,
       plan: ChoicePlan,
       user: User,
       familyId: String,
-      key: String
+      key: String,
+      pendingPublish: Boolean = false
   ): Future[ChoiceResponse] = {
     val claim = new Claim(task.id, user.id, key)
     row(task.id, user.id, key) match {
       // Before the lock check: a completed submission resent gets the same answer.
-      case Some(SubmissionRow("done", _, Some(result))) => done(ChoiceResponse(200, result))
+      case Some(SubmissionRow("done", _, Some(result), _)) => done(ChoiceResponse(200, result))
       // Uploaded but the status write did not commit: finish it, never upload twice. The status
       // write itself refuses if another user holds the lock.
-      case Some(SubmissionRow("uploaded", cs, _)) => done(finish(task.id, user, key, plan, cs))
-      case Some(SubmissionRow("started", cs, _)) =>
+      case Some(SubmissionRow("uploaded", cs, _, recorded)) =>
+        val (sent, extra) = uploadedPlan(plan, recorded, pendingPublish)
+        done(finish(task.id, user, key, sent, cs, extra))
+      case Some(SubmissionRow("started", cs, _, recorded)) =>
         if (!claim.take()) done(pending)
         else
           cs match {
             // The outcome of an earlier upload is unknown: OSM tells.
             case Some(id) =>
               withToken(claim, familyId, user)(token =>
-                resume(claim, task, work, plan, user, familyId, token, id)
+                resume(claim, task, work, plan, user, familyId, token, id, recorded, pendingPublish)
               )
-            case None => fresh(claim, task, work, plan, user, familyId, rowExists = true)
+            case None =>
+              fresh(claim, task, work, plan, user, familyId, rowExists = true, pendingPublish)
           }
-      case _ => fresh(claim, task, work, plan, user, familyId, rowExists = false)
+      case _ => fresh(claim, task, work, plan, user, familyId, rowExists = false, pendingPublish)
     }
   }
 
@@ -604,12 +740,16 @@ class MobileChoiceService @Inject() (
       plan: ChoicePlan,
       user: User,
       familyId: String,
-      rowExists: Boolean
+      rowExists: Boolean,
+      pendingPublish: Boolean = false
   ): Future[ChoiceResponse] = {
     val paused     = challengeDAL.retrieveById(task.parent).exists(_.extra.paused)
     val allowReset = task.completedBy.contains(user.id)
+    val holder     = lockHolder(task.id)
+    // A guest's answer was given without a lock; it only waits for another mapper's lock to end.
+    val locked = if (pendingPublish) holder.exists(_ != user.id) else !holder.contains(user.id)
     val refusal =
-      if (!lockHolder(task.id).contains(user.id)) Some(error(409, "lock_required"))
+      if (locked) Some(error(409, "lock_required"))
       else if (paused || !Task.isValidStatusProgression(
                  task.status.getOrElse(Task.STATUS_CREATED),
                  plan.status,
@@ -626,7 +766,8 @@ class MobileChoiceService @Inject() (
           case StatusOnly(_) | Report(_, _, _) => done(finish(task.id, user, claim.key, plan, None))
           case _ =>
             withToken(claim, familyId, user) { token =>
-              Attempt(claim, task, work, plan, user, familyId, token).edit(rowExists)
+              Attempt(claim, task, work, plan, user, familyId, token, pendingPublish)
+                .edit(rowExists)
             }
         }
     }
@@ -641,7 +782,9 @@ class MobileChoiceService @Inject() (
       user: User,
       familyId: String,
       token: String,
-      cs: Long
+      cs: Long,
+      recorded: Option[JsObject] = None,
+      pendingPublish: Boolean = false
   ): Future[ChoiceResponse] = {
     val attempt = Attempt(claim, task, work, plan, user, familyId, token)
     osm
@@ -649,12 +792,17 @@ class MobileChoiceService @Inject() (
       .transformWith {
         case Success(count) if count > 0 =>
           claim.uploaded(cs)
-          attempt.closeQuietly(cs).map(_ => finish(task.id, user, claim.key, plan, Some(cs)))
+          val (sent, extra) = uploadedPlan(plan, recorded, pendingPublish)
+          attempt
+            .closeQuietly(cs)
+            .map(_ => finish(task.id, user, claim.key, sent, Some(cs), extra))
         case Success(_) =>
           claim.changeset(None)
           attempt
             .closeQuietly(cs)
-            .flatMap(_ => fresh(claim, task, work, plan, user, familyId, rowExists = true))
+            .flatMap(_ =>
+              fresh(claim, task, work, plan, user, familyId, rowExists = true, pendingPublish)
+            )
         case Failure(OsmCallException(401 | 403, _, _)) => done(attempt.unauthorized(None))
         case Failure(e) =>
           logger.error(
@@ -678,7 +826,9 @@ class MobileChoiceService @Inject() (
       plan: ChoicePlan,
       user: User,
       familyId: String,
-      token: String
+      token: String,
+      pendingPublish: Boolean = false,
+      dropped: List[String] = Nil
   ) {
     def closeQuietly(cs: Long): Future[Unit] =
       osm.close(cs, token).recover {
@@ -714,20 +864,42 @@ class MobileChoiceService @Inject() (
       error(409, "task_ineligible", "reason" -> "key_changed")
     }
 
-    private def verify(): Future[Either[ChoiceResponse, ElementFound]] =
+    /**
+      * A pending answer keeps the answers whose question guard still holds and drops the rest
+      * (API plan §6 step 3); only a failed `match` or a gone element makes it stale.
+      */
+    private def narrowed(found: ElementFound, edit: EditTags): Either[ChoiceResponse, Attempt] = {
+      val (kept, lost) = edit.answers.partition(_._1.holds(found.tags))
+      if (kept.isEmpty) Left(changedAnswer())
+      else if (lost.isEmpty) Right(this)
+      else Right(copy(plan = EditTags(kept), dropped = dropped ++ lost.map(_._1.id)))
+    }
+
+    private def verify(): Future[Either[ChoiceResponse, (ElementFound, Attempt)]] =
       observe(work, Some(token)).map { observation =>
-        staleness(work, observation.read) match {
-          case Left(found) => Left(stale(found))
-          case Right(found) if work.liveMissingQuestions && (plan match {
-                case edit: EditTags => !edit.answers.forall(_._1.holds(found.tags))
-                case _              => false
-              }) =>
-            Left(changedAnswer())
-          case Right(_) if plan == DeleteNode && observation.inUse.contains(true) =>
-            Left(error(409, "element_in_use"))
-          case Right(found) => Right(found)
+        (plan, observation.read) match {
+          case (edit: EditTags, found: ElementFound) if pendingPublish =>
+            if (!work.matches(found.tags))
+              staleness(work, found).left.map(stale).flatMap(f => Right((f, this)))
+            else narrowed(found, edit).map(found -> _)
+          case _ => verifyAll(observation)
         }
       }
+
+    private def verifyAll(
+        observation: Observation
+    ): Either[ChoiceResponse, (ElementFound, Attempt)] =
+      (staleness(work, observation.read) match {
+        case Left(found) => Left(stale(found))
+        case Right(found) if work.liveMissingQuestions && (plan match {
+              case edit: EditTags => !edit.answers.forall(_._1.holds(found.tags))
+              case _              => false
+            }) =>
+          Left(changedAnswer())
+        case Right(_) if plan == DeleteNode && observation.inUse.contains(true) =>
+          Left(error(409, "element_in_use"))
+        case Right(found) => Right(found)
+      }).map(_ -> this)
 
     /** Failures before any changeset exists: nothing reached OSM. */
     private def beforeChangeset(e: Throwable): ChoiceResponse = e match {
@@ -744,22 +916,24 @@ class MobileChoiceService @Inject() (
         case Failure(e)                   => claim.drop(); Future.failed(e)
         case Success(Left(response)) =>
           claim.drop(); done(response)
-        case Success(Right(found)) =>
+        case Success(Right((found, attempt))) =>
           if (!rowExists && !claim.insert()) done(pending)
-          else
-            osm.createChangeset(changesetTags(), token).transformWith {
-              case Success(cs) =>
-                Future(claim.changeset(Some(cs)))
-                  .flatMap(_ => upload(found, cs, retried = false))
-                  .recoverWith {
-                    // Unexpected failures (e.g. the database) still close the changeset.
-                    case NonFatal(e) =>
-                      logger.error(s"Choice task ${task.id}: failed with changeset $cs open", e)
-                      claim.release()
-                      closeQuietly(cs).flatMap(_ => Future.failed(e))
-                  }
-              case Failure(e) => done(beforeChangeset(e))
+          else attempt.create(found)
+      }
+
+    private def create(found: ElementFound): Future[ChoiceResponse] =
+      osm.createChangeset(changesetTags(), token).transformWith {
+        case Success(cs) =>
+          Future(claim.changeset(Some(cs)))
+            .flatMap(_ => upload(found, cs, retried = false))
+            .recoverWith {
+              // Unexpected failures (e.g. the database) still close the changeset.
+              case NonFatal(e) =>
+                logger.error(s"Choice task ${task.id}: failed with changeset $cs open", e)
+                claim.release()
+                closeQuietly(cs).flatMap(_ => Future.failed(e))
             }
+        case Failure(e) => done(beforeChangeset(e))
       }
 
     private def changesetTags(): Seq[(String, String)] = {
@@ -776,19 +950,27 @@ class MobileChoiceService @Inject() (
       case _              => ChoiceOsmClient.delete(found, cs)
     }
 
+    private def extra: JsObject =
+      if (pendingPublish) Json.obj("dropped" -> dropped) else Json.obj()
+
     private def upload(found: ElementFound, cs: Long, retried: Boolean): Future[ChoiceResponse] = {
       def end(response: ChoiceResponse): Future[ChoiceResponse] = {
         claim.drop(); closeQuietly(cs).map(_ => response)
       }
+      plan match {
+        case edit: EditTags =>
+          claim.uploading(JsObject(edit.answers.map { case (q, o) => q.id -> JsString(o.id) }))
+        case _ =>
+      }
       osm.upload(cs, change(found, cs), token).transformWith {
         case Success((200, _)) =>
           claim.uploaded(cs)
-          closeQuietly(cs).map(_ => finish(task.id, user, claim.key, plan, Some(cs)))
+          closeQuietly(cs).map(_ => finish(task.id, user, claim.key, plan, Some(cs), extra))
         case Success((409, _)) if !retried =>
           // The element changed between the read and the upload: re-check once (step 5).
           verify().transformWith {
-            case Success(Right(current)) => upload(current, cs, retried = true)
-            case Success(Left(response)) => end(response)
+            case Success(Right((current, attempt))) => attempt.upload(current, cs, retried = true)
+            case Success(Left(response))            => end(response)
             case Failure(OsmCallException(401 | 403, _, _)) =>
               closeQuietly(cs).map(_ => unauthorized(Some(cs)))
             case Failure(e) =>
@@ -839,7 +1021,8 @@ class MobileChoiceService @Inject() (
       user: User,
       key: String,
       plan: ChoicePlan,
-      cs: Option[Long]
+      cs: Option[Long],
+      extra: JsObject = Json.obj()
   ): ChoiceResponse = {
     val status = if (cs.isDefined) Task.STATUS_FIXED else plan.status
     val report = plan match {
@@ -847,7 +1030,7 @@ class MobileChoiceService @Inject() (
       case _         => Json.obj()
     }
     val result =
-      Json.obj("status" -> status, "changesetId" -> cs, "applied" -> applied(plan, cs)) ++ report
+      Json.obj("status" -> status, "changesetId" -> cs, "applied" -> applied(plan, cs)) ++ report ++ extra
     val answers = plan match {
       case edit: EditTags =>
         Some(JsObject(edit.answers.map { case (q, o) => q.id -> JsString(o.id) }))

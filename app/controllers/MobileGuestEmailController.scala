@@ -139,7 +139,8 @@ class MobileGuestTokenController @Inject() (
 class MobileClaimController @Inject() (
     components: ControllerComponents,
     guests: MobileGuestAuth,
-    claims: org.maproulette.provider.choice.claim.ClaimService
+    claims: org.maproulette.provider.choice.claim.ClaimService,
+    publisher: org.maproulette.provider.choice.claim.ClaimPublishScheduler
 )(implicit ec: ExecutionContext)
     extends AbstractController(components) {
   private val logger = play.api.Logger(getClass)
@@ -175,8 +176,10 @@ class MobileClaimController @Inject() (
   def claim: Action[JsValue] = Action.async(parse.tolerantJson(maxLength = 2048)) { request =>
     handled(request) { (user, scopes, family, client) =>
       claims.claim(request.body, user, scopes, family, client).map {
-        case Left(error)           => Status(error.status)(Json.obj("error" -> error.code) ++ error.extra)
-        case Right((status, body)) => Status(status)(body)
+        case Left(error) => Status(error.status)(Json.obj("error" -> error.code) ++ error.extra)
+        case Right((status, body)) =>
+          if (status == ACCEPTED) publisher.nudge()
+          Status(status)(body)
       }
     }
   }
