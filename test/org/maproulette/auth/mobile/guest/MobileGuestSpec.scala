@@ -128,6 +128,7 @@ class MobileGuestSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll 
       def withdraw(guestId: UUID, taskId: Long)                 = ???
       def counts(guestId: UUID)                                 = Map("pending" -> 2, "published" -> 1, "expired" -> 4)
       def list(guestId: UUID, limit: Int, before: Option[Long]) = ???
+      def held(taskIds: Seq[Long])                              = ???
     }
     val controller = new MobileGuestController(stubControllerComponents(), service, pendingCounts)
     val oauth = new MobileOAuthController(
@@ -400,6 +401,36 @@ class MobileGuestSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll 
           val result = filter().apply(next)(bearer(method, path))
           status(result) mustBe FORBIDDEN
           contentAsJson(result) mustBe Json.obj("error" -> "insufficient_scope")
+      }
+    }
+    "answer 404 for a draft's challenge and tasks to a guest" in {
+      val oauth = mock[MobileOAuthService]
+      org.mockito.Mockito
+        .when(oauth.authenticate(org.mockito.ArgumentMatchers.anyString()))
+        .thenReturn(Future.successful(None))
+      // Challenge 7 and task 70 are a draft.
+      val drafts = new MobileDrafts {
+        def draft(target: MobileDraftRoutes.Target): Boolean = target match {
+          case MobileDraftRoutes.Challenge(id) => id == 7
+          case MobileDraftRoutes.Task(id)      => id == 70
+        }
+      }
+      val gated = new MobileBearerFilter(
+        settings(),
+        oauth,
+        mock[UserService],
+        MobileAdminCheck.Nobody,
+        null,
+        null,
+        guests,
+        drafts
+      )
+      Seq("/api/v2/challenge/7", "/api/v2/task/70", "/api/v2/task/70/choice/check").foreach {
+        path =>
+          withClue(path)(status(gated.apply(next)(bearer(GET, path))) mustBe NOT_FOUND)
+      }
+      Seq("/api/v2/challenge/8", "/api/v2/task/71").foreach { path =>
+        withClue(path)(status(gated.apply(next)(bearer(GET, path))) mustBe OK)
       }
     }
     "refuse an unknown token on guest routes" in {

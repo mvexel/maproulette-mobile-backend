@@ -296,6 +296,11 @@ Discovery: `excludePending=true` on `tasks/box`, `markers/box` and the cluster r
 tasks with a pending answer whose hold has not ended (next to `excludeStale`). `challenge/:id/tasks`
 is not filtered.
 
+`includePending=true` on `tasks/box` keeps held tasks and adds `"pending": true|false` to each task,
+so the app can count a held task as Checked in its tally and leave it out of Nearest. The flag is
+yes/no only: nothing about the guest or the answer. Without the parameter the response is unchanged.
+`ChoicePendingStore.held` is the shared lookup for any other progress read.
+
 A guest token reaches only `MobileGuestRoutes`: the discovery reads of `MobileReadRoutes`, including
 `choice/check` (but not `/oauth/mobile/me`), pending answers and its own routes. It is never a
 MapRoulette user: the bearer filter sets `MobileBearerIdentity.GuestKey`, never `UserKey`, so stock
@@ -317,6 +322,24 @@ by default, `log` for development, which logs only the template name, or `postma
 (`<claimOrigin>/claim#t=<token>`, `/claim/delete#t=`, `/claim/stop-reminders#t=`) so it never
 reaches web server logs. Postmark open and link tracking are off. The templates are copies of the
 project's brand/email set in `conf/mobile-email/`.
+
+## Preview mode (drafts)
+
+A challenge is a draft while it, or its project, is disabled. For app bearer
+grants and guest tokens:
+
+- `GET /challenge/:id`, `/challenge/:id/tags`, `/challenge/:id/tasks`,
+  `/task/:id` and `/task/:id/choice/check` on a draft answer a bare 404, the same
+  as an unknown id, unless the user is a super-user (a guest never is). Organizers
+  get the same access once `mobile:organize` lands. A guest's pending answer to a
+  draft gets `404 not_found`.
+- Task writes on a draft (`start`, `skip`, `choice`, status) are refused for
+  everyone: 404 for other users, 403 `challenge_draft` for super-users.
+  `release` stays open, so a lock taken before the challenge was disabled can be
+  dropped.
+
+Discovery (`tasks/box`, `markers/box`, `extendedFind`) already lists enabled
+challenges in enabled projects only. Admin grants and web sessions are unchanged.
 
 ## Account identity
 
