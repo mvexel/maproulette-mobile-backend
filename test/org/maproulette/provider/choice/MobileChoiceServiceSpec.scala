@@ -753,7 +753,8 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
       plain.body mustBe Json.obj(
         "status"      -> 2,
         "changesetId" -> JsNull,
-        "applied"     -> Json.obj("set" -> Json.obj(), "unset" -> Json.arr(), "deleted" -> false)
+        "applied"     -> Json.obj("set" -> Json.obj(), "unset" -> Json.arr(), "deleted" -> false),
+        "outcome"     -> "gone"
       )
       osm.changesets.size mustBe changesets
       fresh(used) mustBe ((Task.STATUS_FALSE_POSITIVE, None))
@@ -807,7 +808,8 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
       response.body mustBe Json.obj(
         "status"      -> 6,
         "changesetId" -> JsNull,
-        "applied"     -> Json.obj("set" -> Json.obj(), "unset" -> Json.arr(), "deleted" -> false)
+        "applied"     -> Json.obj("set" -> Json.obj(), "unset" -> Json.arr(), "deleted" -> false),
+        "outcome"     -> "too-hard"
       )
       fresh(task) mustBe ((Task.STATUS_TOO_HARD, None))
       lockedBy(task) mustBe None
@@ -1391,6 +1393,11 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
       osm.uploadCount mustBe uploads
       osm.elements(("node", node)).tags mustBe snapshot(lines.head)
       fresh(task)._1 mustBe Task.STATUS_TOO_HARD
+      // The campaign results name the outcome, not just the status.
+      val row =
+        new ChoiceResultsRepository(db).results(woodbine.id).get.find(_.taskId == task.id).get
+      (row.outcome, row.outcomeLabel, row.reportCount) mustBe
+        ((Some("no-door"), Some("There's no door"), 0))
     }
 
     "refuse an answer once the node is no longer that kind of entrance" taggedAs ChoiceTag in {

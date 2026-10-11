@@ -32,8 +32,10 @@ case class EditTags(answers: List[(ChoiceQuestion, ChoiceOption)]) extends Choic
   val set: Map[String, String] = answers.flatMap(_._2.setTags).toMap
   val unset: List[String]      = answers.flatMap(_._2.unsetTags).distinct.sorted
 }
-case object DeleteNode             extends ChoicePlan { val status = Task.STATUS_FIXED }
-case class StatusOnly(status: Int) extends ChoicePlan
+case object DeleteNode extends ChoicePlan { val status = Task.STATUS_FIXED }
+
+/** A status-only close; `outcome` is the too-hard or campaign outcome id, kept for the results. */
+case class StatusOnly(status: Int, outcome: Option[String] = None) extends ChoicePlan
 
 /** Where a `moved` report puts the element; `source` is `tap` or `here`. */
 case class ReportLocation(lat: Double, lon: Double, source: String) {
@@ -390,16 +392,17 @@ class MobileChoiceService @Inject() (
       case Outcome(ChoiceWork.Moved, None, None)     => Left("moved needs a location")
       case Outcome(_, _, Some(_))                    => Left("location is only allowed on moved")
       case Outcome(ChoiceWork.NotHere, None, _)      => Right(Report(ChoiceWork.NotHere, None))
-      case Outcome(ChoiceWork.TooHard, None, _)      => Right(StatusOnly(Task.STATUS_TOO_HARD))
+      case Outcome(ChoiceWork.TooHard, None, _) =>
+        Right(StatusOnly(Task.STATUS_TOO_HARD, Some(ChoiceWork.TooHard)))
       case Outcome(ChoiceWork.TooHard | ChoiceWork.NotHere | ChoiceWork.Moved, _, _) =>
         Left("delete is only allowed on a delete outcome")
       case Outcome(id, delete, _) =>
         work.outcomes.find(_.id == id) match {
           case None                                         => Left(s"unknown outcome '$id'")
           case Some(o) if o.delete && delete.contains(true) => Right(DeleteNode)
-          case Some(o) if o.delete                          => Right(StatusOnly(Task.STATUS_FALSE_POSITIVE))
+          case Some(o) if o.delete                          => Right(StatusOnly(Task.STATUS_FALSE_POSITIVE, Some(o.id)))
           case Some(_) if delete.isDefined                  => Left("delete is only allowed on a delete outcome")
-          case Some(o)                                      => Right(StatusOnly(o.status.get))
+          case Some(o)                                      => Right(StatusOnly(o.status.get, Some(o.id)))
         }
     }
 
@@ -595,8 +598,8 @@ class MobileChoiceService @Inject() (
       case Left(response) => done(response)
       case Right(valid) =>
         val edits = valid.plan match {
-          case StatusOnly(_) | Report(_, _, _) => false
-          case _                               => true
+          case StatusOnly(_, _) | Report(_, _, _) => false
+          case _                                  => true
         }
         if (edits && !scopes.contains(MobileScopes.TagFix))
           done(error(403, "insufficient_scope", "scope" -> MobileScopes.TagFix))
@@ -763,7 +766,8 @@ class MobileChoiceService @Inject() (
         done(response)
       case None =>
         plan match {
-          case StatusOnly(_) | Report(_, _, _) => done(finish(task.id, user, claim.key, plan, None))
+          case StatusOnly(_, _) | Report(_, _, _) =>
+            done(finish(task.id, user, claim.key, plan, None))
           case _ =>
             withToken(claim, familyId, user) { token =>
               Attempt(claim, task, work, plan, user, familyId, token, pendingPublish)
@@ -1026,8 +1030,9 @@ class MobileChoiceService @Inject() (
   ): ChoiceResponse = {
     val status = if (cs.isDefined) Task.STATUS_FIXED else plan.status
     val report = plan match {
-      case r: Report => r.json
-      case _         => Json.obj()
+      case r: Report               => r.json
+      case StatusOnly(_, Some(id)) => Json.obj("outcome" -> id)
+      case _                       => Json.obj()
     }
     val result =
       Json.obj("status" -> status, "changesetId" -> cs, "applied" -> applied(plan, cs)) ++ report ++ extra
