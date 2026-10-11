@@ -289,7 +289,7 @@ class MobileGuestSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll 
         )
       )
       val summaries = new GuestSummaries {
-        def summary(guest: UUID): Option[GuestSummary] =
+        def summary(guest: UUID, states: Set[String]): Option[GuestSummary] =
           Some(GuestSummary("SLC Bus Stops", None, 3, Instant.now()))
       }
       val emails = new GuestEmailService(
