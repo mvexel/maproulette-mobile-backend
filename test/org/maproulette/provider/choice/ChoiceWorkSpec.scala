@@ -208,6 +208,23 @@ class ChoiceWorkSpec extends PlaySpec {
       )
     }
 
+    "keep ';' and edge whitespace out of new outcome labels, and still load stored ones" in {
+      def labelled(label: String) =
+        bench ++ Json.obj(
+          "outcomes" -> Json.arr(Json.obj("id" -> "a", "label" -> label, "status" -> 2))
+        )
+      def onWrite(json: JsValue) = ChoiceWork.validate(json, onWrite = true).left.getOrElse(Nil)
+      onWrite(labelled("Locked; staff only")) mustBe List("outcomes[0].label: must not contain ';'")
+      Seq(" Locked", "Locked ", "Locked\t").foreach { label =>
+        onWrite(labelled(label)) mustBe
+          List("outcomes[0].label: must not start or end with whitespace")
+      }
+      onWrite(labelled("Locked, staff only")) mustBe Nil
+      onWrite(bench) mustBe Nil
+      // Tasks stored before the rule still load for mappers.
+      ChoiceWork.validate(labelled("Locked; staff only")).isRight mustBe true
+    }
+
     "limit the serialized payload to 16 KiB" in {
       val big = withQuestion(0, question(0) ++ Json.obj("description" -> "x" * 500)) ++
         Json.obj("padding" -> "y" * 16384)

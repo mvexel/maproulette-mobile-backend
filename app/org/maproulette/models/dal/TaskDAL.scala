@@ -518,7 +518,7 @@ class TaskDAL @Inject() (
       val parsedWork = cooperativeWorkJson.map(Json.parse)
       val isChoice   = parsedWork.exists(ChoiceWork.isChoice)
       parsedWork.filter(ChoiceWork.isChoice).foreach { parsed =>
-        ChoiceWork.validate(parsed) match {
+        ChoiceWork.validate(parsed, onWrite = true) match {
           case Left(errors) =>
             throw new ChoiceValidationException(errors)
           case Right(_) =>

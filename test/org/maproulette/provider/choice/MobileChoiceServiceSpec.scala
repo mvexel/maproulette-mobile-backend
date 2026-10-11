@@ -849,6 +849,36 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
         ChoiceResponse(422, Json.obj("error"                                       -> "unsupported_task"))
       await(service.check(987654321L)) mustBe ChoiceResponse(404, Json.obj("error" -> "not_found"))
     }
+
+    "refuse ';' in outcome labels on upload and edit, and still serve tasks stored with one" taggedAs ChoiceTag in {
+      val semicolon: JsObject => JsObject = _ ++ Json.obj(
+        "outcomes" -> Json.arr(
+          Json.obj("id" -> "locked", "label" -> "Locked; staff only", "status" -> 2)
+        )
+      )
+      intercept[ChoiceValidationException](benchTask(semicolon)).errors mustBe
+        List("outcomes[0].label: must not contain ';'")
+      val (task, node) = benchTask()
+      intercept[ChoiceValidationException](
+        taskDAL.mergeUpdate(
+          taskDAL
+            .retrieveById(task.id)
+            .get
+            .copy(
+              cooperativeWork = Some(semicolon(ChoiceFixtures.withNode(node)))
+            ),
+          User.superUser
+        )(task.id)
+      )
+      // Stored before the rule existed: mappers can still answer it.
+      db.withConnection { implicit c =>
+        SQL("UPDATE tasks SET cooperative_work_json = {work}::JSONB WHERE id = {id}")
+          .on("work" -> Json.stringify(semicolon(ChoiceFixtures.withNode(node))), "id" -> task.id)
+          .executeUpdate()
+      }
+      lock(task)
+      submit(task, """{"outcome": "locked"}""").status mustBe 200
+    }
   }
 
   "Pending publish" should {
