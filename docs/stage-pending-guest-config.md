@@ -92,3 +92,19 @@ The strengthened existing writes-off `MobileChoicePendingSpec` expects a pending
 receipt, unchanged task status and zero fake OSM writes after the published tag.
 Pure validator/config checks cannot substitute for executing this database test
 or for native/device/runtime stage evidence.
+
+## Mobile repository CI coverage
+
+The Jacoco job creates `mobile_oauth_ci` with PostGIS in its disposable
+PostGIS17 service and sets `MOBILE_OAUTH_TEST_DATABASE_URL`,
+`MOBILE_OAUTH_TEST_DATABASE_USER` and `MOBILE_OAUTH_TEST_DATABASE_PASSWORD` to
+that database with synthetic CI credentials. It is separate from `mr_test`,
+which FrameworkMasterSuite applies and cleans up evolutions against. The mobile
+repository suites create and drop their own UUID-named schemas; provisioning
+uses the database's public PostGIS geometry types.
+
+Before client/config release, inspect the exact-head CI results for execution
+of all 37 opt-in cases: MobileAdminRepositorySpec8, MobileGuestRepositorySpec14,
+MobileOAuthRepositorySpec12 and MobileUserProvisionerSpec3. A green run with
+those cases cancelled does not close this gate. CI database creation is confined
+to the job's disposable service; no stage/prod database is used.
