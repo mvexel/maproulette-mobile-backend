@@ -39,7 +39,8 @@ class TaskController @Inject() (
     components: ControllerComponents,
     val taskDAL: TaskDAL,
     val serviceManager: ServiceManager,
-    val notificationService: NotificationService
+    val notificationService: NotificationService,
+    pending: org.maproulette.provider.choice.ChoicePendingStore
 ) extends AbstractController(components)
     with MapRouletteController
     with TaskJSONMixin {
@@ -81,6 +82,31 @@ class TaskController @Inject() (
   }
 
   /**
+    * Fork: with `includePending=true`, each task gets `"pending": true|false`, whether a live
+    * pending guest answer holds it (deferred sign-up). Yes/no only: nothing about the guest or the
+    * answer. Without the parameter the response is unchanged.
+    */
+  private def withPending(
+      json: JsValue,
+      tasks: List[org.maproulette.framework.model.ClusteredPoint]
+  )(
+      implicit request: Request[AnyContent]
+  ): JsValue =
+    if (!request.getQueryString("includePending").contains("true")) json
+    else {
+      val held = pending.held(tasks.map(_.id))
+      json match {
+        case JsArray(items) =>
+          JsArray(items.map {
+            case task: JsObject =>
+              task + ("pending" -> JsBoolean((task \ "id").asOpt[Long].exists(held.contains)))
+            case other => other
+          })
+        case other => other
+      }
+    }
+
+  /**
     * Gets all the tasks within a bounding box
     *
     * @param left   The minimum longitude for the bounding box
@@ -117,7 +143,8 @@ class TaskController @Inject() (
           order
         )
 
-        val resultJson = this.insertExtraTaskJSON(result, includeGeometries, includeTags)
+        val resultJson =
+          withPending(this.insertExtraTaskJSON(result, includeGeometries, includeTags), result)
 
         if (includeTotal) {
           Ok(Json.obj("total" -> count, "tasks" -> resultJson))
