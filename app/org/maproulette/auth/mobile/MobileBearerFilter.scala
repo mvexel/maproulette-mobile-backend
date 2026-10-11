@@ -66,6 +66,7 @@ object MobileReadRoutes {
     "/api/v2/task/[0-9]+",
     "/api/v2/task/[0-9]+/choice/check",
     s"/api/v2/tasks/box/$box",
+    "/api/v2/mobile-claim/[0-9]+",
     "/oauth/mobile/me"
   ).map(_.r)
 
@@ -75,7 +76,8 @@ object MobileReadRoutes {
 
   /** Reads that take no query string or body. */
   def bare(method: String, path: String): Boolean =
-    method == "GET" && path.matches("/api/v2/task/[0-9]+/choice/check")
+    method == "GET" && (path.matches("/api/v2/task/[0-9]+/choice/check") ||
+      path.matches("/api/v2/mobile-claim/[0-9]+"))
 }
 
 /**
@@ -96,12 +98,21 @@ object MobileGuestRoutes {
     case _        => false
   }
 
-  /** Setting the claim email (B4): a JSON body, no query string. */
+  /** Setting the claim email or the reminder switch (B4): a JSON body, no query string. */
   def email(method: String, path: String): Boolean =
-    method == "PUT" && path == "/api/v2/mobile-guest/email"
+    method == "PUT" && (path == "/api/v2/mobile-guest/email" || path == "/api/v2/mobile-guest/reminders")
+
+  /** The emailed links' routes (B4, B5 preview): a claim token in a JSON body, no credential. */
+  def claimToken(method: String, path: String): Boolean =
+    method == "POST" && Set(
+      "/api/v2/mobile-claim/preview",
+      "/api/v2/mobile-claim/delete",
+      "/api/v2/mobile-claim/stop-reminders"
+    ).contains(path)
 
   def permits(method: String, path: String): Boolean =
-    own(method, path) || (MobileReadRoutes.permits(method, path) && path != "/oauth/mobile/me")
+    own(method, path) || (MobileReadRoutes.permits(method, path) && path != "/oauth/mobile/me" &&
+      !path.startsWith("/api/v2/mobile-claim/"))
 
   /** The one guest route with a body: a pending answer, shaped like a choice submission. */
   def takesBody(method: String, path: String): Boolean = method == "POST" && path.matches(pending)
@@ -123,7 +134,20 @@ object MobileGuestRoutes {
 
   /** Allowed while field writes are off, for guest tokens only (checked after authentication). */
   def guestOnlyWhenDisabled(method: String, path: String): Boolean =
-    MobileReadRoutes.bare(method, path)
+    method == "GET" && path.matches("/api/v2/task/[0-9]+/choice/check")
+}
+
+/**
+  * The claim writes (deferred sign-up B5) and the claim page's client (D13). While the field write
+  * switch is off, these two routes are the only writes allowed, and only for [[ClientId]], whose
+  * grants in turn reach no other write: the claim is recorded and waits for the publish job.
+  */
+object MobileClaimRoutes {
+  val ClientId = "maproulette-claim"
+
+  def permits(method: String, path: String): Boolean =
+    method == "POST" && (path == "/api/v2/mobile-claim" ||
+      path.matches("/api/v2/mobile-claim/[0-9]+/retry"))
 }
 
 /**
@@ -138,14 +162,14 @@ object MobileWriteRoutes {
 
   def permits(method: String, path: String): Boolean = method match {
     case "GET"  => path.matches(s"$task/(start|release)")
-    case "POST" => path.matches(s"$task/(skip|choice)")
+    case "POST" => path.matches(s"$task/(skip|choice)") || MobileClaimRoutes.permits(method, path)
     case "PUT"  => path.matches(s"$task/[1256]")
     case _      => false
   }
 
   /** The only write that carries a body: a small JSON choice submission. */
   def takesBody(method: String, path: String): Boolean =
-    method == "POST" && path.matches(s"$task/choice")
+    method == "POST" && (path.matches(s"$task/choice") || MobileClaimRoutes.permits(method, path))
 
   def acceptableBody(request: RequestHeader): Boolean = {
     val contentType = request.headers
@@ -206,7 +230,10 @@ object MobileFieldRoutes {
           "/oauth/mobile/guest",
           "/api/v2/mobile-admin/clients",
           "/api/v2/mobile-admin/projects"
-        ).contains(request.path) || MobileGuestRoutes.own(request.method, request.path)
+        ).contains(request.path) || MobileGuestRoutes.own(request.method, request.path) ||
+          MobileGuestRoutes.claimToken(request.method, request.path) ||
+          // D13: the bearer filter below lets only the claim page's grant through.
+          (bearer && MobileClaimRoutes.permits(request.method, request.path))
       case "PATCH" => request.path.matches("/api/v2/mobile-admin/clients/[A-Za-z0-9._-]+")
       // Turning a project on or off lists or hides campaigns; it is not a task or OSM write.
       case "PUT" =>
@@ -394,6 +421,27 @@ class MobileBearerFilter @Inject() (
       .flatMap(_ => Future.fromTry(outcome))
   }
 
+  /** D13 (3): every claim write let through while the switch is off is audited. */
+  private def audit(
+      user: User,
+      action: String,
+      request: RequestHeader,
+      outcome: scala.util.Try[Result]
+  ): Future[Result] = {
+    val after = outcome match {
+      case scala.util.Success(response) => Json.obj("status" -> response.header.status)
+      case scala.util.Failure(e)        => Json.obj("status" -> 500, "error" -> e.getClass.getSimpleName)
+    }
+    Future(adminRepository.record(user.id, action, request.path, Some(after)))
+      .recover {
+        case e: Exception =>
+          logger.error(
+            s"Mobile audit entry $action not recorded for ${request.path}: ${e.getClass.getSimpleName}"
+          )
+      }
+      .flatMap(_ => Future.fromTry(outcome))
+  }
+
   def apply(next: RequestHeader => Future[Result])(request: RequestHeader): Future[Result] = {
     if (settings.writeControlEnabled && !MobileFieldRoutes.permitsWhenDisabled(request) &&
         !writePolicy.enabled) return denied(403, "mobile_writes_disabled")
@@ -409,12 +457,13 @@ class MobileBearerFilter @Inject() (
     val parts = authorizations.head.split(" ", -1)
     if (parts.length != 2 || !parts(0).equalsIgnoreCase("Bearer") ||
         !parts(1).matches("[A-Za-z0-9_-]{32,256}")) return denied(401, "invalid_token")
-    val write = MobileWriteRoutes.permits(request.method, request.path)
-    val read  = MobileReadRoutes.permits(request.method, request.path)
-    val admin = MobileAdminRoutes.permits(request.method, request.path, request.queryString)
-    val guest = guests.enabled && MobileGuestRoutes.permits(request.method, request.path)
-    if (write && (!settings.allowTaskWrites ||
-        (settings.writeControlEnabled && !writePolicy.enabled)))
+    val write       = MobileWriteRoutes.permits(request.method, request.path)
+    val read        = MobileReadRoutes.permits(request.method, request.path)
+    val admin       = MobileAdminRoutes.permits(request.method, request.path, request.queryString)
+    val guest       = guests.enabled && MobileGuestRoutes.permits(request.method, request.path)
+    val claimRoute  = MobileClaimRoutes.permits(request.method, request.path)
+    val switchedOff = write && settings.writeControlEnabled && !writePolicy.enabled
+    if (write && !settings.allowTaskWrites || switchedOff && !claimRoute)
       return denied(403, "mobile_writes_disabled")
     if (!write && !read && !admin && !guest) return denied(403, "insufficient_scope")
     val badShape =
@@ -436,6 +485,13 @@ class MobileBearerFilter @Inject() (
                    MobileGuestRoutes.guestOnlyWhenDisabled(request.method, request.path) &&
                    !writePolicy.enabled) denied(403, "mobile_writes_disabled")
           else if (write && !scopes.contains(MobileScopes.Write)) denied(403, "insufficient_scope")
+          // D13 (1): the claim page's grant writes only through the claim routes.
+          else if (value.clientId == MobileClaimRoutes.ClientId && (write && !claimRoute ||
+                   MobileGuestRoutes.guestOnlyWhenDisabled(request.method, request.path)))
+            denied(403, "insufficient_scope")
+          // D13: with the switch off, only the claim page's grant may claim.
+          else if (switchedOff && value.clientId != MobileClaimRoutes.ClientId)
+            denied(403, "mobile_writes_disabled")
           else
             users.retrieve(value.userId).filter(_.id > 0) match {
               // Re-checked on every request, so a demotion takes effect at once.
@@ -456,6 +512,9 @@ class MobileBearerFilter @Inject() (
                     )
                     if (adminGrant && MobileAdminRoutes.stockWrite(request.method, request.path))
                       result.transformWith(outcome => auditStockWrite(user, request, outcome))
+                    else if (switchedOff)
+                      result
+                        .transformWith(outcome => audit(user, "claim.writes_off", request, outcome))
                     else result
                 }
               case None => denied(401, "invalid_token")

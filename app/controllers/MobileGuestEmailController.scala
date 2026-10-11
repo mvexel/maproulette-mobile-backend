@@ -56,3 +56,153 @@ class MobileGuestEmailController @Inject() (
       }
   }
 }
+
+/**
+  * The routes behind the emailed links (deferred sign-up B4, API plan §3.10), and the app's
+  * reminder switch. The token routes take no credential and answer 404 for an unknown or
+  * superseded token, so token existence isn't disclosed.
+  */
+class MobileGuestTokenController @Inject() (
+    components: ControllerComponents,
+    guests: MobileGuestAuth,
+    tokens: org.maproulette.provider.choice.claim.GuestTokenService,
+    previews: org.maproulette.provider.choice.claim.ClaimPreviewService
+)(implicit ec: ExecutionContext)
+    extends AbstractController(components) {
+  private val logger = play.api.Logger(getClass)
+
+  private def handled(operation: => Future[Result]): Future[Result] =
+    if (!guests.enabled) Future.successful(NotFound)
+    else
+      (try operation
+      catch { case NonFatal(e) => Future.failed(e) })
+        .recover {
+          case NonFatal(e) =>
+            logger.error(s"Guest token request failed: ${e.getClass.getSimpleName}")
+            InternalServerError(Json.obj("error" -> "server_error"))
+        }
+        .map(_.withHeaders(CACHE_CONTROL -> "no-store", PRAGMA -> "no-cache"))
+
+  private def withToken(request: Request[JsValue])(operation: String => Future[Result]) =
+    handled {
+      (request.body \ "claimToken").asOpt[String] match {
+        case Some(token) if !request.headers.hasHeader(AUTHORIZATION) => operation(token)
+        case _                                                        => Future.successful(BadRequest(Json.obj("error" -> "invalid_request")))
+      }
+    }
+
+  private val notFound = NotFound(Json.obj("error" -> "not_found"))
+
+  /** `POST /api/v2/mobile-claim/preview`, `{"claimToken"}`: what the claim page shows. Read only. */
+  def preview: Action[JsValue] = Action.async(parse.tolerantJson(maxLength = 1024)) { request =>
+    withToken(request) { token =>
+      previews.preview(token).map(_.fold(notFound)(body => Ok(body)))
+    }
+  }
+
+  /** `POST /api/v2/mobile-claim/delete`, `{"claimToken"}`: same effect as `DELETE /api/v2/mobile-guest`. */
+  def delete: Action[JsValue] = Action.async(parse.tolerantJson(maxLength = 1024)) { request =>
+    withToken(request) { token =>
+      tokens.delete(token).map {
+        case None             => notFound
+        case Some(Left(code)) => Conflict(Json.obj("error" -> code))
+        case Some(Right(_))   => NoContent
+      }
+    }
+  }
+
+  /** `POST /api/v2/mobile-claim/stop-reminders`, `{"claimToken"}`. Deletes nothing. */
+  def stopReminders: Action[JsValue] = Action.async(parse.tolerantJson(maxLength = 1024)) {
+    request =>
+      withToken(request) { token =>
+        tokens.stopReminders(token).map(if (_) NoContent else notFound)
+      }
+  }
+
+  /** `PUT /api/v2/mobile-guest/reminders`, guest bearer, `{"enabled": false}`. */
+  def reminders: Action[JsValue] = Action.async(parse.tolerantJson(maxLength = 512)) { request =>
+    handled {
+      (request.attrs.get(MobileBearerIdentity.GuestKey), (request.body \ "enabled").asOpt[Boolean]) match {
+        case (None, _) => Future.successful(Unauthorized(Json.obj("error" -> "invalid_token")))
+        case (Some(guest), Some(enabled)) =>
+          tokens.setReminders(guest.id, enabled).map(_ => NoContent)
+        case _ => Future.successful(BadRequest(Json.obj("error" -> "invalid_request")))
+      }
+    }
+  }
+}
+
+/**
+  * `POST /api/v2/mobile-claim` and `GET /api/v2/mobile-claim/:id` (deferred sign-up B5), app
+  * bearer: the claim page's grant, or the phone's own after "I already use OSM".
+  */
+class MobileClaimController @Inject() (
+    components: ControllerComponents,
+    guests: MobileGuestAuth,
+    claims: org.maproulette.provider.choice.claim.ClaimService,
+    publisher: org.maproulette.provider.choice.claim.ClaimPublishScheduler,
+    publishing: org.maproulette.provider.choice.claim.ClaimPublishService
+)(implicit ec: ExecutionContext)
+    extends AbstractController(components) {
+  private val logger = play.api.Logger(getClass)
+
+  private def handled(request: RequestHeader)(
+      operation: (
+          org.maproulette.framework.model.User,
+          Set[String],
+          String,
+          String
+      ) => Future[Result]
+  ): Future[Result] =
+    if (!guests.enabled) Future.successful(NotFound)
+    else
+      (for {
+        user   <- request.attrs.get(MobileBearerIdentity.UserKey)
+        scopes <- request.attrs.get(MobileBearerIdentity.ScopesKey)
+        family <- request.attrs.get(MobileBearerIdentity.FamilyKey)
+        client <- request.attrs.get(MobileBearerIdentity.ClientKey)
+      } yield (user, scopes, family, client)) match {
+        case None => Future.successful(Unauthorized(Json.obj("error" -> "invalid_token")))
+        case Some((user, scopes, family, client)) =>
+          (try operation(user, scopes, family, client)
+          catch { case NonFatal(e) => Future.failed(e) })
+            .recover {
+              case NonFatal(e) =>
+                logger.error(s"Claim request failed: ${e.getClass.getSimpleName}")
+                InternalServerError(Json.obj("error" -> "server_error"))
+            }
+            .map(_.withHeaders(CACHE_CONTROL -> "no-store", PRAGMA -> "no-cache"))
+      }
+
+  def claim: Action[JsValue] = Action.async(parse.tolerantJson(maxLength = 2048)) { request =>
+    handled(request) { (user, scopes, family, client) =>
+      claims.claim(request.body, user, scopes, family, client, waiting = !publishing.ready).map {
+        case Left(error) => Status(error.status)(Json.obj("error" -> error.code) ++ error.extra)
+        case Right((status, body)) =>
+          if (status == ACCEPTED) publisher.nudge()
+          Status(status)(body)
+      }
+    }
+  }
+
+  def retry(id: Long): Action[JsValue] = Action.async(parse.tolerantJson(maxLength = 2048)) {
+    request =>
+      handled(request) { (user, scopes, family, _) =>
+        claims.retry(id, request.body, user, scopes, family, waiting = !publishing.ready).map {
+          case Left(error) => Status(error.status)(Json.obj("error" -> error.code) ++ error.extra)
+          case Right(body) =>
+            publisher.nudge()
+            Accepted(body)
+        }
+      }
+  }
+
+  def status(id: Long): Action[AnyContent] = Action.async { request =>
+    handled(request) { (user, _, _, _) =>
+      claims.status(id, user).map {
+        case Some(body) => Ok(body)
+        case None       => NotFound(Json.obj("error" -> "not_found"))
+      }
+    }
+  }
+}

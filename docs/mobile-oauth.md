@@ -165,6 +165,13 @@ Without `adminOrigin`, admin paths, token and revoke get no CORS at all. The val
 `https://host[:port]` in lowercase (or `http://` on loopback with `allowInsecureLoopback`);
 anything else stops startup.
 
+With guests enabled, the claim page's origin (`mobileOAuth.guests.mail.claimOrigin`,
+`MR_CLAIM_ORIGIN`, default `https://streettally.osm.lol`, same format rules) gets the same
+credential-free answer on what the claim page calls: `POST` on `/oauth/mobile/token`,
+`/oauth/mobile/revoke`, `/api/v2/mobile-claim`, `/api/v2/mobile-claim/<id>/retry`,
+`/api/v2/mobile-claim/preview`, `/delete` and `/stop-reminders`, and `GET` on `/oauth/mobile/me` and `/api/v2/mobile-claim/<id>`. Nothing else.
+`/api/v2/mobile-claim...` answers no other origin.
+
 ## Choice tasks (`osm:tagfix`)
 
 A choice task has `cooperativeWork.meta = {"version": 2, "type": 3, "choiceVersion": 1}`: one OSM
@@ -323,6 +330,28 @@ Step B4, the claim email:
 | Endpoint | Purpose |
 | --- | --- |
 | `PUT /api/v2/mobile-guest/email` | Guest bearer, JSON `{"email"}` (≤ 254 characters, one `@`, no spaces), no query string. Stores the address AES-256-GCM sealed under `osmTokenKey` with the guest id as associated data, creates a claim token (kept only as a digest) and sends the link email. Can be called again to correct the address; each call sends a new link. `200` with the `GET /api/v2/mobile-guest/me` body (`"email": "pending"`). `400 invalid_request`, `409 guest_claimed`, `409 nothing_saved` (no pending answers yet; the app asks after the first saved stop), `429 email_rate_limited` (3 sends per guest per 24 h), `503 mail_unavailable` (no mail provider or token key, or the provider refused). |
+| `PUT /api/v2/mobile-guest/reminders` | Guest bearer, JSON `{"enabled": false}` (or `true` to resume), no query string. Sets or clears `reminders_stopped_at`; deletes nothing. `204`. |
+| `POST /api/v2/mobile-claim` | App bearer with `tasks:write` and `osm:tagfix` (the claim page's grant, or the phone's own), JSON `{"claimToken"}` or `{"guestId", "guestSecret"}`. While the field write switch is off, only the claim page's client (`maproulette-claim`) may call it (D13); the claim then waits, and each such call is recorded in the admin audit as `claim.writes_off`. That client's grants reach no other write route, and not the choice check. In one transaction: marks the guest claimed by the user, deletes its guest access tokens, records a `mobile_claims` row (`queued`) and points the guest's pending answers at it. By link, it also spends the link and gives the phone a new grant family (the guest's client, scope `tasks:read tasks:write osm:tagfix`, no tokens until the phone exchanges its secret) holding a copy of the request family's OSM token. By secret, the request family is the phone's and the secret is spent. `202 {"claimId", "state", "pending", "user": {"displayName", "osmId"}}`; the same user again gets `200` with the same claim. `400 invalid_request`, `401 osm_reauth_required` (the request family holds no OSM token), `403 insufficient_scope`, `404 not_found` (unknown, superseded or expired link, deleted guest, wrong or spent secret), `409 guest_claimed` with `claimedAs` (link only). Evolution 138 adds `mobile_claims` and `choice_pending.claim_id`. The publish job (below) then applies the answers. |
+| `POST /api/v2/mobile-claim/<id>/retry` | App bearer, the claim's own user, `tasks:write` and `osm:tagfix`. Body `{}` retries every failed row, `{"taskIds": [n, ...]}` (1 to 100) only those. Failed rows go back to `pending` with no attempts; a claim that was `failed` or got rows back becomes `queued` (`waiting` while writes are off or the claim client is disabled). Idempotent. When the request's grant family isn't the claim's, its OSM token replaces the claim family's (sign in again after `reauth_required`). `202` with the status object plus `"retried": n`. `400 invalid_request`, `401 osm_reauth_required` (the request family holds no OSM token), `403 insufficient_scope`, `404 not_found`. Allowed while field writes are off, under the same D13 rule as the claim. |
+| `GET /api/v2/mobile-claim/<id>` | App bearer, the claim's own user only (anyone else `404`). `{"claimId", "state", "total", "published", "skipped", "superseded", "failed", "items": [{"taskId", "state", "changesetId", "dropped"}]}`. Guest tokens can't reach it. |
+| `POST /api/v2/mobile-claim/preview` | No credential, JSON `{"claimToken"}` from a `/claim#t=` link. Read only; does not consume the token. `404 not_found` for an unknown token or one not among the guest's three newest. Otherwise `{"state": "active\|claimed\|expired\|deleted", "expiresAt"}`, and for `active` also `pending`, `challenges` (`id`, `name`, `pending`, `hashtag` from the check-in comment, `wikiUrl` from the info link if https), `tasks` (`taskId`, `challengeId`, `label`, `lat`, `lon`, `answeredAt`, `answers` with `prompt` and `answer` labels), `summary` (per challenge and question: `label`, `options`, and `counts` for every option) and `writesEnabled` (false while task writes or the field write switch are off; the page then says publishing is paused). Allowed while field writes are off. |
+| `POST /api/v2/mobile-claim/delete` | No credential (a request with `Authorization` is refused), JSON `{"claimToken"}` from a `/claim/delete#t=` link. Same effect as `DELETE /api/v2/mobile-guest`. `204`, `400 invalid_request`, `404 not_found` (unknown token, or not among the guest's three newest), `409 guest_claimed` (account deletion is MapRoulette's process). Allowed while field writes are off. |
+| `POST /api/v2/mobile-claim/stop-reminders` | No credential, JSON `{"claimToken"}` from a `/claim/stop-reminders#t=` link. Stops reminders. `204`, `400 invalid_request`, `404 not_found`. Allowed while field writes are off. |
+
+**Publish job** (`ClaimPublishService`, every 10 s while guests are on, and right after a claim).
+For each `queued`, `waiting` or `running` claim it publishes the pending answers oldest first,
+with the claim's grant family, one changeset per task, through the same path as
+`POST /task/:id/choice` (`MobileChoiceService.publishPending`), keyed by the pending row so a rerun
+never uploads twice. It needs no lock of its own; another mapper's lock defers the answer. Each
+answer's guard is checked on its own: answers whose guard fails are dropped (`result.dropped`)
+and the rest applied; none left, or a failed `match` or gone element, is `skipped_stale`. A task
+that left Created, Skipped and Too hard, or whose payload changed, is `superseded`, with
+`result.agrees` comparing the answers with the submission that completed it. OSM outages stay
+`pending` for up to 5 runs, then `failed`. While task writes or the field write switch are off,
+or the `maproulette-claim` client is disabled (D13), the claim is `waiting` (checked every run and before every answer). A refused OSM token stops the
+claim (`failed`, remaining answers stay pending) and emails a new link to sign in again. With
+nothing pending the claim is `done`; if it ever waited, the "now on the map" email goes out, and
+then the guest's address is deleted. Evolution 139 adds `mobile_claims.waited_at`.
 
 Mail settings live under `mobileOAuth.guests.mail`: `provider` (`MR_GUEST_MAIL_PROVIDER`: `none`
 by default, `log` for development, which logs only the template name, or `postmark`),
@@ -332,6 +361,22 @@ by default, `log` for development, which logs only the template name, or `postma
 (`<claimOrigin>/claim#t=<token>`, `/claim/delete#t=`, `/claim/stop-reminders#t=`) so it never
 reaches web server logs. Postmark open and link tracking are off. The templates are copies of the
 project's brand/email set in `conf/mobile-email/`.
+
+An hourly job (`GuestJobService`, started by `GuestJobModule` only while guests are enabled) sends
+the other emails and enforces retention:
+
+- **Reminders.** The first a day after the first link email, the second in the last five days before
+  `expires_at` (a guest who gives an address late gets only the second, and none in its first day).
+  Each at most once (`reminded_1_at`, `reminded_2_at`, set before sending and cleared again if the
+  provider refuses), never after "stop reminders", and only while answers are pending. Each
+  reminder carries a new claim token, so it counts toward the three-per-day send limit and toward
+  the guest's three valid links.
+- **Expiry.** For an unclaimed guest past `expires_at`: pending answers become `expired`, guest
+  access tokens are deleted, the expiry notice is sent, then the address is deleted. A refused
+  notice is retried hourly for a day, then the address is deleted anyway. Claim tokens stay, so an
+  old link can say "expired".
+- **Purge.** Thirty days after `expires_at` the unclaimed guest row is deleted with its tokens;
+  its expired answers stay with `guest_id` NULL for campaign statistics.
 
 ## Preview mode (drafts)
 

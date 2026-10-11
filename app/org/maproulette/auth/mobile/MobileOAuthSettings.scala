@@ -151,6 +151,19 @@ class MobileOAuthSettings @Inject() (configuration: Configuration) {
     * The one browser origin of the admin web app (`MR_MOBILE_ADMIN_ORIGIN`), e.g.
     * `https://admin.mr-dev.osm.lol`. Unset means no admin CORS; see [[MobileCorsFilter]].
     */
+  private def origin(path: String, value: String): String = {
+    val valid = scala.util
+      .Try {
+        val uri = new URI(value)
+        (uri.getScheme == "https" || (allowHttp && loopback(uri) && uri.getScheme == "http")) &&
+        uri.getHost != null && value == s"${uri.getScheme}://${uri.getRawAuthority}" &&
+        uri.getUserInfo == null && value == value.toLowerCase(java.util.Locale.ROOT)
+      }
+      .getOrElse(false)
+    require(valid, s"Invalid $path: expected https://host[:port]")
+    value
+  }
+
   val adminOrigin: Option[String] =
     if (!enabled) None
     else
@@ -158,18 +171,25 @@ class MobileOAuthSettings @Inject() (configuration: Configuration) {
         .getOptional[String]("mobileOAuth.adminOrigin")
         .map(_.trim)
         .filter(_.nonEmpty)
-        .map { value =>
-          val valid = scala.util
-            .Try {
-              val uri = new URI(value)
-              (uri.getScheme == "https" || (allowHttp && loopback(uri) && uri.getScheme == "http")) &&
-              uri.getHost != null && value == s"${uri.getScheme}://${uri.getRawAuthority}" &&
-              uri.getUserInfo == null && value == value.toLowerCase(java.util.Locale.ROOT)
-            }
-            .getOrElse(false)
-          require(valid, "Invalid mobileOAuth.adminOrigin: expected https://host[:port]")
-          value
-        }
+        .map(origin("mobileOAuth.adminOrigin", _))
+
+  /**
+    * Browser origin of the claim page (deferred sign-up), which gets credential-free CORS on the
+    * claim and token routes only. The same setting builds the emailed links. Guests off: none.
+    */
+  val claimOrigin: Option[String] =
+    if (!guestsEnabled) None
+    else
+      Some(
+        origin(
+          "mobileOAuth.guests.mail.claimOrigin",
+          configuration
+            .getOptional[String]("mobileOAuth.guests.mail.claimOrigin")
+            .map(_.trim.stripSuffix("/"))
+            .filter(_.nonEmpty)
+            .getOrElse(MobileOAuthSettings.DefaultClaimOrigin)
+        )
+      )
 
   if (enabled) {
     val uri = new URI(callbackUri)
@@ -194,6 +214,7 @@ class MobileOAuthSettings @Inject() (configuration: Configuration) {
 }
 
 object MobileOAuthSettings {
+  val DefaultClaimOrigin = "https://streettally.osm.lol"
 
   /**
     * A registered app callback: https with a host, or a reverse-domain custom scheme. No fragment,

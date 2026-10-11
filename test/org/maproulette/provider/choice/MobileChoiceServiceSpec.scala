@@ -851,6 +851,128 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
     }
   }
 
+  "Pending publish" should {
+    var nextRow = 900000L
+    def pendingRow(task: Task, body: String): PendingPublish = {
+      nextRow += 1
+      val valid = service.validateSubmission(task.id, body).toOption.get
+      PendingPublish(nextRow, task.id, valid.body, valid.payloadDigest)
+    }
+    def publish(row: PendingPublish, user: User = mapper) =
+      await(service.publishPending(row, user, family(user)))
+
+    "apply a claimed answer without a lock, once, keyed by the row" taggedAs ChoiceTag in {
+      val (task, node) = benchTask()
+      lockedBy(task) mustBe None
+      val row     = pendingRow(task, """{"answers": {"capacity": "c3", "backrest": "yes"}}""")
+      val before  = osm.uploadCount
+      val outcome = publish(row)
+      val (cs, _) = lastChangeset
+      outcome mustBe PendingOutcome.Published(
+        Json.obj(
+          "status"      -> 1,
+          "changesetId" -> cs,
+          "applied" -> Json.obj(
+            "set"     -> Json.obj("backrest" -> "yes", "capacity" -> "3"),
+            "unset"   -> Json.arr(),
+            "deleted" -> false
+          ),
+          "dropped" -> Json.arr()
+        )
+      )
+      osm.elements(("node", node)).tags mustBe
+        Map("amenity" -> "bench", "backrest" -> "yes", "capacity" -> "3")
+      fresh(task) mustBe ((Task.STATUS_FIXED, Some(cs)))
+      // A rerun after a crash before the row was settled: the task is Fixed by this very answer,
+      // and its own submission row says so. Same result, no second upload.
+      publish(row) mustBe outcome
+      osm.uploadCount mustBe before + 1
+      // Another row with the same answer is superseded, and agrees.
+      publish(pendingRow(task, """{"answers": {"capacity": "c3", "backrest": "yes"}}""")) mustBe
+        PendingOutcome.Superseded(Some(true))
+    }
+
+    "finish a claimed answer whose status write failed, without a second upload" taggedAs ChoiceTag in {
+      val (task, node) = benchTask()
+      osm.edit("node", node)(_ + ("backrest" -> "yes"))
+      val row = pendingRow(task, """{"answers": {"capacity": "c3", "backrest": "no"}}""")
+      service.failStatus = true
+      try publish(row) mustBe PendingOutcome.Retry("status_pending")
+      finally service.failStatus = false
+      val uploads = osm.uploadCount
+      publish(row) match {
+        case PendingOutcome.Published(body) =>
+          (body \ "dropped").as[List[String]] mustBe List("backrest")
+          (body \ "applied" \ "set").as[JsObject] mustBe Json.obj("capacity" -> "3")
+        case other => fail(s"unexpected $other")
+      }
+      osm.uploadCount mustBe uploads
+      answers(task) mustBe Some(Json.obj("capacity" -> "c3"))
+    }
+
+    "resume a claimed answer whose upload landed unseen, reporting what was dropped" taggedAs ChoiceTag in {
+      val (task, node) = benchTask()
+      osm.edit("node", node)(_ + ("backrest" -> "yes"))
+      val row = pendingRow(task, """{"answers": {"capacity": "c3", "backrest": "no"}}""")
+      osm.uploadPlan.enqueue("500-applied")
+      publish(row) mustBe PendingOutcome.Retry("osm_unavailable")
+      val (cs, _) = lastChangeset
+      val uploads = osm.uploadCount
+      publish(row) match {
+        case PendingOutcome.Published(body) =>
+          (body \ "changesetId").as[Long] mustBe cs
+          (body \ "dropped").as[List[String]] mustBe List("backrest")
+          (body \ "applied" \ "set").as[JsObject] mustBe Json.obj("capacity" -> "3")
+        case other => fail(s"unexpected $other")
+      }
+      osm.uploadCount mustBe uploads
+      answers(task) mustBe Some(Json.obj("capacity" -> "c3"))
+    }
+
+    "drop the answers whose guard fails and apply the rest" taggedAs ChoiceTag in {
+      val (task, node) = benchTask()
+      osm.edit("node", node)(_ + ("backrest" -> "yes"))
+      val outcome =
+        publish(pendingRow(task, """{"answers": {"capacity": "c3", "backrest": "no"}}"""))
+      outcome match {
+        case PendingOutcome.Published(body) =>
+          (body \ "dropped").as[List[String]] mustBe List("backrest")
+          (body \ "applied" \ "set").as[JsObject] mustBe Json.obj("capacity" -> "3")
+        case other => fail(s"unexpected $other")
+      }
+      osm.elements(("node", node)).tags mustBe
+        Map("amenity" -> "bench", "backrest" -> "yes", "capacity" -> "3")
+      answers(task) mustBe Some(Json.obj("capacity" -> "c3"))
+    }
+
+    "skip as stale when no guard holds or the element no longer matches" taggedAs ChoiceTag in {
+      val (task, node) = benchTask()
+      osm.edit("node", node)(_ + ("backrest" -> "yes"))
+      publish(pendingRow(task, """{"answers": {"backrest": "no"}}""")) mustBe
+        PendingOutcome.SkippedStale("key_changed")
+      fresh(task) mustBe ((Task.STATUS_CREATED, None))
+      val (gone, goneNode) = benchTask()
+      osm.edit("node", goneNode)(_ + ("amenity" -> "picnic_table"))
+      publish(pendingRow(gone, """{"answers": {"backrest": "no"}}""")) mustBe
+        PendingOutcome.SkippedStale("match_failed")
+    }
+
+    "wait for another mapper's lock, and yield to a status set meanwhile" taggedAs ChoiceTag in {
+      val (task, _) = benchTask()
+      val row       = pendingRow(task, """{"answers": {"backrest": "no"}}""")
+      lock(task, other)
+      publish(row) mustBe PendingOutcome.Retry("lock_required")
+      submit(task, """{"answers": {"backrest": "yes"}}""", other).status mustBe 200
+      publish(row) mustBe PendingOutcome.Superseded(Some(false))
+    }
+
+    "be superseded by a re-uploaded payload" taggedAs ChoiceTag in {
+      val (task, _) = benchTask()
+      val row       = pendingRow(task, """{"answers": {"backrest": "no"}}""")
+      publish(row.copy(payloadDigest = "0" * 64)) mustBe PendingOutcome.Superseded(None)
+    }
+  }
+
   "Choice ingest" should {
     val provider = application.injector.instanceOf[ChallengeProvider]
     def line(node: Long, payload: JsObject) =

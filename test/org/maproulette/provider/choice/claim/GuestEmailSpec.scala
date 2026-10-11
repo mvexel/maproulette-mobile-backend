@@ -28,13 +28,19 @@ class MemoryGuestEmailStore extends GuestEmailStore {
   def addClaimToken(guest: UUID, tokenHash: String, now: Instant): Unit = synchronized {
     tokens += ((guest, tokenHash, now))
   }
+  def removeClaimToken(tokenHash: String): Unit = synchronized {
+    tokens --= tokens.filter(_._2 == tokenHash)
+  }
 }
 
-class RecordingMailer(var available: Boolean = true, var fail: Boolean = false)
-    extends ClaimMailer {
+class RecordingMailer(
+    var available: Boolean = true,
+    var fail: Boolean = false,
+    var reason: String = "postmark_500_-1"
+) extends ClaimMailer {
   val sent = mutable.ListBuffer[ClaimMessage]()
   def send(message: ClaimMessage): Future[Either[String, Unit]] = synchronized {
-    if (fail) Future.successful(Left("postmark_422_300"))
+    if (fail) Future.successful(Left(reason))
     else {
       sent += message
       Future.successful(Right(()))
@@ -98,7 +104,7 @@ class GuestEmailSpec extends PlaySpec with BeforeAndAfterAll {
     val store  = new MemoryGuestEmailStore
     val cipher = new GuestEmailCipher(oauthSettings(withKey))
     val summaries = new GuestSummaries {
-      def summary(guest: UUID): Option[GuestSummary] = saved
+      def summary(guest: UUID, states: Set[String]): Option[GuestSummary] = saved
     }
     Fixture(
       new GuestEmailService(store, summaries, cipher, mailer, mailSettings, system),
@@ -219,10 +225,20 @@ class GuestEmailSpec extends PlaySpec with BeforeAndAfterAll {
       ) mustBe Left(GuestEmailError.MailUnavailable)
       await(fixture(withKey = false).service.setEmail(guest(), "rosa@example.org")) mustBe
         Left(GuestEmailError.MailUnavailable)
-      await(
-        fixture(mailer = new RecordingMailer(fail = true)).service
-          .setEmail(guest(), "rosa@example.org")
-      ) mustBe Left(GuestEmailError.MailUnavailable)
+      val failing = fixture(mailer = new RecordingMailer(fail = true))
+      await(failing.service.setEmail(guest(), "rosa@example.org")) mustBe
+        Left(GuestEmailError.MailUnavailable)
+    }
+
+    "count refused sends toward the daily limit" in {
+      val f = fixture(mailer = new RecordingMailer(fail = true))
+      val g = guest()
+      (1 to 3).foreach(_ =>
+        await(f.service.setEmail(g, "rosa@example.org")) mustBe Left(
+          GuestEmailError.MailUnavailable
+        )
+      )
+      await(f.service.setEmail(g, "rosa@example.org")) mustBe Left(GuestEmailError.RateLimited)
     }
 
     "allow three sends per guest per day" in {

@@ -65,6 +65,9 @@ trait GuestEmailStore {
   def sendsSince(guest: UUID, since: Instant): Int
 
   def addClaimToken(guest: UUID, tokenHash: String, now: Instant): Unit
+
+  /** Drops a token whose email the provider refused: it was never sent, so it holds no place. */
+  def removeClaimToken(tokenHash: String): Unit
 }
 
 @Singleton
@@ -103,6 +106,14 @@ class GuestEmailRepository @Inject() (db: Database) extends GuestEmailStore {
         .executeUpdate()
       ()
     }
+
+  override def removeClaimToken(tokenHash: String): Unit =
+    db.withConnection { implicit c =>
+      SQL("DELETE FROM mobile_guest_claim_tokens WHERE token_hash={token}")
+        .on("token" -> tokenHash)
+        .executeUpdate()
+      ()
+    }
 }
 
 /** What the emails say about a guest's saved answers: the campaign of their first answer. */
@@ -114,17 +125,18 @@ case class GuestSummary(
 )
 
 /**
-  * Reads the guest's pending answers (B3's `choice_pending`). Until B3 lands this returns None,
+  * Reads the guest's answers in `choice_pending` (B3) in the given states: `pending` for the link
+  * and reminder emails, `pending` and `expired` for the expiry notice. None when there are none,
   * so the email route answers 409 `nothing_saved`.
   */
 @com.google.inject.ImplementedBy(classOf[GuestSummaryRepository])
 trait GuestSummaries {
-  def summary(guest: UUID): Option[GuestSummary]
+  def summary(guest: UUID, states: Set[String] = Set("pending")): Option[GuestSummary]
 }
 
 @Singleton
 class GuestSummaryRepository @Inject() (db: Database) extends GuestSummaries {
-  override def summary(guest: UUID): Option[GuestSummary] =
+  override def summary(guest: UUID, states: Set[String]): Option[GuestSummary] =
     db.withConnection { implicit c =>
       val exists = SQL("SELECT to_regclass('choice_pending') IS NOT NULL")
         .as(SqlParser.scalar[Boolean].single)
@@ -132,9 +144,9 @@ class GuestSummaryRepository @Inject() (db: Database) extends GuestSummaries {
       else
         SQL("""SELECT c.name, count(*) OVER () AS saved, min(p.answered_at) OVER () AS first_at
           FROM choice_pending p JOIN challenges c ON c.id = p.challenge_id
-          WHERE p.guest_id={id}::uuid AND p.state='pending'
+          WHERE p.guest_id={id}::uuid AND p.state IN ({states})
           ORDER BY p.answered_at LIMIT 1""")
-          .on("id" -> guest.toString)
+          .on("id" -> guest.toString, "states" -> states.toSeq)
           .as(
             (SqlParser.str("name") ~ SqlParser.long("saved") ~ SqlParser.date("first_at")).map {
               case name ~ saved ~ first => GuestSummary(name, None, saved.toInt, first.toInstant)
@@ -188,16 +200,24 @@ class GuestEmailService @Inject() (
   private val long  = DateTimeFormatter.ofPattern("EEEE, MMM d", Locale.US)
   private val short = DateTimeFormatter.ofPattern("MMM d", Locale.US)
 
+  /** Values every email shares; links only where the email carries a claim token. */
+  def values(expiresAt: Instant, summary: GuestSummary): Map[String, String] = Map(
+    "campaignName"     -> summary.campaignName,
+    "organizerName"    -> summary.organizerName.getOrElse("Street Tally"),
+    "eventDate"        -> long.format(summary.firstAnswerAt.atZone(zone)),
+    "firstAnswerDate"  -> short.format(summary.firstAnswerAt.atZone(zone)),
+    "nounMany"         -> "bus stops",
+    "savedStopsText"   -> ClaimEmails.count(summary.savedCount, "bus stop", "bus stops"),
+    "savedAnswersText" -> ClaimEmails.count(summary.savedCount, "answer", "answers"),
+    "deadline"         -> short.format(expiresAt.atZone(zone)),
+    "privacyUrl"       -> s"${settings.claimOrigin}/privacy"
+  )
+
   def claimValues(guest: MobileGuest, summary: GuestSummary, token: String): Map[String, String] =
-    links(token) ++ Map(
-      "campaignName"     -> summary.campaignName,
-      "organizerName"    -> summary.organizerName.getOrElse("Street Tally"),
-      "eventDate"        -> long.format(summary.firstAnswerAt.atZone(zone)),
-      "nounMany"         -> "bus stops",
-      "savedStopsText"   -> ClaimEmails.count(summary.savedCount, "bus stop", "bus stops"),
-      "savedAnswersText" -> ClaimEmails.count(summary.savedCount, "answer", "answers"),
-      "deadline"         -> short.format(guest.expiresAt.atZone(zone))
-    )
+    linkValues(guest.expiresAt, summary, token)
+
+  def linkValues(expiresAt: Instant, summary: GuestSummary, token: String): Map[String, String] =
+    values(expiresAt, summary) ++ links(token)
 
   def setEmail(guest: MobileGuest, email: String): Future[Either[GuestEmailError, MobileGuest]] = {
     val now     = Instant.now()
@@ -218,9 +238,11 @@ class GuestEmailService @Inject() (
               if (!store.setEmail(guest.id, sealedEmail, now)) Left(GuestEmailError.GuestClaimed)
               else {
                 val token = MobileSecrets.generate()
-                store.addClaimToken(guest.id, MobileSecrets.hash(token), now)
+                val hash  = MobileSecrets.hash(token)
+                store.addClaimToken(guest.id, hash, now)
                 Right(
-                  ClaimEmails.render(ClaimEmails.Claim, address, claimValues(guest, summary, token))
+                  ClaimEmails
+                    .render(ClaimEmails.Claim, address, claimValues(guest, summary, token))
                 )
               }
           }
@@ -228,8 +250,10 @@ class GuestEmailService @Inject() (
         case Left(error) => Future.successful(Left(error))
         case Right(message) =>
           mailer.send(message).map {
-            case Right(_) => Right(guest.copy(emailSet = true, emailVerified = false))
+            case Right(_)     => Right(guest.copy(emailSet = true, emailVerified = false))
             case Left(reason) =>
+              // The token stays: it is what counts this send toward the daily limit, so a
+              // refused address or a provider outage still hits 429 on the fourth try.
               logger.error(s"Guest link email not sent: $reason")
               Left(GuestEmailError.MailUnavailable)
           }

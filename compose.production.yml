@@ -44,6 +44,15 @@ services:
       # Optional: base64 of 32 random bytes (openssl rand -base64 32). Unset, empty or malformed
       # disables osm:tagfix (choice answers applied to OSM); nothing else changes.
       MR_MOBILE_OSM_TOKEN_KEY: ${MR_MOBILE_OSM_TOKEN_KEY:-}
+      # Deferred sign-up (docs/mobile-oauth.md "Guests"). Off unless set; empty values keep the app defaults.
+      MR_MOBILE_GUESTS_ENABLED: ${MR_MOBILE_GUESTS_ENABLED:-false}
+      MR_GUEST_MAIL_PROVIDER: ${MR_GUEST_MAIL_PROVIDER:-none}
+      MR_GUEST_MAIL_FROM: ${MR_GUEST_MAIL_FROM:-}
+      MR_CLAIM_ORIGIN: ${MR_CLAIM_ORIGIN:-}
+      MR_POSTMARK_SERVER_TOKEN: ${MR_POSTMARK_SERVER_TOKEN:-}
+      MR_POSTMARK_MESSAGE_STREAM: ${MR_POSTMARK_MESSAGE_STREAM:-}
+      # Deployment gate for mobile task writes (mobileOAuth.allowTaskWrites); false for the D13 check.
+      MR_MOBILE_TASK_WRITES_ENABLED: ${MR_MOBILE_TASK_WRITES_ENABLED:-true}
       # Optional: comma-separated OSM user ids promoted to MapRoulette super-user at startup
       # (they must have signed in once). Super-users can use the mobile admin app.
       MR_SUPER_ACCOUNTS: ${MR_SUPER_ACCOUNTS:-}
