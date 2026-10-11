@@ -64,7 +64,7 @@ object MobileCorsFilter {
         "/api/v2/mobile-claim/preview",
         "/api/v2/mobile-claim/delete",
         "/api/v2/mobile-claim/stop-reminders"
-      ).contains(path)
+      ).contains(path) || path.matches("/api/v2/mobile-claim/[0-9]+/retry")
     case "GET" => path == "/oauth/mobile/me" || path.matches("/api/v2/mobile-claim/[0-9]+")
     case _     => false
   }

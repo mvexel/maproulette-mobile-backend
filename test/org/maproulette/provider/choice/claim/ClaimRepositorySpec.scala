@@ -231,5 +231,66 @@ class ClaimRepositorySpec extends PlaySpec {
       store.claim(secret(g, "c"), sam, family(db, sam, client), now) mustBe
         Left(ClaimProblem.NotFound)
     }
+
+    "retry failed rows, reopen the claim and re-seal a new grant's OSM token" in withStore {
+      (store, db) =>
+        val g      = guest(db, "r")
+        val page   = family(db, rosa, "maproulette-claim")
+        val result = store.claim(link("r"), rosa, page, now).toOption.get
+        val claim  = result.claim
+        db.withConnection { implicit c =>
+          SQL("""UPDATE choice_pending SET state='failed', attempts=5,
+            result=CAST({result} AS jsonb) WHERE claim_id={id}""")
+            .on("id" -> claim.id, "result" -> """{"error":"osm_unavailable"}""")
+            .executeUpdate()
+          SQL("UPDATE mobile_claims SET state='done' WHERE id={id}")
+            .on("id" -> claim.id)
+            .executeUpdate()
+        }
+        def rows() = db.withConnection { implicit c =>
+          SQL(
+            "SELECT task_id, state, attempts FROM choice_pending WHERE claim_id={id} ORDER BY task_id"
+          ).on("id" -> claim.id)
+            .as((SqlParser.long(1) ~ SqlParser.str(2) ~ SqlParser.int(3)).map {
+              case t ~ st ~ a => (t, st, a)
+            }.*)
+        }
+        store.retry(claim.id, sam, page, None, waiting = false, now) mustBe Left(
+          ClaimProblem.NotFound
+        )
+        store.retry(
+          claim.id,
+          rosa,
+          family(db, rosa, "maproulette-claim", withToken = false),
+          None,
+          waiting = false,
+          now
+        ) mustBe Left(ClaimProblem.Reauth)
+        store.retry(claim.id, rosa, page, Some(Set(2L)), waiting = true, now).map {
+          case (c, n) => (c.state, n)
+        } mustBe Right(("waiting", 1))
+        rows() mustBe List((1L, "failed", 5), (2L, "pending", 0))
+        // A fresh sign-in: its token replaces the claim family's.
+        val fresh = family(db, rosa, "maproulette-claim")
+        db.withConnection { implicit c =>
+          SQL(
+            "UPDATE mobile_osm_tokens SET ciphertext=decode('0909','hex') WHERE grant_family_id={f}"
+          ).on("f" -> fresh)
+            .executeUpdate()
+        }
+        store.retry(claim.id, rosa, fresh, None, waiting = false, now).map {
+          case (c, n) => (c.state, n)
+        } mustBe Right(("queued", 1))
+        rows() mustBe List((1L, "pending", 0), (2L, "pending", 0))
+        db.withConnection { implicit c =>
+          SQL("SELECT encode(ciphertext,'hex') FROM mobile_osm_tokens WHERE grant_family_id={f}")
+            .on("f" -> claim.familyId)
+            .as(SqlParser.scalar[String].single) mustBe "0909"
+        }
+        // Nothing failed and the claim isn't failed: left alone.
+        store.retry(claim.id, rosa, page, None, waiting = false, now).map {
+          case (c, n) => (c.state, n)
+        } mustBe Right(("queued", 0))
+    }
   }
 }

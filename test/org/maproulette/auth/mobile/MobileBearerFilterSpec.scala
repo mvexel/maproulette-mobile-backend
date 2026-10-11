@@ -159,6 +159,79 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
       MobileFieldRoutes.permitsWhenDisabled(bearer(POST, "/api/v2/task/123/choice")) mustBe false
     }
 
+    "D13 (1): give the claim page's grant only the claim routes among writes" in {
+      val claimGrant = writeGrant.copy(
+        clientId = MobileClaimRoutes.ClientId,
+        scope = "tasks:read tasks:write osm:tagfix"
+      )
+      val (filter, _) = writeFilter(claimGrant)
+      def json(method: String, path: String) =
+        bearer(method, path)
+          .withHeaders("Content-Type" -> "application/json", "Content-Length" -> "2")
+          .withBody("{}")
+      (allowedWrites.map { case (method, path) => bearer(method, path) } :+
+        json(POST, "/api/v2/task/123/choice")).foreach { request =>
+        val result = filter.apply(next)(request)
+        status(result) mustBe FORBIDDEN
+        contentAsJson(result) mustBe play.api.libs.json.Json.obj("error" -> "insufficient_scope")
+      }
+      status(filter.apply(next)(bearer(GET, "/api/v2/task/123/choice/check"))) mustBe FORBIDDEN
+      contentAsString(filter.apply(next)(json(POST, "/api/v2/mobile-claim"))) mustBe "123"
+    }
+
+    "D13 (3): let only the claim page's grant claim while the switch is off, and audit it" in {
+      val policy = mock[MobileWritePolicy]
+      when(policy.enabled).thenReturn(false)
+      val audit = mock[MobileAdminRepository]
+      def gated(clientId: String) = {
+        val oauth = mock[MobileOAuthService]
+        val users = mock[UserService]
+        when(oauth.authenticate(token)).thenReturn(
+          Future.successful(
+            Some(writeGrant.copy(clientId = clientId, scope = "tasks:read tasks:write osm:tagfix"))
+          )
+        )
+        when(users.retrieve(123)).thenReturn(Some(user))
+        new MobileBearerFilter(
+          settings(true, writeControlEnabled = true),
+          oauth,
+          users,
+          MobileAdminCheck.Nobody,
+          audit,
+          policy
+        )
+      }
+      def post(path: String) =
+        bearer(POST, path)
+          .withHeaders("Content-Type" -> "application/json", "Content-Length" -> "2")
+          .withBody("{}")
+      val claimPage = gated(MobileClaimRoutes.ClientId)
+      contentAsString(claimPage.apply(next)(post("/api/v2/mobile-claim"))) mustBe "123"
+      contentAsString(claimPage.apply(next)(post("/api/v2/mobile-claim/9/retry"))) mustBe "123"
+      verify(audit).record(
+        123L,
+        "claim.writes_off",
+        "/api/v2/mobile-claim",
+        Some(play.api.libs.json.Json.obj("status" -> 200))
+      )
+      verify(audit).record(
+        123L,
+        "claim.writes_off",
+        "/api/v2/mobile-claim/9/retry",
+        Some(play.api.libs.json.Json.obj("status" -> 200))
+      )
+      Seq(
+        claimPage.apply(next)(bearer(POST, "/api/v2/task/123/skip")),
+        gated("test-client").apply(next)(post("/api/v2/mobile-claim"))
+      ).foreach { result =>
+        status(result) mustBe FORBIDDEN
+        contentAsJson(result) mustBe play.api.libs.json.Json
+          .obj("error" -> "mobile_writes_disabled")
+      }
+      // Unauthenticated, the claim routes stay closed.
+      MobileFieldRoutes.permitsWhenDisabled(FakeRequest(POST, "/api/v2/mobile-claim")) mustBe false
+    }
+
     "refuse task writes when the deployment gate is closed, including existing write grants" in {
       val oauth = mock[MobileOAuthService]
       val filter =

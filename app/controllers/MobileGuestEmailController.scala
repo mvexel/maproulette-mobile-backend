@@ -140,7 +140,8 @@ class MobileClaimController @Inject() (
     components: ControllerComponents,
     guests: MobileGuestAuth,
     claims: org.maproulette.provider.choice.claim.ClaimService,
-    publisher: org.maproulette.provider.choice.claim.ClaimPublishScheduler
+    publisher: org.maproulette.provider.choice.claim.ClaimPublishScheduler,
+    publishing: org.maproulette.provider.choice.claim.ClaimPublishService
 )(implicit ec: ExecutionContext)
     extends AbstractController(components) {
   private val logger = play.api.Logger(getClass)
@@ -182,6 +183,18 @@ class MobileClaimController @Inject() (
           Status(status)(body)
       }
     }
+  }
+
+  def retry(id: Long): Action[JsValue] = Action.async(parse.tolerantJson(maxLength = 2048)) {
+    request =>
+      handled(request) { (user, scopes, family, _) =>
+        claims.retry(id, request.body, user, scopes, family, waiting = !publishing.ready).map {
+          case Left(error) => Status(error.status)(Json.obj("error" -> error.code) ++ error.extra)
+          case Right(body) =>
+            publisher.nudge()
+            Accepted(body)
+        }
+      }
   }
 
   def status(id: Long): Action[AnyContent] = Action.async { request =>

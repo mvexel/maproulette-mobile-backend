@@ -57,6 +57,22 @@ trait ClaimStore {
 
   def get(id: Long): Option[ClaimRecord]
   def items(claimId: Long): Seq[ClaimItem]
+
+  /**
+    * In one transaction, for the claim's owner: a request family other than the claim's own must
+    * hold a live OSM token, which then replaces the claim family's (after `reauth_required`). Its
+    * `failed` rows (all, or those of `taskIds`) go back to `pending` with no attempts, and a claim
+    * that was failed or got rows back reopens as `queued`, or `waiting` when `waiting`. Returns the
+    * claim and how many rows went back.
+    */
+  def retry(
+      claimId: Long,
+      userId: Long,
+      requestFamily: String,
+      taskIds: Option[Set[Long]],
+      waiting: Boolean,
+      now: Instant
+  ): Either[ClaimProblem, (ClaimRecord, Int)]
 }
 
 object ClaimRepository {
@@ -225,6 +241,65 @@ class ClaimRepository @Inject() (db: Database) extends ClaimStore {
       }
     }
 
+  override def retry(
+      claimId: Long,
+      userId: Long,
+      requestFamily: String,
+      taskIds: Option[Set[Long]],
+      waiting: Boolean,
+      now: Instant
+  ): Either[ClaimProblem, (ClaimRecord, Int)] =
+    db.withTransaction { implicit c =>
+      SQL("SELECT * FROM mobile_claims WHERE id={id} AND user_id={u} FOR UPDATE")
+        .on("id" -> claimId, "u" -> userId)
+        .as(record.singleOpt) match {
+        case None => Left(ClaimProblem.NotFound)
+        case Some(claim) =>
+          val reauthed = claim.familyId == requestFamily || {
+            // Sealed for the user, so the ciphertext carries over as is.
+            SQL("""INSERT INTO mobile_osm_tokens
+              (grant_family_id,user_id,ciphertext,nonce,osm_scope,created_at)
+              SELECT {family},t.user_id,t.ciphertext,t.nonce,t.osm_scope,{now}
+              FROM mobile_osm_tokens t JOIN mobile_oauth_families f ON f.family_id = t.grant_family_id
+              WHERE t.grant_family_id={from} AND t.user_id={u} AND f.revoked_at IS NULL
+              ON CONFLICT (grant_family_id) DO UPDATE SET ciphertext=EXCLUDED.ciphertext,
+              nonce=EXCLUDED.nonce, osm_scope=EXCLUDED.osm_scope, created_at=EXCLUDED.created_at""")
+              .on(
+                "family" -> claim.familyId,
+                "from"   -> requestFamily,
+                "u"      -> userId,
+                "now"    -> stamp(now)
+              )
+              .executeUpdate() == 1
+          }
+          if (!reauthed) Left(ClaimProblem.Reauth)
+          else {
+            val ids = taskIds.map(_.toArray.map(_.toString)).getOrElse(Array.empty[String])
+            val back = SQL("""UPDATE choice_pending SET state='pending', attempts=0, result=NULL,
+              updated_at={now} WHERE claim_id={claim} AND state='failed'
+              AND ({all} OR task_id = ANY(CAST({ids} AS bigint[])))""")
+              .on(
+                "now"   -> stamp(now),
+                "claim" -> claim.id,
+                "all"   -> taskIds.isEmpty,
+                "ids"   -> ids
+              )
+              .executeUpdate()
+            val reopened =
+              if (back == 0 && claim.state != "failed") claim
+              else {
+                val state = if (waiting) "waiting" else "queued"
+                SQL("""UPDATE mobile_claims SET state={state}, updated_at={now}, finished_at=NULL
+                  WHERE id={id}""")
+                  .on("state" -> state, "now" -> stamp(now), "id" -> claim.id)
+                  .executeUpdate()
+                claim.copy(state = state)
+              }
+            Right(reopened -> back)
+          }
+      }
+    }
+
   override def get(id: Long): Option[ClaimRecord] =
     db.withConnection { implicit c =>
       SQL("SELECT * FROM mobile_claims WHERE id={id}").on("id" -> id).as(record.singleOpt)
@@ -315,6 +390,43 @@ class ClaimService @Inject() (store: ClaimStore, actorSystem: ActorSystem) {
                   )
                 )
               )
+          }
+      }
+
+  /** `{}` retries every failed row; `{"taskIds": [..]}` (1 to 100 ids, within the 2048-byte body limit) only those. */
+  def retryTasks(body: JsValue): Option[Option[Set[Long]]] = body match {
+    case o: JsObject if o.keys.isEmpty => Some(None)
+    case o: JsObject if o.keys == Set("taskIds") =>
+      (o \ "taskIds")
+        .asOpt[Seq[Long]]
+        .filter(ids => ids.nonEmpty && ids.size <= 100 && ids.forall(_ > 0))
+        .map(ids => Some(ids.toSet))
+    case _ => None
+  }
+
+  /** `POST /api/v2/mobile-claim/:id/retry` (API plan §3.10): 202 with the status object. */
+  def retry(
+      id: Long,
+      body: JsValue,
+      user: User,
+      scopes: Set[String],
+      family: String,
+      waiting: Boolean
+  ): Future[Either[ClaimError, JsObject]] =
+    if (!scopes.contains(MobileScopes.TagFix))
+      Future.successful(Left(ClaimError.InsufficientScope))
+    else
+      retryTasks(body) match {
+        case None => Future.successful(Left(ClaimError.InvalidRequest))
+        case Some(taskIds) =>
+          Future(store.retry(id, user.id, family, taskIds, waiting, Instant.now())).flatMap {
+            case Left(ClaimProblem.Reauth) => Future.successful(Left(ClaimError.Reauth))
+            case Left(_)                   => Future.successful(Left(ClaimError.NotFound))
+            case Right((_, retried)) =>
+              status(id, user).map {
+                case Some(body) => Right(body ++ Json.obj("retried" -> retried))
+                case None       => Left(ClaimError.NotFound)
+              }
           }
       }
 

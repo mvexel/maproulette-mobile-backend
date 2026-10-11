@@ -9,7 +9,12 @@ import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.{Inject, Singleton}
-import org.maproulette.auth.mobile.{MobileOAuthSettings, MobileSecrets}
+import org.maproulette.auth.mobile.{
+  MobileClaimRoutes,
+  MobileClientRegistry,
+  MobileOAuthSettings,
+  MobileSecrets
+}
 import org.maproulette.framework.model.User
 import org.maproulette.framework.service.UserService
 import org.maproulette.provider.choice.{MobileChoiceService, PendingOutcome, PendingPublish}
@@ -177,6 +182,7 @@ class ClaimPublishService @Inject() (
     choice: MobileChoiceService,
     users: UserService,
     preview: ClaimPreviewService,
+    clients: MobileClientRegistry,
     summaries: GuestSummaries,
     cipher: GuestEmailCipher,
     mailer: ClaimMailer,
@@ -188,6 +194,13 @@ class ClaimPublishService @Inject() (
   private val logger = play.api.Logger(getClass)
   private implicit lazy val ec: ExecutionContext =
     actorSystem.dispatchers.lookup("mobile-oauth-dispatcher")
+
+  /**
+    * Writes are on and the claim page's client is enabled (D13 (4)); otherwise claims wait. Read on
+    * every run and before every answer (D13 (2)).
+    */
+  def ready: Boolean =
+    preview.writesEnabled && clients.get(MobileClaimRoutes.ClientId).isDefined
 
   private sealed trait Step
   private case object Next      extends Step
@@ -205,7 +218,7 @@ class ClaimPublishService @Inject() (
   }
 
   private def publishRow(claim: OpenClaim, user: User, item: ClaimRow, now: Instant): Future[Step] =
-    if (!preview.writesEnabled) {
+    if (!ready) {
       store.setState(claim.id, "waiting", now)
       Future.successful(Stop)
     } else
@@ -295,7 +308,7 @@ class ClaimPublishService @Inject() (
     }
 
   private def publish(claim: OpenClaim, now: Instant): Future[(Int, Int, Boolean)] =
-    if (!preview.writesEnabled) {
+    if (!ready) {
       if (claim.state != "waiting") store.setState(claim.id, "waiting", now)
       Future.successful((0, 0, true))
     } else
@@ -307,8 +320,8 @@ class ClaimPublishService @Inject() (
         case Some(user) =>
           if (claim.state != "running") store.setState(claim.id, "running", now)
           rows(claim, user, now).flatMap {
-            case (published, settled, true) if preview.writesEnabled =>
-              // Stopped with writes on: the OSM token was refused.
+            case (published, settled, true) if ready =>
+              // Stopped while ready: the OSM token was refused.
               store.setState(claim.id, "failed", now)
               reauth(claim, now).map(_ => (published, settled, false))
             case (published, settled, true) => Future.successful((published, settled, true))
