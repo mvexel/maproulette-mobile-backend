@@ -248,6 +248,23 @@ submission for a task is unfinished, others get `409 submission_pending`.
 | 502 | `osm_unavailable` |
 | 503 | `osm_edits_unavailable` (no token key configured) |
 
+## Preview mode (drafts)
+
+A challenge is a draft while it, or its project, is disabled. For app bearer
+grants:
+
+- `GET /challenge/:id`, `/challenge/:id/tags`, `/challenge/:id/tasks`,
+  `/task/:id` and `/task/:id/choice/check` on a draft answer a bare 404, the same
+  as an unknown id, unless the user is a super-user. Organizers get the same
+  access once `mobile:organize` lands.
+- Task writes on a draft (`start`, `skip`, `choice`, status) are refused for
+  everyone: 404 for other users, 403 `challenge_draft` for super-users.
+  `release` stays open, so a lock taken before the challenge was disabled can be
+  dropped.
+
+Discovery (`tasks/box`, `markers/box`, `extendedFind`) already lists enabled
+challenges in enabled projects only. Admin grants and web sessions are unchanged.
+
 ## Account identity
 
 The mobile callback verifies the person's numeric OSM user ID and looks up the
