@@ -35,6 +35,21 @@ case class EditTags(answers: List[(ChoiceQuestion, ChoiceOption)]) extends Choic
 case object DeleteNode             extends ChoicePlan { val status = Task.STATUS_FIXED }
 case class StatusOnly(status: Int) extends ChoicePlan
 
+/** Where a `moved` report puts the element; `source` is `tap` or `here`. */
+case class ReportLocation(lat: Double, lon: Double, source: String) {
+  def json: JsObject = Json.obj("lat" -> lat, "lon" -> lon, "source" -> source)
+}
+
+/** A built-in `not-here` or `moved` report: status 6, no OSM edit. */
+case class Report(kind: String, location: Option[ReportLocation], distanceM: Option[Int] = None)
+    extends ChoicePlan {
+  val status = Task.STATUS_TOO_HARD
+  def json: JsObject =
+    Json.obj("outcome" -> kind) ++
+      location.fold(Json.obj())(l => Json.obj("location"   -> l.json)) ++
+      distanceM.fold(Json.obj())(d => Json.obj("distanceM" -> d))
+}
+
 /** An idempotency row of mobile_choice_submissions. */
 case class SubmissionRow(state: String, changesetId: Option[Long], result: Option[JsObject])
 
@@ -297,10 +312,32 @@ class MobileChoiceService @Inject() (
         case (q, o) => q -> JsString(o)
       }))
   }
-  private case class Outcome(id: String, delete: Option[Boolean]) extends Submission {
-    def canonical: String = s"outcome:$id:delete=${delete.contains(true)}"
+  private case class Outcome(
+      id: String,
+      delete: Option[Boolean],
+      location: Option[ReportLocation] = None
+  ) extends Submission {
+    def canonical: String =
+      s"outcome:$id:delete=${delete.contains(true)}" +
+        location.fold("")(l => s":at=${l.lat},${l.lon},${l.source}")
     def json: JsObject =
-      Json.obj("outcome" -> id) ++ delete.fold(Json.obj())(flag => Json.obj("delete" -> flag))
+      Json.obj("outcome" -> id) ++ delete.fold(Json.obj())(flag => Json.obj("delete" -> flag)) ++
+        location.fold(Json.obj())(l => Json.obj("location" -> l.json))
+  }
+
+  /** `{"lat", "lon", "source"}`, in range, rounded to 6 decimals (about 0.1 m). */
+  private def reportLocation(value: JsValue): Option[ReportLocation] = {
+    def round(v: BigDecimal) = v.setScale(6, BigDecimal.RoundingMode.HALF_UP).toDouble
+    value match {
+      case o: JsObject if o.keys == Set("lat", "lon", "source") =>
+        (o("lat"), o("lon"), o("source")) match {
+          case (JsNumber(lat), JsNumber(lon), JsString(source))
+              if lat.abs <= 90 && lon.abs <= 180 && Set("tap", "here")(source) =>
+            Some(ReportLocation(round(lat), round(lon), source))
+          case _ => None
+        }
+      case _ => None
+    }
   }
 
   /** Strict: one form only, no unknown or duplicate keys, ids re-checked, at most 8 answers. */
@@ -313,6 +350,11 @@ class MobileChoiceService @Inject() (
             val pairs = a.fields.collect { case (q, JsString(v)) if isId(q) && isId(v) => q -> v }
             if (pairs.size == a.fields.size) Some(Answers(pairs.toMap)) else None
           case _ => None
+        }
+      case o: JsObject if o.keys == Set("outcome", "location") =>
+        (o("outcome"), reportLocation(o("location"))) match {
+          case (JsString(id), Some(at)) if isId(id) => Some(Outcome(id, None, Some(at)))
+          case _                                    => None
         }
       case o: JsObject if o.keys == Set("outcome") || o.keys == Set("outcome", "delete") =>
         (o("outcome"), o.value.get("delete")) match {
@@ -339,9 +381,14 @@ class MobileChoiceService @Inject() (
           case Some(problem) => Left(problem)
           case None          => Right(EditTags(resolved.collect { case Right(pair) => pair }))
         }
-      case Outcome(ChoiceWork.TooHard, None) => Right(StatusOnly(Task.STATUS_TOO_HARD))
-      case Outcome(ChoiceWork.TooHard, _)    => Left("delete is only allowed on a delete outcome")
-      case Outcome(id, delete) =>
+      case Outcome(ChoiceWork.Moved, None, Some(at)) => Right(Report(ChoiceWork.Moved, Some(at)))
+      case Outcome(ChoiceWork.Moved, None, None)     => Left("moved needs a location")
+      case Outcome(_, _, Some(_))                    => Left("location is only allowed on moved")
+      case Outcome(ChoiceWork.NotHere, None, _)      => Right(Report(ChoiceWork.NotHere, None))
+      case Outcome(ChoiceWork.TooHard, None, _)      => Right(StatusOnly(Task.STATUS_TOO_HARD))
+      case Outcome(ChoiceWork.TooHard | ChoiceWork.NotHere | ChoiceWork.Moved, _, _) =>
+        Left("delete is only allowed on a delete outcome")
+      case Outcome(id, delete, _) =>
         work.outcomes.find(_.id == id) match {
           case None                                         => Left(s"unknown outcome '$id'")
           case Some(o) if o.delete && delete.contains(true) => Right(DeleteNode)
@@ -475,8 +522,10 @@ class MobileChoiceService @Inject() (
       case Some(submission) =>
         load(taskId).flatMap {
           case (task, work, payload) =>
-            resolve(work, submission) match {
+            resolve(work, submission).map(measured(task.id, _)) match {
               case Left(detail) => Left(error(422, "invalid_submission", "detail" -> detail))
+              case Right(Report(ChoiceWork.Moved, _, Some(d))) if d > ChoiceWork.MovedMaxMeters =>
+                Left(error(422, "moved_too_far", "maxM" -> ChoiceWork.MovedMaxMeters))
               case Right(plan) =>
                 Right(
                   ValidatedSubmission(
@@ -492,6 +541,22 @@ class MobileChoiceService @Inject() (
         }
     }
 
+  /**
+    * A `moved` report with its distance from the task's point, the position the app shows. A task
+    * without a point measures 0.
+    */
+  private def measured(taskId: Long, plan: ChoicePlan): ChoicePlan = plan match {
+    case report @ Report(_, Some(at), _) =>
+      val meters = db.withConnection { implicit c =>
+        SQL"""SELECT ST_DistanceSphere(location, ST_SetSRID(ST_MakePoint(${at.lon}, ${at.lat}), 4326))
+              FROM tasks WHERE id = $taskId"""
+          .as(SqlParser.get[Option[Double]](1).singleOpt)
+          .flatten
+      }
+      report.copy(distanceM = Some(meters.map(m => math.round(m).toInt).getOrElse(0)))
+    case other => other
+  }
+
   // ---- submit -------------------------------------------------------------------------------
 
   /** POST /task/:id/choice. The filter has already authenticated a mobile tasks:write grant. */
@@ -505,7 +570,10 @@ class MobileChoiceService @Inject() (
     validateSubmission(taskId, body) match {
       case Left(response) => done(response)
       case Right(valid) =>
-        val edits = !valid.plan.isInstanceOf[StatusOnly]
+        val edits = valid.plan match {
+          case StatusOnly(_) | Report(_, _, _) => false
+          case _                               => true
+        }
         if (edits && !scopes.contains(MobileScopes.TagFix))
           done(error(403, "insufficient_scope", "scope" -> MobileScopes.TagFix))
         else {
@@ -647,7 +715,7 @@ class MobileChoiceService @Inject() (
         done(response)
       case None =>
         plan match {
-          case StatusOnly(_) => done(finish(task.id, user, claim.key, plan, None))
+          case StatusOnly(_) | Report(_, _, _) => done(finish(task.id, user, claim.key, plan, None))
           case _ =>
             withToken(claim, familyId, user) { token =>
               Attempt(claim, task, work, plan, user, familyId, token, pendingPublish)
@@ -897,8 +965,12 @@ class MobileChoiceService @Inject() (
       extra: JsObject = Json.obj()
   ): ChoiceResponse = {
     val status = if (cs.isDefined) Task.STATUS_FIXED else plan.status
+    val report = plan match {
+      case r: Report => r.json
+      case _         => Json.obj()
+    }
     val result =
-      Json.obj("status" -> status, "changesetId" -> cs, "applied" -> applied(plan, cs)) ++ extra
+      Json.obj("status" -> status, "changesetId" -> cs, "applied" -> applied(plan, cs)) ++ report ++ extra
     val answers = plan match {
       case edit: EditTags =>
         Some(JsObject(edit.answers.map { case (q, o) => q.id -> JsString(o.id) }))

@@ -109,6 +109,8 @@ jobs:
         echo 'maproulette {' >> ./conf/dev.conf
         echo '  debug=true' >> ./conf/dev.conf
         echo '  bootstrap=true' >> ./conf/dev.conf
+        # Legacy API keys are no longer accepted; use the CI-only development user.
+        echo '  devMode=true' >> ./conf/dev.conf
         echo '}' >> ./conf/dev.conf
     - name: Run maproulette and the maproulette-java-client integration tests
       env:
@@ -116,7 +118,6 @@ jobs:
         APPLICATION_SECRET: ${{ needs.generate_app_secret.outputs.application_secret }}
         CI: true
         SBT_OPTS: "-Xms512M -Xmx1024M -Xss2M -XX:MaxMetaspaceSize=1024M"
-        MR_SUPER_KEY: 1234
         MR_DATABASE_URL: "jdbc:postgresql://localhost:5432/mr_test"
         MR_DATABASE_USERNAME: "osm"
         MR_DATABASE_PASSWORD: "osm"
