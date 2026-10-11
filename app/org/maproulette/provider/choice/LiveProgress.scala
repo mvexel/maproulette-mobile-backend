@@ -340,16 +340,17 @@ object LiveProgress {
       "total"     -> states.size,
       "needsLook" -> states.count(_ == Look)
     ) ++ people.filter(_ => !ended).fold(Json.obj())(n => Json.obj("people" -> n))
+    val matchTags: JsObject = rows.iterator
+      .flatMap(_.payload.flatMap(p => (p \ "match").asOpt[JsObject]))
+      .find(_.keys.nonEmpty)
+      .getOrElse(Json.obj())
     Json.obj(
       "campaign" -> Json.obj(
         "name"     -> name,
         "hashtags" -> checkinComment.toSeq.flatMap(Hashtag.findAllIn(_)).distinct,
         // The first task's identity guard, so the page names its places as the apps do
         // ("stops", "entrances"). Tags only, as public as the OSM element.
-        "match" -> rows.iterator
-          .flatMap(_.payload.flatMap(p => (p \ "match").asOpt[JsObject]))
-          .find(_.keys.nonEmpty)
-          .getOrElse(Json.obj())
+        "match" -> matchTags
       ),
       "mode"         -> (if (ended) "ended" else "live"),
       "answersShown" -> page.showAnswers,
