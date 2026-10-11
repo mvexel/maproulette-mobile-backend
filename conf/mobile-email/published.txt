@@ -1,0 +1,16 @@
+Hi {{osmUsername}},
+
+Your answers from {{campaignName}} are on OpenStreetMap now. {{publishedStopsText}} were added under your account.
+
+See your edits:
+{{editsUrl}}
+
+{{notAddedLine}}
+
+Thanks for checking {{nounMany}} with {{organizerName}}. Next time you open Street Tally, it signs in as you, and new answers go straight on the map.
+
+Street Tally
+
+--
+This is the last email about these answers. We've deleted your email address.
+Privacy: {{privacyUrl}}

@@ -92,8 +92,13 @@ object MobileGuestRoutes {
     case "GET"    => path == "/api/v2/mobile-guest/me" || path == list
     case "POST"   => path.matches(pending)
     case "DELETE" => path == "/api/v2/mobile-guest" || path.matches(pending)
+    case "PUT"    => email(method, path)
     case _        => false
   }
+
+  /** Setting the claim email (B4): a JSON body, no query string. */
+  def email(method: String, path: String): Boolean =
+    method == "PUT" && path == "/api/v2/mobile-guest/email"
 
   def permits(method: String, path: String): Boolean =
     own(method, path) || (MobileReadRoutes.permits(method, path) && path != "/oauth/mobile/me")
@@ -104,6 +109,7 @@ object MobileGuestRoutes {
   /** Whether the request has the shape its guest route allows. */
   def acceptable(request: RequestHeader): Boolean =
     if (takesBody(request.method, request.path)) MobileWriteRoutes.acceptableBody(request)
+    else if (email(request.method, request.path)) request.rawQueryString.isEmpty
     else if (request.method == "GET" && request.path == list)
       !request.hasBody && request.queryString.forall {
         case (key, values) => Set("limit", "after").contains(key) && values.size == 1
@@ -200,8 +206,10 @@ object MobileFieldRoutes {
           "/oauth/mobile/guest",
           "/api/v2/mobile-admin/clients"
         ).contains(request.path) || MobileGuestRoutes.own(request.method, request.path)
-      case "PATCH"  => request.path.matches("/api/v2/mobile-admin/clients/[A-Za-z0-9._-]+")
-      case "PUT"    => request.path == "/api/v2/mobile-admin/write-policy"
+      case "PATCH" => request.path.matches("/api/v2/mobile-admin/clients/[A-Za-z0-9._-]+")
+      case "PUT" =>
+        request.path == "/api/v2/mobile-admin/write-policy" ||
+          MobileGuestRoutes.email(request.method, request.path)
       case "DELETE" => MobileGuestRoutes.own(request.method, request.path)
       case _        => false
     })
