@@ -775,7 +775,12 @@ class MobileChoiceService @Inject() (
   ): ChoiceResponse = {
     val status = if (cs.isDefined) Task.STATUS_FIXED else plan.status
     val result = Json.obj("status" -> status, "changesetId" -> cs, "applied" -> applied(plan, cs))
-    Try(writeStatus(taskId, user, status, cs, key, result)) match {
+    val answers = plan match {
+      case edit: EditTags =>
+        Some(JsObject(edit.answers.map { case (q, o) => q.id -> JsString(o.id) }))
+      case _ => None
+    }
+    Try(writeStatus(taskId, user, status, cs, key, result, answers)) match {
       case Success(_) => ChoiceResponse(200, result)
       case Failure(e) if cs.isDefined =>
         logger.error(s"Choice task $taskId: status write failed after changeset ${cs.get}", e)
@@ -802,7 +807,8 @@ class MobileChoiceService @Inject() (
       status: Int,
       cs: Option[Long],
       key: String,
-      result: JsObject
+      result: JsObject,
+      answers: Option[JsObject]
   ): Unit = {
     val task     = taskDAL.retrieveById(taskId).getOrElse(throw new NotFoundException("Task is gone"))
     val released = taskDAL.resolveLockReleaseTasks(task)
@@ -813,13 +819,15 @@ class MobileChoiceService @Inject() (
       inTransaction = { implicit c: Connection =>
         cs.foreach(id => SQL"UPDATE tasks SET changeset_id = $id WHERE id = $taskId".executeUpdate()
         )
-        val json = Json.stringify(result)
+        val json   = Json.stringify(result)
+        val chosen = answers.map(Json.stringify)
         SQL"""INSERT INTO mobile_choice_submissions
-              (task_id, user_id, submission_key, state, changeset_id, result_json)
-              VALUES ($taskId, ${user.id}, $key, 'done', $cs, $json::jsonb)
+              (task_id, user_id, submission_key, state, changeset_id, result_json, answers)
+              VALUES ($taskId, ${user.id}, $key, 'done', $cs, $json::jsonb, $chosen::jsonb)
               ON CONFLICT (task_id, user_id, submission_key) DO UPDATE SET state = 'done',
                 changeset_id = EXCLUDED.changeset_id, result_json = EXCLUDED.result_json,
-                lease_until = NULL, updated_at = NOW()""".executeUpdate()
+                answers = EXCLUDED.answers, lease_until = NULL, updated_at = NOW()"""
+          .executeUpdate()
         ()
       }
     )

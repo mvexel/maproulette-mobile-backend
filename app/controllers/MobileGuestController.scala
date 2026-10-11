@@ -3,7 +3,8 @@ package controllers
 import javax.inject.Inject
 import org.maproulette.auth.mobile.MobileBearerIdentity
 import org.maproulette.auth.mobile.guest.{GuestError, MobileGuest, MobileGuestService}
-import play.api.libs.json.{JsObject, Json}
+import org.maproulette.provider.choice.ChoicePendingStore
+import play.api.libs.json.{JsNull, JsObject, Json}
 import play.api.mvc._
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.control.NonFatal
@@ -15,7 +16,8 @@ import scala.util.control.NonFatal
   */
 class MobileGuestController @Inject() (
     components: ControllerComponents,
-    guests: MobileGuestService
+    guests: MobileGuestService,
+    pending: ChoicePendingStore
 )(implicit ec: ExecutionContext)
     extends AbstractController(components) {
   private val logger = play.api.Logger(getClass)
@@ -72,7 +74,24 @@ class MobileGuestController @Inject() (
       }
     }
 
-  private def status(guest: MobileGuest): JsObject =
+  /** `GET /api/v2/mobile-guest/me`, guest bearer. */
+  def me: Action[AnyContent] = Action.async { request =>
+    guestRequest(request)(guest =>
+      Future(pending.counts(guest.id)).map(counts => Ok(MobileGuestController.status(guest, counts))
+      )
+    )
+  }
+
+  /** `DELETE /api/v2/mobile-guest`, guest bearer: "delete my data". */
+  def delete: Action[AnyContent] = Action.async { request =>
+    guestRequest(request)(guest => guests.delete(guest).map(_ => NoContent))
+  }
+}
+
+object MobileGuestController {
+
+  /** The guest status body of `GET /api/v2/mobile-guest/me`; `PUT /email` answers with it too. */
+  def status(guest: MobileGuest, counts: Map[String, Int]): JsObject =
     Json.obj(
       "guestId" -> guest.id.toString,
       // Only live, unclaimed guests authenticate; claimed and expired states come with claiming.
@@ -80,16 +99,10 @@ class MobileGuestController @Inject() (
       "email" -> (if (guest.emailVerified) "verified"
                   else if (guest.emailSet) "pending"
                   else "none"),
-      "expiresAt" -> guest.expiresAt.toString
+      "pending"   -> counts.getOrElse[Int]("pending", 0),
+      "published" -> counts.getOrElse[Int]("published", 0),
+      "expiresAt" -> guest.expiresAt.toString,
+      // Set once claiming exists; a claimed guest's token no longer authenticates.
+      "claimedAs" -> JsNull
     )
-
-  /** `GET /api/v2/mobile-guest/me`, guest bearer. */
-  def me: Action[AnyContent] = Action.async { request =>
-    guestRequest(request)(guest => Future.successful(Ok(status(guest))))
-  }
-
-  /** `DELETE /api/v2/mobile-guest`, guest bearer: "delete my data". */
-  def delete: Action[AnyContent] = Action.async { request =>
-    guestRequest(request)(guest => guests.delete(guest).map(_ => NoContent))
-  }
 }
