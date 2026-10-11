@@ -10,9 +10,11 @@ Usage:
 --results  The campaign's results export: admin > campaign > Download results,
            or GET /api/v2/mobile-admin/challenges/:id/results (CSV). It holds
            what was published to OSM and the outcomes of signed-in mappers.
---pending  Optional. Guests' answers that wait in choice_pending, exported by
+--pending  Optional. Guests' answers in choice_pending, every state, exported by
            scripts/woodbine-pending.sql (read only). Without it the report
-           shows published answers only.
+           takes the waiting answers from the results CSV's pending_count,
+           pending_outcomes and pending:<question> columns, and leaves
+           pending_history empty.
 
 Writes <out>.csv and <out>.geojson, one row per entrance, and prints a summary.
 Standard library only. Adapted from community/results/stop_report.py.
@@ -54,6 +56,28 @@ def read_pending(path):
     return by_element
 
 
+def from_tally(cell):
+    """'hinged 2;sliding 1' (results CSV) back to ['hinged', 'hinged', 'sliding']."""
+    out = []
+    for part in (cell or "").split(";"):
+        value, _, n = part.rpartition(" ")
+        if value and n.isdigit():
+            out += [value] * int(n)
+    return out
+
+
+def waiting_from_results(r):
+    """Waiting answers as the results CSV tallies them. Outcomes there are labels already."""
+    doors = from_tally(r.get("pending:door-type"))
+    autos = from_tally(r.get("pending:automatic-opening"))
+    return {
+        "count": int(r.get("pending_count") or 0),
+        "door": doors,
+        "automatic": autos,
+        "outcomes": from_tally(r.get("pending_outcomes")),
+    }
+
+
 def labels(survey):
     out = {}
     for q in survey["questions"]:
@@ -88,7 +112,18 @@ def main():
         element = f["properties"]["@id"]
         lon, lat = f["geometry"]["coordinates"][:2]
         r = results.get(element, {})
-        waiting = [x for x in pending.get(element, []) if x["state"] == "pending"]
+        if a.pending:
+            waiting = [x for x in pending.get(element, []) if x["state"] == "pending"]
+            w = {
+                "count": len(waiting),
+                "door": [x["answers"]["door-type"] for x in waiting if "door-type" in x["answers"]],
+                "automatic": [x["answers"]["automatic-opening"] for x in waiting
+                              if "automatic-opening" in x["answers"]],
+                "outcomes": [names.get(("outcome", x["outcome"]), x["outcome"])
+                             for x in waiting if x["outcome"]],
+            }
+        else:
+            w = waiting_from_results(r)
         set_tags = dict(
             pair.split("=", 1) for pair in (r.get("tags_set") or "").split(";") if "=" in pair
         )
@@ -108,21 +143,12 @@ def main():
             "outcome": r.get("outcome_label", ""),
             "stale_reason": r.get("stale_reason", ""),
             "reports": r.get("report_count", ""),
-            "pending_answers": len(waiting),
-            "pending_door": tally(
-                names.get(("door-type", x["answers"]["door-type"]), x["answers"]["door-type"])
-                for x in waiting
-                if "door-type" in x["answers"]
-            ),
+            "pending_answers": w["count"],
+            "pending_door": tally(names.get(("door-type", v), v) for v in w["door"]),
             "pending_automatic_door": tally(
-                names.get(("automatic-opening", x["answers"]["automatic-opening"]),
-                          x["answers"]["automatic-opening"])
-                for x in waiting
-                if "automatic-opening" in x["answers"]
+                names.get(("automatic-opening", v), v) for v in w["automatic"]
             ),
-            "pending_outcomes": tally(
-                names.get(("outcome", x["outcome"]), x["outcome"]) for x in waiting if x["outcome"]
-            ),
+            "pending_outcomes": tally(w["outcomes"]),
             "pending_history": tally(
                 PENDING_STATES.get(x["state"], x["state"]) for x in pending.get(element, [])
             ),
@@ -143,7 +169,7 @@ def main():
         row["state"] = (
             "published" if row["changeset_id"]
             else "outcome" if row["outcome"]
-            else "waiting" if waiting
+            else "waiting" if w["count"]
             else "open"
         )
         rows.append(row)
@@ -166,7 +192,7 @@ def main():
           f"{states['waiting']} with answers waiting, {states['outcome']} with an outcome, "
           f"{states['open']} not answered yet")
     print(f"pending answers: {sum(r['pending_answers'] for r in rows)}"
-          + ("" if a.pending else " (no --pending file given)"))
+          + ("" if a.pending else " (from the results CSV; no --pending file given)"))
     print(f"need a look: {sum(r['check'] != '' for r in rows)}")
 
 
