@@ -241,22 +241,20 @@ class GuestEmailService @Inject() (
                 val hash  = MobileSecrets.hash(token)
                 store.addClaimToken(guest.id, hash, now)
                 Right(
-                  (
-                    ClaimEmails
-                      .render(ClaimEmails.Claim, address, claimValues(guest, summary, token)),
-                    hash
-                  )
+                  ClaimEmails
+                    .render(ClaimEmails.Claim, address, claimValues(guest, summary, token))
                 )
               }
           }
       }.flatMap {
         case Left(error) => Future.successful(Left(error))
-        case Right((message, hash)) =>
+        case Right(message) =>
           mailer.send(message).map {
-            case Right(_) => Right(guest.copy(emailSet = true, emailVerified = false))
+            case Right(_)     => Right(guest.copy(emailSet = true, emailVerified = false))
             case Left(reason) =>
+              // The token stays: it is what counts this send toward the daily limit, so a
+              // refused address or a provider outage still hits 429 on the fourth try.
               logger.error(s"Guest link email not sent: $reason")
-              store.removeClaimToken(hash)
               Left(GuestEmailError.MailUnavailable)
           }
       }
