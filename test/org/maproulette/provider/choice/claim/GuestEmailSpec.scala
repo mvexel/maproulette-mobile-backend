@@ -28,13 +28,19 @@ class MemoryGuestEmailStore extends GuestEmailStore {
   def addClaimToken(guest: UUID, tokenHash: String, now: Instant): Unit = synchronized {
     tokens += ((guest, tokenHash, now))
   }
+  def removeClaimToken(tokenHash: String): Unit = synchronized {
+    tokens --= tokens.filter(_._2 == tokenHash)
+  }
 }
 
-class RecordingMailer(var available: Boolean = true, var fail: Boolean = false)
-    extends ClaimMailer {
+class RecordingMailer(
+    var available: Boolean = true,
+    var fail: Boolean = false,
+    var reason: String = "postmark_500_-1"
+) extends ClaimMailer {
   val sent = mutable.ListBuffer[ClaimMessage]()
   def send(message: ClaimMessage): Future[Either[String, Unit]] = synchronized {
-    if (fail) Future.successful(Left("postmark_422_300"))
+    if (fail) Future.successful(Left(reason))
     else {
       sent += message
       Future.successful(Right(()))
@@ -219,10 +225,11 @@ class GuestEmailSpec extends PlaySpec with BeforeAndAfterAll {
       ) mustBe Left(GuestEmailError.MailUnavailable)
       await(fixture(withKey = false).service.setEmail(guest(), "rosa@example.org")) mustBe
         Left(GuestEmailError.MailUnavailable)
-      await(
-        fixture(mailer = new RecordingMailer(fail = true)).service
-          .setEmail(guest(), "rosa@example.org")
-      ) mustBe Left(GuestEmailError.MailUnavailable)
+      val failing = fixture(mailer = new RecordingMailer(fail = true))
+      await(failing.service.setEmail(guest(), "rosa@example.org")) mustBe
+        Left(GuestEmailError.MailUnavailable)
+      // A refused send leaves no link behind and doesn't count toward the daily limit.
+      failing.store.tokens mustBe empty
     }
 
     "allow three sends per guest per day" in {

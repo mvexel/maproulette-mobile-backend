@@ -136,6 +136,20 @@ class GuestJobsSpec extends PlaySpec with BeforeAndAfterAll {
       report.reminded mustBe 0
       report.failures mustBe 1
       f.store.marked mustBe empty
+      // The unsent link holds none of the three newest places and doesn't count as a send.
+      f.emailStore.tokens mustBe empty
+      await(f.service.run(now))
+      await(f.service.run(now))
+      f.emailStore.tokens mustBe empty
+    }
+
+    "stop retrying a reminder whose address the provider refuses" in {
+      val f  = fixture(mailer = new RecordingMailer(fail = true, reason = "postmark_422_406"))
+      val id = UUID.randomUUID()
+      f.store.reminders = Seq(ReminderDue(id, expires, sealedFor(id), 1))
+      await(f.service.run(now)).failures mustBe 1
+      f.store.marked mustBe Set((id, 1))
+      f.emailStore.tokens mustBe empty
     }
 
     "send no reminders without a mail provider" in {
