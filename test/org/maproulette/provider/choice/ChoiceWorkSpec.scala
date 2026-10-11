@@ -46,6 +46,22 @@ class ChoiceWorkSpec extends PlaySpec {
   }
 
   "ChoiceWork.validate" should {
+    "accept the exact synthetic C-001 Woodbine entrance fixture" in {
+      val bytes = scala.util.Using.resource(
+        getClass.getResourceAsStream("/c001/woodbine-fixture-task.json")
+      )(_.readAllBytes())
+      val hash = java.security.MessageDigest
+        .getInstance("SHA-256")
+        .digest(bytes)
+        .map(b => f"${b & 0xff}%02x")
+        .mkString
+      hash mustBe "86b2cc388f7b90d7a44e417da83bc1b379cf9b75929cefb20b937c77b5a6483a"
+      val work = ChoiceWork.validate((Json.parse(bytes) \ "cooperativeWork").get).toOption.get
+      work.liveMissingQuestions mustBe true
+      work.questions.map(_.id) mustBe List("door-type", "automatic-opening")
+      work.questions.map(_.expect) mustBe List(Map("door" -> None), Map("automatic_door" -> None))
+    }
+
     "accept the SLC bench payload" in {
       val work = ChoiceWork.validate(bench).toOption.get
       work.element mustBe "node/123"

@@ -1,0 +1,116 @@
+{
+  "id": 101,
+  "parent": 42,
+  "name": "node/14178183367",
+  "instruction": "Identify the marked Woodbine main entrance and answer what you can observe.",
+  "status": 0,
+  "geometries": {
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -111.906812,
+            40.7538166
+          ]
+        },
+        "properties": {
+          "@id": "node/14178183367",
+          "entrance": "main"
+        }
+      }
+    ]
+  },
+  "cooperativeWork": {
+    "meta": {
+      "version": 2,
+      "type": 3,
+      "choiceVersion": 1
+    },
+    "element": "node/14178183367",
+    "match": {
+      "entrance": "main"
+    },
+    "liveMissingQuestions": true,
+    "questions": [
+      {
+        "id": "door-type",
+        "prompt": "How does this door open?",
+        "description": "Look at the door at the marked entrance. If its type is not listed or you cannot tell, choose I'm not sure. Do not include another nearby door.",
+        "expect": {
+          "door": null
+        },
+        "options": [
+          {
+            "id": "hinged",
+            "label": "Swings on hinges",
+            "setTags": {
+              "door": "hinged"
+            }
+          },
+          {
+            "id": "sliding",
+            "label": "Slides sideways",
+            "setTags": {
+              "door": "sliding"
+            }
+          },
+          {
+            "id": "revolving",
+            "label": "Revolves",
+            "setTags": {
+              "door": "revolving"
+            }
+          },
+          {
+            "id": "folding",
+            "label": "Folds",
+            "setTags": {
+              "door": "folding"
+            }
+          }
+        ]
+      },
+      {
+        "id": "automatic-opening",
+        "prompt": "Does this door open automatically?",
+        "description": "Observe normal use or a clearly marked opening button. A door propped open does not prove automatic opening. If you cannot establish the answer, choose I'm not sure.",
+        "expect": {
+          "automatic_door": null
+        },
+        "options": [
+          {
+            "id": "no",
+            "label": "No, it opens manually",
+            "setTags": {
+              "automatic_door": "no"
+            }
+          },
+          {
+            "id": "button",
+            "label": "Yes, press a button",
+            "setTags": {
+              "automatic_door": "button"
+            }
+          },
+          {
+            "id": "motion",
+            "label": "Yes, when you approach",
+            "setTags": {
+              "automatic_door": "motion"
+            }
+          },
+          {
+            "id": "yes",
+            "label": "Yes, but the mechanism is unclear",
+            "setTags": {
+              "automatic_door": "yes"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

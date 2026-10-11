@@ -1,0 +1,9 @@
+# Select only for the reviewed stage pending-guest deployment. This overlay does
+# not enable guests itself: MR_MOBILE_GUESTS_ENABLED must be explicitly true.
+services:
+  api:
+    command:
+      - /MapRouletteAPI/bin/maprouletteapi
+      - -Dhttp.port=80
+      - -Dpidfile.path=/dev/null
+      - -Dconfig.file=/MapRouletteAPI/conf/mobile-field-stage-pending.conf
