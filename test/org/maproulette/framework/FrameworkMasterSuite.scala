@@ -65,7 +65,8 @@ class FrameworkMasterSuite extends Suites with BeforeAndAfterAll with TestDataba
     new VirtualProjectRepositorySpec,
     new org.maproulette.provider.choice.MobileChoiceServiceSpec,
     new org.maproulette.provider.choice.MobileChoicePendingSpec,
-    new org.maproulette.auth.mobile.MobileDraftLookupSpec
+    new org.maproulette.auth.mobile.MobileDraftLookupSpec,
+    new org.maproulette.auth.mobile.MobileCampaignSpec
   )
   private val tagFilters: Seq[Tag] = Seq()
   override val nestedSuites: IndexedSeq[Suite] =
