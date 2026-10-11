@@ -290,5 +290,33 @@ class MobileChoicePendingSpec(implicit val application: Application) extends Fra
       }
       found(true) must contain(task.id)
     }
+
+    "flag held tasks on tasks/box with includePending, and change nothing without it" taggedAs ChoiceTag in {
+      import play.api.test.FakeRequest
+      import play.api.test.Helpers.{contentAsJson, defaultAwaitTimeout, GET, OK}
+      val controller =
+        application.injector.instanceOf[org.maproulette.framework.controller.TaskController]
+      def box(query: String): JsArray = {
+        val result = controller
+          .getTasksInBoundingBox(-180, -85, 180, 85, 5000, 0, false)
+          .apply(FakeRequest(GET, s"/api/v2/tasks/box/-180/-85/180/85?cid=${challenge.id}$query"))
+        play.api.test.Helpers.status(result) mustBe OK
+        contentAsJson(result).as[JsArray]
+      }
+      def flags(query: String): Map[Long, Option[Boolean]] =
+        box(query).value.map { t =>
+          (t \ "id").as[Long] -> (t \ "pending").asOpt[Boolean]
+        }.toMap
+      val g         = guest()
+      val (held, _) = benchTask()
+      val (free, _) = benchTask()
+      submit(g, held, """{"answers":{"backrest":"yes"}}""").status mustBe 200
+      val flagged = flags("&includePending=true")
+      flagged(held.id) mustBe Some(true)
+      flagged(free.id) mustBe Some(false)
+      flags("").values.flatten mustBe empty
+      flags("&excludePending=true").keySet must not contain held.id
+      new ChoicePendingRepository(db).held(Seq(held.id, free.id, held.id)) mustBe Set(held.id)
+    }
   }
 }

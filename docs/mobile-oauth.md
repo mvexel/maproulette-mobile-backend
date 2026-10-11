@@ -296,6 +296,11 @@ Discovery: `excludePending=true` on `tasks/box`, `markers/box` and the cluster r
 tasks with a pending answer whose hold has not ended (next to `excludeStale`). `challenge/:id/tasks`
 is not filtered.
 
+`includePending=true` on `tasks/box` keeps held tasks and adds `"pending": true|false` to each task,
+so the app can count a held task as Checked in its tally and leave it out of Nearest. The flag is
+yes/no only: nothing about the guest or the answer. Without the parameter the response is unchanged.
+`ChoicePendingStore.held` is the shared lookup for any other progress read.
+
 A guest token reaches only `MobileGuestRoutes`: the discovery reads of `MobileReadRoutes`, including
 `choice/check` (but not `/oauth/mobile/me`), pending answers and its own routes. It is never a
 MapRoulette user: the bearer filter sets `MobileBearerIdentity.GuestKey`, never `UserKey`, so stock

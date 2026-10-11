@@ -128,6 +128,7 @@ class MobileGuestSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll 
       def withdraw(guestId: UUID, taskId: Long)                 = ???
       def counts(guestId: UUID)                                 = Map("pending" -> 2, "published" -> 1, "expired" -> 4)
       def list(guestId: UUID, limit: Int, before: Option[Long]) = ???
+      def held(taskIds: Seq[Long])                              = ???
     }
     val controller = new MobileGuestController(stubControllerComponents(), service, pendingCounts)
     val oauth = new MobileOAuthController(

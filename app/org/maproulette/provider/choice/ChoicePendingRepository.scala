@@ -66,6 +66,9 @@ trait ChoicePendingStore {
 
   /** The guest's answers in every state, newest first, starting below `before` (a row id). */
   def list(guestId: UUID, limit: Int, before: Option[Long]): List[PendingAnswer]
+
+  /** Which of these tasks a live pending answer holds (the same rows `excludePending` hides). */
+  def held(taskIds: Seq[Long]): Set[Long]
 }
 
 @Singleton
@@ -184,4 +187,16 @@ class ChoicePendingRepository @Inject() (db: Database) extends ChoicePendingStor
             ORDER BY id DESC LIMIT {limit}"""
       ).on("guest" -> guestId.toString, "before" -> before, "limit" -> limit).as(answer.*)
     }
+
+  override def held(taskIds: Seq[Long]): Set[Long] =
+    if (taskIds.isEmpty) Set.empty
+    else
+      db.withConnection { implicit c =>
+        SQL(
+          """SELECT DISTINCT task_id FROM choice_pending WHERE task_id IN ({ids})
+             AND state = 'pending' AND hold_until > NOW()"""
+        ).on("ids" -> taskIds.distinct)
+          .as(SqlParser.long("task_id").*)
+          .toSet
+      }
 }
