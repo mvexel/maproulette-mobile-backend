@@ -3,6 +3,7 @@ package controllers
 import javax.inject.Inject
 import org.maproulette.auth.mobile.MobileBearerIdentity
 import org.maproulette.auth.mobile.guest.MobileGuestAuth
+import org.maproulette.provider.choice.ChoicePendingStore
 import org.maproulette.provider.choice.claim.GuestEmailService
 import play.api.libs.json.{JsValue, Json}
 import play.api.mvc._
@@ -16,7 +17,8 @@ import scala.util.control.NonFatal
 class MobileGuestEmailController @Inject() (
     components: ControllerComponents,
     guests: MobileGuestAuth,
-    emails: GuestEmailService
+    emails: GuestEmailService,
+    pending: ChoicePendingStore
 )(implicit ec: ExecutionContext)
     extends AbstractController(components) {
   private val logger = play.api.Logger(getClass)
@@ -36,17 +38,12 @@ class MobileGuestEmailController @Inject() (
             case Some(email) =>
               emails
                 .setEmail(guest, email)
-                .map {
-                  case Left(error) => Status(error.status)(Json.obj("error" -> error.code))
+                .flatMap {
+                  case Left(error) =>
+                    Future.successful(Status(error.status)(Json.obj("error" -> error.code)))
                   case Right(updated) =>
-                    Ok(
-                      Json.obj(
-                        "guestId"   -> updated.id.toString,
-                        "state"     -> "active",
-                        "email"     -> "pending",
-                        "expiresAt" -> updated.expiresAt.toString
-                      )
-                    )
+                    Future(pending.counts(updated.id))
+                      .map(counts => Ok(MobileGuestController.status(updated, counts)))
                 }
                 .recover {
                   case NonFatal(e) =>

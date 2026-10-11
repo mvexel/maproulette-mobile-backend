@@ -15,12 +15,7 @@ import org.joda.time.{DateTime, DateTimeZone}
 import org.maproulette.Config
 import org.maproulette.controllers.ParentController
 import org.maproulette.data._
-import org.maproulette.exception.{
-  InvalidException,
-  MPExceptionUtil,
-  NotFoundException,
-  StatusMessage
-}
+import org.maproulette.exception.{InvalidException, NotFoundException, StatusMessage}
 import org.maproulette.framework.model._
 import org.maproulette.framework.psql.Paging
 import org.maproulette.framework.service.{ServiceManager, TagService}
@@ -37,13 +32,11 @@ import play.api.libs.Files
 import play.api.libs.json._
 import anorm._
 import anorm.SqlParser
-import play.api.libs.ws.WSClient
 import play.api.mvc._
 import play.shaded.oauth.oauth.signpost.exception.OAuthNotAuthorizedException
 
-import scala.concurrent.{Future, Promise}
+import scala.concurrent.Future
 import scala.io.Source
-import scala.util.{Failure, Success}
 
 /**
   * The challenge controller handles all operations for the Challenge objects.
@@ -62,7 +55,6 @@ class ChallengeController @Inject() (
     override val tagService: TagService,
     challengeProvider: ChallengeProvider,
     val serviceManager: ServiceManager,
-    wsClient: WSClient,
     permission: Permission,
     override val config: Config,
     components: ControllerComponents,
@@ -507,20 +499,28 @@ class ChallengeController @Inject() (
     */
   def bulkArchive(): Action[JsValue] = Action.async(bodyParsers.json) { implicit request =>
     this.sessionManager.authenticatedRequest { implicit user =>
-      try {
-        val body         = request.body;
-        val challengeIds = (body \ "ids").as[List[Long]]
-        val archiving    = (body \ "isArchived").asOpt[Boolean].getOrElse(true);
-
-        dalManager.challenge.bulkArchive(challengeIds, archiving);
-
+      val challengeIds = (request.body \ "ids").asOpt[List[Long]].getOrElse(List.empty).distinct
+      val archiving    = (request.body \ "isArchived").asOpt[Boolean].getOrElse(true)
+      if (challengeIds.isEmpty) {
+        BadRequest(Json.toJson(StatusMessage("KO", JsString("ids must be a non-empty array"))))
+      } else {
+        challengeIds.foreach(id => this.retrieveWritable(id, user))
+        dalManager.challenge.bulkArchive(challengeIds, archiving)
         Ok(Json.toJson(archiving))
-      } catch {
-        case e: Exception =>
-          logger.error(e.getMessage, e)
-          BadRequest(Json.toJson(StatusMessage("KO", JsString(e.getMessage))))
       }
     }
+  }
+
+  /**
+    * Retrieves a challenge, throwing NotFoundException if it does not exist and
+    * IllegalAccessException if the user lacks write access to it.
+    */
+  private def retrieveWritable(challengeId: Long, user: User): Challenge = {
+    val challenge = dalManager.challenge
+      .retrieveById(challengeId)
+      .getOrElse(throw new NotFoundException(s"No challenge found with id $challengeId"))
+    permission.hasObjectWriteAccess(challenge, user)
+    challenge
   }
 
   /**
@@ -1283,69 +1283,6 @@ class ChallengeController @Inject() (
       }
   }
 
-  /**
-    * Creates or updates a challenge directly from Github. It uses the following files:
-    * ${name}_create.json - The json file containing all the information to generate the file
-    * ${name}_geojson.json - The geojson used to build the challenge tasks, can be used to update later
-    * ${name}_info.md - An information file that will be used to display information about the challenge
-    *
-    * @param projectId The project that you are building the challenge under
-    * @param username  The github username of where the challenge information exists
-    * @param repo      The repo that the challenge information exists in
-    * @param name      The name of the challenge files.
-    * @return A response with the newly created challenge
-    */
-  def createFromGithub(
-      projectId: Long,
-      username: String,
-      repo: String,
-      name: String,
-      rebuild: Boolean
-  ): Action[AnyContent] = Action.async { implicit request =>
-    this.sessionManager.authenticatedFutureRequest { implicit user =>
-      val result  = Promise[Result]()
-      val baseURL = s"https://raw.githubusercontent.com/$username/$repo/master/${name}_";
-      this.wsClient.url(s"${baseURL}create.json").get() onComplete {
-        case Success(response) =>
-          try {
-            // inject the info link into the challenge
-            val challengeJson = Utils.insertIntoJson(
-              Utils.insertIntoJson(response.json, "infoLink", s"${baseURL}info.md", false),
-              "remoteGeoJson",
-              s"${baseURL}geojson_{x}.json",
-              true
-            )
-            val challengeName = (challengeJson \ "name").asOpt[String].getOrElse(name)
-            // look for the challenge, if the name exists we will attempt to update the challenge
-            val challengeID = this.dal.retrieveByName(challengeName, projectId) match {
-              case Some(c) => c.id
-              case None    => -1
-            }
-            val updatedBody =
-              this.updateCreateBody(Utils.insertIntoJson(challengeJson, "parent", projectId), user)
-            if (challengeID > 0) {
-              // if rebuild set to true, remove all the tasks first from the challenge before recreating them
-              this.dal.deleteTasks(user, challengeID)
-              // if you provide the ID in the post method we will send you to the update path
-              this.internalUpdate(updatedBody, user)(challengeID.toString, -1) match {
-                case Some(value) => result success Ok(this.inject(value))
-                case None        => result success NotModified
-              }
-            } else {
-              this.internalCreate(updatedBody, updatedBody.validate[Challenge].get, user) match {
-                case Some(value) => result success Ok(this.inject(value))
-                case None        => result success NotModified
-              }
-            }
-          } catch {
-            case e: Throwable => result success MPExceptionUtil.manageException(e)
-          }
-        case Failure(error) => throw error
-      }
-      result.future
-    }
-  }
-
   override def internalCreate(requestBody: JsValue, element: Challenge, user: User)(
       implicit c: Option[Connection] = None
   ): Option[Challenge] = {
@@ -1371,32 +1308,6 @@ class ChallengeController @Inject() (
   }
 
   /**
-    * Checks that any team the request wants to hand the challenge to is one
-    * the user is actually entitled to hand it to. Team ids are just numbers on
-    * the wire, so without this anyone could park a challenge under another
-    * team - taking that team's image onto the card and handing its managers a
-    * challenge they never asked for - simply by guessing an id.
-    *
-    * @param body The incoming challenge json
-    * @param user The user making the request
-    */
-  private def validateTeamAssignment(body: JsValue, user: User): Unit =
-    (body \ "ownerTeamId").toOption match {
-      case None | Some(JsNull) => // nothing to check; ownership is left alone
-      case Some(value) =>
-        val teamId = value
-          .asOpt[Long]
-          .getOrElse(throw new InvalidException("ownerTeamId must be a number"))
-        this.serviceManager.team.requireTeamManager(teamId, user, "challenges")
-    }
-
-  override def updateUpdateBody(body: JsValue, user: User): JsValue = {
-    val jsonBody = super.updateUpdateBody(body, user)
-    this.validateTeamAssignment(jsonBody, user)
-    jsonBody
-  }
-
-  /**
     * This function allows sub classes to modify the body, primarily this would be used for inserting
     * default elements into the body that shouldn't have to be required to create an object.
     *
@@ -1405,7 +1316,6 @@ class ChallengeController @Inject() (
     */
   override def updateCreateBody(body: JsValue, user: User): JsValue = {
     var jsonBody = super.updateCreateBody(body, user)
-    this.validateTeamAssignment(jsonBody, user)
     jsonBody = Utils.insertIntoJson(jsonBody, "owner", user.osmProfile.id, true)(LongWrites)
     jsonBody = Utils.insertIntoJson(jsonBody, "enabled", true)(BooleanWrites)
     jsonBody = Utils.insertIntoJson(jsonBody, "deleted", false)(BooleanWrites)
@@ -1541,7 +1451,9 @@ class ChallengeController @Inject() (
             val clonedChallenge = c.copy(
               id = -1,
               name = newName,
-              general = c.general.copy(parent = targetProjectId)
+              general = c.general
+                .copy(parent = targetProjectId, owner = user.osmProfile.id, featured = false),
+              extra = c.extra.copy(ownerTeamId = None)
             )
             Ok(Json.toJson(this.dal.insert(clonedChallenge, user)))
           case None =>
@@ -1803,17 +1715,9 @@ class ChallengeController @Inject() (
   def archiveChallenge(challengeId: Long): Action[JsValue] = Action.async(bodyParsers.json) {
     implicit request =>
       this.sessionManager.authenticatedRequest { implicit user =>
-        try {
-          val body      = request.body;
-          val archiving = (body \ "isArchived").asOpt[Boolean].getOrElse(true);
-          val result    = serviceManager.challenge.archiveChallenge(challengeId, archiving)
-
-          Ok(Json.toJson(result))
-        } catch {
-          case e: Exception =>
-            logger.error(e.getMessage, e)
-            BadRequest(Json.toJson(StatusMessage("KO", JsString(e.getMessage))))
-        }
+        this.retrieveWritable(challengeId, user)
+        val archiving = (request.body \ "isArchived").asOpt[Boolean].getOrElse(true)
+        Ok(Json.toJson(serviceManager.challenge.archiveChallenge(challengeId, archiving)))
       }
   }
 
