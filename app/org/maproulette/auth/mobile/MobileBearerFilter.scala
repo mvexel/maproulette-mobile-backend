@@ -209,12 +209,15 @@ object MobileFieldRoutes {
           "/oauth/mobile/token",
           "/oauth/mobile/revoke",
           "/oauth/mobile/guest",
-          "/api/v2/mobile-admin/clients"
+          "/api/v2/mobile-admin/clients",
+          "/api/v2/mobile-admin/projects"
         ).contains(request.path) || MobileGuestRoutes.own(request.method, request.path) ||
           MobileGuestRoutes.claimToken(request.method, request.path)
       case "PATCH" => request.path.matches("/api/v2/mobile-admin/clients/[A-Za-z0-9._-]+")
+      // Turning a project on or off lists or hides campaigns; it is not a task or OSM write.
       case "PUT" =>
         request.path == "/api/v2/mobile-admin/write-policy" ||
+          request.path.matches("/api/v2/mobile-admin/projects/[0-9]+/enabled") ||
           MobileGuestRoutes.email(request.method, request.path)
       case "DELETE" => MobileGuestRoutes.own(request.method, request.path)
       case _        => false
