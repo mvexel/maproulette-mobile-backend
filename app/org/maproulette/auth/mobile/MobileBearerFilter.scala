@@ -186,6 +186,14 @@ object MobileWriteRoutes {
   }
 }
 
+/** The live progress page (BACKLOG #12): its public read and its admin settings routes. */
+object MobileLiveRoutes {
+  def public(path: String): Boolean   = path.matches("/api/v2/live/[A-Za-z0-9_-]{43}")
+  def settings(path: String): Boolean = path.matches("/api/v2/mobile-admin/challenges/[0-9]+/live")
+  def rotate(path: String): Boolean =
+    path.matches("/api/v2/mobile-admin/challenges/[0-9]+/live/rotate")
+}
+
 /** During a field deployment's disabled phase, expose only the mobile login,
   * admin control, and known read routes. This also closes legacy session and
   * API-key write paths while the policy is off.
@@ -210,7 +218,7 @@ object MobileFieldRoutes {
     adminSetup || (request.method match {
       case "OPTIONS" => true
       case "GET" =>
-        request.path == "/ping" ||
+        request.path == "/ping" || MobileLiveRoutes.public(request.path) ||
           Set("/oauth/mobile/authorize", "/oauth/mobile/callback", "/oauth/mobile/me")
             .contains(request.path) ||
           // Guests neither write OSM nor change task status. The choice check is for guest
@@ -231,6 +239,7 @@ object MobileFieldRoutes {
           "/api/v2/mobile-admin/clients",
           "/api/v2/mobile-admin/projects"
         ).contains(request.path) || MobileGuestRoutes.own(request.method, request.path) ||
+          MobileLiveRoutes.rotate(request.path) ||
           MobileGuestRoutes.claimToken(request.method, request.path) ||
           // D13: the bearer filter below lets only the claim page's grant through.
           (bearer && MobileClaimRoutes.permits(request.method, request.path))
@@ -239,6 +248,8 @@ object MobileFieldRoutes {
       case "PUT" =>
         request.path == "/api/v2/mobile-admin/write-policy" ||
           request.path.matches("/api/v2/mobile-admin/projects/[0-9]+/enabled") ||
+          // The live page's settings: who may see progress, not a task or OSM write.
+          MobileLiveRoutes.settings(request.path) ||
           MobileGuestRoutes.email(request.method, request.path)
       case "DELETE" => MobileGuestRoutes.own(request.method, request.path)
       case _        => false

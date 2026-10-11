@@ -27,4 +27,4 @@ synced bbdc2d64 129
 138 fork mobile_claims, choice_pending.claim_id
 139 fork claim waited_at
 140 fork mobile_guests.claimed_user_id ON DELETE CASCADE
-141 reserved mobile_live_pages: live progress page tokens (BACKLOG #12)
+141 fork mobile_live_pages: live progress page tokens (BACKLOG #12)

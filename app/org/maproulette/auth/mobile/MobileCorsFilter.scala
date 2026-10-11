@@ -18,8 +18,9 @@ import scala.concurrent.ExecutionContext
   *   - The stock routes in [[MobileAdminRoutes]] answer the admin origin here, without
   *     credentials; every other origin still goes to Play's filter unchanged.
   *   - The claim page's routes (deferred sign-up: `/api/v2/mobile-claim...`, plus the token,
-  *     revoke and identity routes) answer the claim origin, without credentials. The claim
-  *     routes answer no other origin.
+  *     revoke and identity routes) and the live progress page's read (`/api/v2/live/:token`)
+  *     answer the claim origin, which serves the participant site, without credentials. They
+  *     answer no other origin.
   *   - Everything else goes to Play's filter unchanged.
   * With mobile OAuth disabled, every request goes to Play's filter.
   */
@@ -51,7 +52,8 @@ object MobileCorsFilter {
 
   /** Paths where only the admin origin (and for the claim routes, the claim origin) gets CORS. */
   def exclusive(path: String): Boolean =
-    MobileAdminRoutes.adminApi(path) || OAuthPaths.contains(path) || claimApi(path)
+    MobileAdminRoutes.adminApi(path) || OAuthPaths.contains(path) || claimApi(path) ||
+      MobileLiveRoutes.public(path)
 
   private def claimApi(path: String): Boolean =
     path == "/api/v2/mobile-claim" || path.matches("/api/v2/mobile-claim(/[A-Za-z0-9-]+)+")
@@ -65,8 +67,11 @@ object MobileCorsFilter {
         "/api/v2/mobile-claim/delete",
         "/api/v2/mobile-claim/stop-reminders"
       ).contains(path) || path.matches("/api/v2/mobile-claim/[0-9]+/retry")
-    case "GET" => path == "/oauth/mobile/me" || path.matches("/api/v2/mobile-claim/[0-9]+")
-    case _     => false
+    // The live progress page is served from the participant site too (BACKLOG #12).
+    case "GET" =>
+      path == "/oauth/mobile/me" || path.matches("/api/v2/mobile-claim/[0-9]+") ||
+        MobileLiveRoutes.public(path)
+    case _ => false
   }
   private def claimPath(path: String): Boolean =
     claimEligible("POST", path) || claimEligible("GET", path)
