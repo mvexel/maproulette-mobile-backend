@@ -41,7 +41,7 @@ class GuestJobRepositorySpec extends PlaySpec {
         SQL("INSERT INTO users VALUES(1)").executeUpdate()
         SQL("CREATE TABLE tasks(id bigint PRIMARY KEY)").execute()
         SQL("INSERT INTO tasks VALUES(1),(2)").executeUpdate()
-        Seq("129", "130", "131", "135", "137").foreach { version =>
+        Seq("129", "130", "131", "135", "137", "140").foreach { version =>
           val evolution = new String(
             Files.readAllBytes(Paths.get(s"conf/evolutions/default/$version.sql")),
             "UTF-8"
@@ -177,6 +177,25 @@ class GuestJobRepositorySpec extends PlaySpec {
         pendingStates(db) mustBe Seq(None -> "expired", Some(live) -> "pending")
         store.claimToken(MobileSecrets.hash(s"first-$gone")) mustBe None
         store.claimToken(MobileSecrets.hash(s"first-$live")).map(_.guest) mustBe Some(live)
+    }
+
+    "delete a claimed guest with its user, and expire the answers it leaves pending" in withStore {
+      (store, db) =>
+        val claimed = guest(db, now.plus(Duration.ofDays(20)))
+        val live    = guest(db, now.plus(Duration.ofDays(20)))
+        db.withConnection { implicit c =>
+          SQL("UPDATE mobile_guests SET claimed_user_id=1 WHERE id={id}::uuid")
+            .on("id" -> claimed.toString)
+            .executeUpdate()
+          SQL("DELETE FROM users WHERE id=1").executeUpdate() mustBe 1
+          SQL("SELECT count(*) FROM mobile_guests WHERE id={id}::uuid")
+            .on("id" -> claimed.toString)
+            .as(SqlParser.scalar[Long].single) mustBe 0
+        }
+        store.claimToken(MobileSecrets.hash(s"first-$claimed")) mustBe None
+        pendingStates(db) mustBe Seq(None -> "pending", Some(live) -> "pending")
+        store.purge(now.minus(Duration.ofDays(30))) mustBe 0
+        pendingStates(db) mustBe Seq(None -> "expired", Some(live) -> "pending")
     }
 
     "accept only a guest's three newest claim tokens" in withStore { (store, db) =>

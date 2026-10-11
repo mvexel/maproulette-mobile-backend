@@ -26,3 +26,4 @@ synced bbdc2d64 129
 137 fork choice_pending
 138 fork mobile_claims, choice_pending.claim_id
 139 fork claim waited_at
+140 fork mobile_guests.claimed_user_id ON DELETE CASCADE

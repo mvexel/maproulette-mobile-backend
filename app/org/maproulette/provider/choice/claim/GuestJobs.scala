@@ -41,7 +41,10 @@ trait GuestJobStore {
 
   def clearEmail(guest: UUID): Unit
 
-  /** Deletes unclaimed guests that expired before `before`. Their answers stay, without a guest. */
+  /**
+    * Deletes unclaimed guests that expired before `before`. Their answers stay, without a guest.
+    * Also expires pending answers that already lost their guest (a deleted user's claimed guest).
+    */
   def purge(before: Instant): Int
 
   /** The guest behind one of its three newest claim tokens; older and unknown tokens are None. */
@@ -143,6 +146,11 @@ class GuestJobRepository @Inject() (db: Database) extends GuestJobStore {
 
   override def purge(before: Instant): Int =
     db.withTransaction { implicit c =>
+      // Answers left without a guest while pending: deleting a user deletes the guest they claimed
+      // (evolution 140), and nothing would ever publish or expire those answers.
+      SQL("""UPDATE choice_pending SET state='expired', updated_at=now()
+        WHERE guest_id IS NULL AND state = 'pending'""")
+        .executeUpdate()
       // Anything still pending is expired first, so no answer outlives its guest as pending.
       SQL("""UPDATE choice_pending p SET state='expired', updated_at=now()
         FROM mobile_guests g WHERE p.guest_id = g.id AND p.state = 'pending'
