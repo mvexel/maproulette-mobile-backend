@@ -29,3 +29,4 @@ metals.sbt
 .env
 .env.*
 !.env.example
+__pycache__/
