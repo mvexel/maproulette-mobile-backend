@@ -193,6 +193,10 @@ object GuestJobs {
   /** How long a refused expiry notice is retried before the address is deleted anyway. */
   val NoticeRetry: Duration = Duration.ofDays(1)
 
+  /** Postmark refusing the address itself (300 invalid, 406 inactive): retrying won't help. */
+  def permanentRefusal(reason: String): Boolean =
+    reason == "postmark_422_300" || reason == "postmark_422_406"
+
   /** Expired guests are deleted this long after `expires_at`, keeping their answers for statistics. */
   val PurgeAfter: Duration = Duration.ofDays(30)
   val BatchSize            = 500
@@ -245,7 +249,8 @@ class GuestJobService @Inject() (
       case (Some(address), Some(summary)) if store.markReminded(due.guest, due.which, now) =>
         // Each email carries a fresh claim token; the stored hashes can't be turned back into links.
         val token = MobileSecrets.generate()
-        emailStore.addClaimToken(due.guest, MobileSecrets.hash(token), now)
+        val hash  = MobileSecrets.hash(token)
+        emailStore.addClaimToken(due.guest, hash, now)
         val values   = emails.linkValues(due.expiresAt, summary, token)
         val daysLeft = math.max(1L, Duration.between(now, due.expiresAt).plusHours(23).toDays)
         val subject = GuestJobs.reminderSubject(
@@ -263,7 +268,10 @@ class GuestJobService @Inject() (
             case Right(_) => true
             case Left(reason) =>
               logger.warn(s"Guest reminder ${due.which} not sent: $reason")
-              store.unmarkReminded(due.guest, due.which)
+              // Never emailed, so the token must not take one of the three newest places.
+              emailStore.removeClaimToken(hash)
+              // Retry next run unless the provider refused the address itself.
+              if (!GuestJobs.permanentRefusal(reason)) store.unmarkReminded(due.guest, due.which)
               false
           }
       case (None, _) =>
@@ -313,7 +321,7 @@ class GuestJobService @Inject() (
                 val purged = store.purge(now.minus(GuestJobs.PurgeAfter))
                 GuestJobReport(
                   reminded,
-                  expired + expireFailures,
+                  expired,
                   purged,
                   remindFailures + expireFailures
                 )
