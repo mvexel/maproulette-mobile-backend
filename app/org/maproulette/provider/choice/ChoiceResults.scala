@@ -151,8 +151,16 @@ object ChoiceResults {
     if (safe.exists(",\"\r\n".contains(_))) "\"" + safe.replace("\"", "\"\"") + "\"" else safe
   }
 
+  /** The note at the top of every export (i16): it names people. */
+  val Notice = "Contains OSM usernames; don't publish this file."
+
+  /** How many of the export's stops each person completed, keyed by OSM id (i16). */
+  def completedCounts(rows: Seq[ChoiceResultRow]): Map[Long, Int] =
+    rows.flatMap(_.completedByOsmId).groupBy(identity).map { case (id, ids) => id -> ids.size }
+
   def csv(rows: Seq[ChoiceResultRow]): String = {
     val questions = questionIds(rows)
+    val counts    = completedCounts(rows)
     val header = Seq(
       "task_id",
       "task_name",
@@ -163,6 +171,7 @@ object ChoiceResults {
       "status_name",
       "completed_by",
       "completed_by_osm_id",
+      "completed_by_count",
       "completed_at",
       "changeset_id",
       "stale_reason",
@@ -188,6 +197,7 @@ object ChoiceResults {
         statusName(row.status),
         text(row.completedBy.getOrElse("")),
         row.completedByOsmId.map(_.toString).getOrElse(""),
+        row.completedByOsmId.flatMap(counts.get).map(_.toString).getOrElse(""),
         row.completedAt.getOrElse(""),
         row.changesetId.map(_.toString).getOrElse(""),
         row.stale.getOrElse(""),
@@ -203,7 +213,7 @@ object ChoiceResults {
         row.reportCount.toString
       ) ++ questions.map(q => text(row.answers.getOrElse(q, "")))
     }
-    (header +: lines).map(_.mkString(",")).mkString("", "\r\n", "\r\n")
+    (Seq(s"# $Notice") +: header +: lines).map(_.mkString(",")).mkString("", "\r\n", "\r\n")
   }
 
   /** For a `moved` report, a second point at the reported spot, so both load into an editor. */
@@ -222,38 +232,43 @@ object ChoiceResults {
     )
   }
 
-  def geojson(rows: Seq[ChoiceResultRow]): JsObject = Json.obj(
-    "type" -> "FeatureCollection",
-    "features" -> rows.flatMap { row =>
-      val geometry = (row.lon, row.lat) match {
-        case (Some(lon), Some(lat)) =>
-          Json.obj("type" -> "Point", "coordinates" -> Json.arr(lon, lat))
-        case _ => JsNull
+  def geojson(rows: Seq[ChoiceResultRow]): JsObject = {
+    val counts = completedCounts(rows)
+    Json.obj(
+      "type"   -> "FeatureCollection",
+      "notice" -> Notice,
+      "features" -> rows.flatMap { row =>
+        val geometry = (row.lon, row.lat) match {
+          case (Some(lon), Some(lat)) =>
+            Json.obj("type" -> "Point", "coordinates" -> Json.arr(lon, lat))
+          case _ => JsNull
+        }
+        Json.obj(
+          "type"     -> "Feature",
+          "id"       -> row.taskId,
+          "geometry" -> geometry,
+          "properties" -> Json.obj(
+            "taskId"           -> row.taskId,
+            "taskName"         -> row.name,
+            "element"          -> row.element,
+            "status"           -> row.status,
+            "statusName"       -> statusName(row.status),
+            "completedBy"      -> row.completedBy,
+            "completedByOsmId" -> row.completedByOsmId,
+            "completedByCount" -> row.completedByOsmId.flatMap(counts.get),
+            "completedAt"      -> row.completedAt,
+            "changesetId"      -> row.changesetId,
+            "staleReason"      -> row.stale,
+            "answers"          -> row.answers,
+            "tagsSet"          -> row.set,
+            "tagsUnset"        -> row.unset,
+            "deleted"          -> row.deleted,
+            "outcome"          -> row.outcome,
+            "outcomeLabel"     -> row.outcomeLabel,
+            "reportCount"      -> row.reportCount
+          )
+        ) +: reportedFeature(row).toSeq
       }
-      Json.obj(
-        "type"     -> "Feature",
-        "id"       -> row.taskId,
-        "geometry" -> geometry,
-        "properties" -> Json.obj(
-          "taskId"           -> row.taskId,
-          "taskName"         -> row.name,
-          "element"          -> row.element,
-          "status"           -> row.status,
-          "statusName"       -> statusName(row.status),
-          "completedBy"      -> row.completedBy,
-          "completedByOsmId" -> row.completedByOsmId,
-          "completedAt"      -> row.completedAt,
-          "changesetId"      -> row.changesetId,
-          "staleReason"      -> row.stale,
-          "answers"          -> row.answers,
-          "tagsSet"          -> row.set,
-          "tagsUnset"        -> row.unset,
-          "deleted"          -> row.deleted,
-          "outcome"          -> row.outcome,
-          "outcomeLabel"     -> row.outcomeLabel,
-          "reportCount"      -> row.reportCount
-        )
-      ) +: reportedFeature(row).toSeq
-    }
-  )
+    )
+  }
 }

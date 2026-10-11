@@ -99,11 +99,16 @@ answers (`{"<question id>": "<option id>"}`, stored since evolution 134; empty f
 older submissions) and the applied tag changes. `format` defaults to `csv`; anything other than
 `csv` or `geojson` is 400 `invalid_request`. An unknown challenge is 404 `not_found`.
 
-- `csv`: `text/csv`, CRLF lines, one `answer:<question id>` column per question answered anywhere
-  in the challenge. `tags_set` is `key=value;…`, `tags_unset` is `key;…`. Text cells that start
+Both formats name people, so both carry the note "Contains OSM usernames; don't publish this
+file." (i16). `completed_by_count` is how many of the challenge's tasks that person completed, for
+thank-yous. It is only in this export, never on the live page or in the app.
+
+- `csv`: `text/csv`, CRLF lines. The first line is the note as `# …`, then the header row. One
+  `answer:<question id>` column per question answered anywhere in the challenge. `tags_set` is `key=value;…`, `tags_unset` is `key;…`. Text cells that start
   with `= + - @` get a leading `'` so spreadsheets don't run them.
-- `geojson`: `application/geo+json`, a FeatureCollection of task points with the same fields as
-  properties (`answers` and `tagsSet` as objects).
+- `geojson`: `application/geo+json`, a FeatureCollection with the note as a top-level `notice`
+  member, of task points with the same fields as properties (`answers` and `tagsSet` as objects,
+  `completedByCount`).
 
 Both carry `Content-Disposition: attachment; filename="challenge-<id>-results.<format>"`.
 
