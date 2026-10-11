@@ -261,6 +261,31 @@ class ClaimPublishSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll
       run()
       store.claims(9).state mustBe "done"
     }
+
+    "stay waiting, not failed, when writes come back on right after parking a claim" in new Fixture(
+      Map(1L -> Seq(published), 2L -> Seq(published))
+    ) {
+      claim()
+      // On for the run and row 1, off when row 2 is checked, on again by the time the run decides.
+      val switch = mutable.Queue(true, true, false)
+      when(preview.writesEnabled).thenAnswer(_ => if (switch.isEmpty) true else switch.dequeue())
+      run()
+      store.state(1) mustBe "published"
+      store.state(2) mustBe "pending"
+      store.claims(9).state mustBe "waiting"
+      mailer.sent mustBe empty
+      emails.tokens mustBe empty
+    }
+
+    "keep no link when the sign-in-again email is refused" in new Fixture(
+      Map(1L -> Seq(PendingOutcome.Reauth))
+    ) {
+      claim(rows = Seq(row(1)))
+      mailer.fail = true
+      run()
+      store.claims(9).state mustBe "failed"
+      emails.tokens mustBe empty
+    }
   }
 
   "notAddedLine" should {

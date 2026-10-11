@@ -54,7 +54,7 @@ object MobileCorsFilter {
     MobileAdminRoutes.adminApi(path) || OAuthPaths.contains(path) || claimApi(path)
 
   private def claimApi(path: String): Boolean =
-    path == "/api/v2/mobile-claim" || path.matches("/api/v2/mobile-claim/[A-Za-z0-9-]+")
+    path == "/api/v2/mobile-claim" || path.matches("/api/v2/mobile-claim(/[A-Za-z0-9-]+)+")
 
   /** What the claim page calls (API plan §5). */
   def claimEligible(method: String, path: String): Boolean = method match {
@@ -97,7 +97,8 @@ object MobileCorsFilter {
     val preflight = request.method == "OPTIONS" && requested.isDefined
     val isAdmin   = adminOrigin.isDefined && origin == adminOrigin
     val isClaim   = claimOrigin.isDefined && origin == claimOrigin && claimPath(path)
-    val adminPath = exclusive(path) ||
+    // The claim API answers the claim origin only (API plan §5), never the admin one.
+    val adminPath = MobileAdminRoutes.adminApi(path) || OAuthPaths.contains(path) ||
       eligible(if (preflight) requested.get else request.method, path)
     def allowed(method: String) =
       if (isClaim) claimEligible(method, path) else eligible(method, path)

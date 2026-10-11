@@ -65,6 +65,9 @@ trait GuestEmailStore {
   def sendsSince(guest: UUID, since: Instant): Int
 
   def addClaimToken(guest: UUID, tokenHash: String, now: Instant): Unit
+
+  /** Drops a token whose email the provider refused: it was never sent, so it holds no place. */
+  def removeClaimToken(tokenHash: String): Unit
 }
 
 @Singleton
@@ -100,6 +103,14 @@ class GuestEmailRepository @Inject() (db: Database) extends GuestEmailStore {
       SQL("""INSERT INTO mobile_guest_claim_tokens (token_hash,guest_id,created_at)
         VALUES ({token},{id}::uuid,{now})""")
         .on("token" -> tokenHash, "id" -> guest.toString, "now" -> stamp(now))
+        .executeUpdate()
+      ()
+    }
+
+  override def removeClaimToken(tokenHash: String): Unit =
+    db.withConnection { implicit c =>
+      SQL("DELETE FROM mobile_guest_claim_tokens WHERE token_hash={token}")
+        .on("token" -> tokenHash)
         .executeUpdate()
       ()
     }
@@ -227,19 +238,25 @@ class GuestEmailService @Inject() (
               if (!store.setEmail(guest.id, sealedEmail, now)) Left(GuestEmailError.GuestClaimed)
               else {
                 val token = MobileSecrets.generate()
-                store.addClaimToken(guest.id, MobileSecrets.hash(token), now)
+                val hash  = MobileSecrets.hash(token)
+                store.addClaimToken(guest.id, hash, now)
                 Right(
-                  ClaimEmails.render(ClaimEmails.Claim, address, claimValues(guest, summary, token))
+                  (
+                    ClaimEmails
+                      .render(ClaimEmails.Claim, address, claimValues(guest, summary, token)),
+                    hash
+                  )
                 )
               }
           }
       }.flatMap {
         case Left(error) => Future.successful(Left(error))
-        case Right(message) =>
+        case Right((message, hash)) =>
           mailer.send(message).map {
             case Right(_) => Right(guest.copy(emailSet = true, emailVerified = false))
             case Left(reason) =>
               logger.error(s"Guest link email not sent: $reason")
+              store.removeClaimToken(hash)
               Left(GuestEmailError.MailUnavailable)
           }
       }

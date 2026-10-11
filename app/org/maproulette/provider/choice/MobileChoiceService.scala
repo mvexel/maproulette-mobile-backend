@@ -51,7 +51,12 @@ case class Report(kind: String, location: Option[ReportLocation], distanceM: Opt
 }
 
 /** An idempotency row of mobile_choice_submissions. */
-case class SubmissionRow(state: String, changesetId: Option[Long], result: Option[JsObject])
+case class SubmissionRow(
+    state: String,
+    changesetId: Option[Long],
+    result: Option[JsObject],
+    answers: Option[JsObject] = None
+)
 
 /**
   * A submission body that parsed and resolved against its task's payload. `body` is the canonical
@@ -409,13 +414,20 @@ class MobileChoiceService @Inject() (
 
   private def row(taskId: Long, userId: Long, key: String): Option[SubmissionRow] =
     db.withConnection { implicit c =>
-      SQL"""SELECT state, changeset_id, result_json::text AS result FROM mobile_choice_submissions
+      SQL"""SELECT state, changeset_id, result_json::text AS result, answers::text AS answers
+            FROM mobile_choice_submissions
             WHERE task_id = $taskId AND user_id = $userId AND submission_key = $key"""
         .as(
           (SqlParser.str("state") ~ SqlParser.get[Option[Long]]("changeset_id") ~
-            SqlParser.get[Option[String]]("result")).map {
-            case state ~ changeset ~ result =>
-              SubmissionRow(state, changeset, result.map(Json.parse(_).as[JsObject]))
+            SqlParser.get[Option[String]]("result") ~ SqlParser
+            .get[Option[String]]("answers")).map {
+            case state ~ changeset ~ result ~ answers =>
+              SubmissionRow(
+                state,
+                changeset,
+                result.map(Json.parse(_).as[JsObject]),
+                answers.map(Json.parse(_).as[JsObject])
+              )
           }.singleOpt
         )
     }
@@ -462,6 +474,18 @@ class MobileChoiceService @Inject() (
               WHERE task_id = $taskId AND user_id = $userId AND submission_key = $key
               AND attempt = $attempt AND state = 'started'""".executeUpdate(),
       "record a changeset"
+    )
+
+    /** The answers about to be uploaded, so a resumed attempt reports what reached OSM. */
+    def uploading(answers: JsObject): Unit = fenced(
+      implicit c => {
+        val json = Json.stringify(answers)
+        SQL"""UPDATE mobile_choice_submissions SET answers = CAST($json AS jsonb),
+              updated_at = NOW()
+              WHERE task_id = $taskId AND user_id = $userId AND submission_key = $key
+              AND attempt = $attempt AND state = 'started'""".executeUpdate()
+      },
+      "record the answers"
     )
     def uploaded(cs: Long): Unit = fenced(
       implicit c =>
@@ -600,13 +624,35 @@ class MobileChoiceService @Inject() (
         Future.successful(PendingOutcome.Failed((response.body \ "error").as[String]))
       case Right(valid) if valid.payloadDigest != row.payloadDigest =>
         Future.successful(PendingOutcome.Superseded(None))
-      case Right(valid)
-          if !PendingOpenStatuses.contains(valid.task.status.getOrElse(Task.STATUS_CREATED)) =>
-        Future.successful(PendingOutcome.Superseded(agrees(valid.task.id, valid.body)))
       case Right(valid) =>
         val key = digest(s"pending:${row.id}")
-        run(valid.task, valid.work, valid.plan, user, familyId, key, pendingPublish = true)
-          .map(pendingOutcome)
+        // This answer's own submission row first: if an earlier run uploaded it, or even wrote the
+        // status, the task is no longer open because of this answer, and the row says how it went.
+        val ours = this.row(valid.task.id, user.id, key).isDefined
+        if (!ours && !PendingOpenStatuses.contains(
+              valid.task.status.getOrElse(Task.STATUS_CREATED)
+            ))
+          Future.successful(PendingOutcome.Superseded(agrees(valid.task.id, valid.body)))
+        else
+          run(valid.task, valid.work, valid.plan, user, familyId, key, pendingPublish = true)
+            .map(pendingOutcome)
+    }
+
+  /**
+    * The plan an earlier attempt actually uploaded, from the answers it recorded: a pending answer
+    * may have dropped some (step 3), and a resume must report those as dropped, not applied.
+    */
+  private def uploadedPlan(
+      plan: ChoicePlan,
+      recorded: Option[JsObject],
+      pendingPublish: Boolean
+  ): (ChoicePlan, JsObject) =
+    (plan, recorded) match {
+      case (edit: EditTags, Some(sent)) if pendingPublish =>
+        val (kept, lost) = edit.answers.partition { case (q, _) => sent.keys.contains(q.id) }
+        (EditTags(kept), Json.obj("dropped" -> lost.map(_._1.id)))
+      case _ if pendingPublish => (plan, Json.obj("dropped" -> Json.arr()))
+      case _                   => (plan, Json.obj())
     }
 
   /** Task statuses a pending answer may still complete: Created, Skipped and Too hard. */
@@ -656,18 +702,20 @@ class MobileChoiceService @Inject() (
     val claim = new Claim(task.id, user.id, key)
     row(task.id, user.id, key) match {
       // Before the lock check: a completed submission resent gets the same answer.
-      case Some(SubmissionRow("done", _, Some(result))) => done(ChoiceResponse(200, result))
+      case Some(SubmissionRow("done", _, Some(result), _)) => done(ChoiceResponse(200, result))
       // Uploaded but the status write did not commit: finish it, never upload twice. The status
       // write itself refuses if another user holds the lock.
-      case Some(SubmissionRow("uploaded", cs, _)) => done(finish(task.id, user, key, plan, cs))
-      case Some(SubmissionRow("started", cs, _)) =>
+      case Some(SubmissionRow("uploaded", cs, _, recorded)) =>
+        val (sent, extra) = uploadedPlan(plan, recorded, pendingPublish)
+        done(finish(task.id, user, key, sent, cs, extra))
+      case Some(SubmissionRow("started", cs, _, recorded)) =>
         if (!claim.take()) done(pending)
         else
           cs match {
             // The outcome of an earlier upload is unknown: OSM tells.
             case Some(id) =>
               withToken(claim, familyId, user)(token =>
-                resume(claim, task, work, plan, user, familyId, token, id)
+                resume(claim, task, work, plan, user, familyId, token, id, recorded, pendingPublish)
               )
             case None =>
               fresh(claim, task, work, plan, user, familyId, rowExists = true, pendingPublish)
@@ -734,7 +782,9 @@ class MobileChoiceService @Inject() (
       user: User,
       familyId: String,
       token: String,
-      cs: Long
+      cs: Long,
+      recorded: Option[JsObject] = None,
+      pendingPublish: Boolean = false
   ): Future[ChoiceResponse] = {
     val attempt = Attempt(claim, task, work, plan, user, familyId, token)
     osm
@@ -742,12 +792,17 @@ class MobileChoiceService @Inject() (
       .transformWith {
         case Success(count) if count > 0 =>
           claim.uploaded(cs)
-          attempt.closeQuietly(cs).map(_ => finish(task.id, user, claim.key, plan, Some(cs)))
+          val (sent, extra) = uploadedPlan(plan, recorded, pendingPublish)
+          attempt
+            .closeQuietly(cs)
+            .map(_ => finish(task.id, user, claim.key, sent, Some(cs), extra))
         case Success(_) =>
           claim.changeset(None)
           attempt
             .closeQuietly(cs)
-            .flatMap(_ => fresh(claim, task, work, plan, user, familyId, rowExists = true))
+            .flatMap(_ =>
+              fresh(claim, task, work, plan, user, familyId, rowExists = true, pendingPublish)
+            )
         case Failure(OsmCallException(401 | 403, _, _)) => done(attempt.unauthorized(None))
         case Failure(e) =>
           logger.error(
@@ -901,6 +956,11 @@ class MobileChoiceService @Inject() (
     private def upload(found: ElementFound, cs: Long, retried: Boolean): Future[ChoiceResponse] = {
       def end(response: ChoiceResponse): Future[ChoiceResponse] = {
         claim.drop(); closeQuietly(cs).map(_ => response)
+      }
+      plan match {
+        case edit: EditTags =>
+          claim.uploading(JsObject(edit.answers.map { case (q, o) => q.id -> JsString(o.id) }))
+        case _ =>
       }
       osm.upload(cs, change(found, cs), token).transformWith {
         case Success((200, _)) =>
