@@ -1,0 +1,338 @@
+{
+  "version": 1,
+  "challenge": {
+    "name": "Woodbine entrance doors",
+    "description": "Help map the doors around Woodbine Food Hall. At each entrance, check how the door opens and whether it opens by itself, so people with wheelchairs, strollers or walkers know what to expect.",
+    "instruction": "Survey the door at the mapped entrance node. Sets door=* and automatic_door=* only when missing. No geometry changes.",
+    "checkinComment": "Street Tally: entrance doors near Woodbine Food Hall #StreetTallyWoodbine https://wiki.openstreetmap.org/wiki/Organised_Editing/Activities/Street_Tally_Woodbine_Entrances",
+    "checkinSource": "survey"
+  },
+  "match": {},
+  "matchKeys": [
+    "entrance"
+  ],
+  "questions": [
+    {
+      "id": "door-type",
+      "prompt": "How does this door open?",
+      "description": "Look only at the door at this entrance.",
+      "expect": {
+        "door": null
+      },
+      "options": [
+        {
+          "id": "hinged",
+          "label": "Swings open",
+          "setTags": {
+            "door": "hinged"
+          }
+        },
+        {
+          "id": "sliding",
+          "label": "Slides sideways",
+          "setTags": {
+            "door": "sliding"
+          }
+        },
+        {
+          "id": "revolving",
+          "label": "Revolves",
+          "setTags": {
+            "door": "revolving"
+          }
+        },
+        {
+          "id": "folding",
+          "label": "Folds",
+          "setTags": {
+            "door": "folding"
+          }
+        }
+      ]
+    },
+    {
+      "id": "automatic-opening",
+      "prompt": "Does it open by itself?",
+      "description": "A door that's propped open doesn't count.",
+      "expect": {
+        "automatic_door": null
+      },
+      "options": [
+        {
+          "id": "no",
+          "label": "No, you push or pull it",
+          "setTags": {
+            "automatic_door": "no"
+          }
+        },
+        {
+          "id": "button",
+          "label": "Yes, with a button",
+          "setTags": {
+            "automatic_door": "button"
+          }
+        },
+        {
+          "id": "motion",
+          "label": "Yes, when you walk up",
+          "setTags": {
+            "automatic_door": "motion"
+          }
+        },
+        {
+          "id": "yes",
+          "label": "Yes, not sure how",
+          "setTags": {
+            "automatic_door": "yes"
+          }
+        }
+      ]
+    }
+  ],
+  "outcomes": [
+    {
+      "id": "no-door",
+      "label": "There's no door",
+      "description": "It's an open doorway or a gate.",
+      "status": 6
+    }
+  ],
+  "features": {
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -111.906812,
+            40.7538166
+          ]
+        },
+        "properties": {
+          "@id": "node/14178183367",
+          "entrance": "main"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -111.9068124,
+            40.7535743
+          ]
+        },
+        "properties": {
+          "@id": "node/14178183369",
+          "entrance": "yes"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -111.9056331,
+            40.7527671
+          ]
+        },
+        "properties": {
+          "@id": "node/14178183390",
+          "entrance": "main"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -111.9078998,
+            40.7561096
+          ]
+        },
+        "properties": {
+          "@id": "node/10290204107",
+          "entrance": "yes"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -111.9015878,
+            40.7565212
+          ]
+        },
+        "properties": {
+          "@id": "node/12790552134",
+          "entrance": "yes"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -111.9005183,
+            40.7521289
+          ]
+        },
+        "properties": {
+          "@id": "node/13689903758",
+          "entrance": "main"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -111.9015054,
+            40.7567798
+          ]
+        },
+        "properties": {
+          "@id": "node/13302228244",
+          "entrance": "yes"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -111.8991422,
+            40.7558555
+          ]
+        },
+        "properties": {
+          "@id": "node/14013712692",
+          "door": "automatic",
+          "entrance": "main"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -111.9004649,
+            40.7580994
+          ]
+        },
+        "properties": {
+          "@id": "node/10290204100",
+          "entrance": "main"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -111.9000327,
+            40.7487836
+          ]
+        },
+        "properties": {
+          "@id": "node/13202963757",
+          "entrance": "yes"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -111.8999773,
+            40.7485544
+          ]
+        },
+        "properties": {
+          "@id": "node/13202963756",
+          "entrance": "yes"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -111.8980614,
+            40.7495887
+          ]
+        },
+        "properties": {
+          "@id": "node/12644721386",
+          "access": "yes",
+          "door": "hinged",
+          "entrance": "shop",
+          "wheelchair": "limited"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -111.8959973,
+            40.7499525
+          ]
+        },
+        "properties": {
+          "@id": "node/12646613396",
+          "entrance": "yes"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -111.8955832,
+            40.7495785
+          ]
+        },
+        "properties": {
+          "@id": "node/12646613395",
+          "access": "yes",
+          "addr:housenumber": "161",
+          "addr:street": "West 900 South",
+          "door": "hinged",
+          "entrance": "shop",
+          "wheelchair": "limited"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -111.9016133,
+            40.7449888
+          ]
+        },
+        "properties": {
+          "@id": "node/11284032024",
+          "entrance": "main"
+        }
+      },
+      {
+        "type": "Feature",
+        "geometry": {
+          "type": "Point",
+          "coordinates": [
+            -111.9023026,
+            40.7630632
+          ]
+        },
+        "properties": {
+          "@id": "node/11990542516",
+          "entrance": "yes"
+        }
+      }
+    ]
+  }
+}

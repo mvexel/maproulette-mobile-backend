@@ -1236,4 +1236,133 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
       found(Some(List(3)), excludeStale = true) must contain(task.id)
     }
   }
+
+  /**
+    * W1 tag safety: the Woodbine survey as the admin generator imports it
+    * (test/fixtures/woodbine-tasks.geojsonl, generated from test/fixtures/woodbine-survey.json).
+    * Every answer must add exactly its own door=* or automatic_door=* tag to the matched entrance
+    * node and leave every other tag as it was.
+    */
+  "The Woodbine survey" should {
+    lazy val lines = scala.io.Source
+      .fromFile("test/fixtures/woodbine-tasks.geojsonl")
+      .getLines()
+      .filter(_.trim.nonEmpty)
+      .map(Json.parse(_).as[JsObject])
+      .toList
+    lazy val woodbine = challengeDAL.insert(
+      Challenge(
+        -1,
+        "woodbineEntranceDoors",
+        null,
+        null,
+        general = ChallengeGeneral(
+          User.superUser.osmProfile.id,
+          defaultProject.id,
+          "Survey the door at the mapped entrance node.",
+          enabled = true,
+          checkinComment =
+            "Street Tally: entrance doors near Woodbine Food Hall #StreetTallyWoodbine",
+          checkinSource = "survey"
+        ),
+        creation = ChallengeCreation(),
+        priority = ChallengePriority(),
+        extra = ChallengeExtra()
+      ),
+      User.superUser
+    )
+    def snapshot(line: JsObject): Map[String, String] =
+      ((line \ "features")(0) \ "properties").as[Map[String, String]] - "@id"
+    // A fresh copy of the entrance (its real OSM tags) and its task, under a new node id.
+    def entrance(line: JsObject): (Task, Long) = {
+      nextNode += 1
+      val node = nextNode
+      osm.put("node", node, snapshot(line))
+      val work = (line \ "cooperativeWork").as[JsObject] ++ Json.obj("element" -> s"node/$node")
+      val task = taskDAL.insert(
+        Task(
+          -1,
+          s"node/$node",
+          null,
+          null,
+          woodbine.id,
+          geometries = Json.obj("features" -> (line \ "features").as[JsArray]),
+          cooperativeWork = Some(work),
+          status = Some(Task.STATUS_CREATED)
+        ),
+        User.superUser
+      )
+      (task, node)
+    }
+
+    "import as 16 valid choice tasks, each matching its node's own entrance value" taggedAs ChoiceTag in {
+      lines.size mustBe 16
+      lines.foreach { line =>
+        val work = ChoiceWork.validate((line \ "cooperativeWork").as[JsObject]).toOption.get
+        work.matchTags mustBe Map("entrance" -> snapshot(line)("entrance"))
+        work.liveMissingQuestions mustBe true
+        work.outcomes.map(o => (o.id, o.status, o.delete, o.description)) mustBe
+          List(("no-door", Some(6), false, Some("It's an open doorway or a gate.")))
+        work.questions.flatMap(_.expect.keys).toSet mustBe
+          Set("door", "automatic_door").filterNot(snapshot(line).contains)
+      }
+    }
+
+    "set exactly the answered tag on the entrance node and touch nothing else" taggedAs ChoiceTag in {
+      for {
+        line <- lines
+        question <- ChoiceWork
+          .validate((line \ "cooperativeWork").as[JsObject])
+          .toOption
+          .get
+          .questions
+        option <- question.options
+      } {
+        val (task, node) = entrance(line)
+        lock(task)
+        val response = submit(task, s"""{"answers": {"${question.id}": "${option.id}"}}""")
+        withClue(
+          s"${(line \ "cooperativeWork" \ "element").as[String]} ${question.id}=${option.id}: "
+        ) {
+          response.status mustBe 200
+          option.unsetTags mustBe empty
+          option.setTags.keySet mustBe question.expect.keySet
+          Set("door", "automatic_door") must contain(option.setTags.keys.head)
+          osm.elements(("node", node)).tags mustBe snapshot(line) ++ option.setTags
+          lastChangeset._2.tags("source") mustBe "survey"
+          lastChangeset._2.tags("comment") must include("#StreetTallyWoodbine")
+          fresh(task)._1 mustBe Task.STATUS_FIXED
+        }
+      }
+    }
+
+    "answer both questions in one edit, adding only door and automatic_door" taggedAs ChoiceTag in {
+      val line         = lines.find(l => !snapshot(l).contains("door")).get
+      val (task, node) = entrance(line)
+      lock(task)
+      submit(task, """{"answers": {"door-type": "sliding", "automatic-opening": "motion"}}""").status mustBe 200
+      osm.elements(("node", node)).tags mustBe
+        snapshot(line) ++ Map("door" -> "sliding", "automatic_door" -> "motion")
+    }
+
+    "close the task as needing another look on There's no door, without touching OSM" taggedAs ChoiceTag in {
+      val (task, node) = entrance(lines.head)
+      lock(task)
+      val uploads = osm.uploadCount
+      submit(task, """{"outcome": "no-door"}""").status mustBe 200
+      osm.uploadCount mustBe uploads
+      osm.elements(("node", node)).tags mustBe snapshot(lines.head)
+      fresh(task)._1 mustBe Task.STATUS_TOO_HARD
+    }
+
+    "refuse an answer once the node is no longer that kind of entrance" taggedAs ChoiceTag in {
+      val line         = lines.find(l => snapshot(l)("entrance") == "main").get
+      val (task, node) = entrance(line)
+      lock(task)
+      osm.edit("node", node)(_ + ("entrance" -> "service"))
+      val uploads = osm.uploadCount
+      submit(task, """{"answers": {"automatic-opening": "no"}}""").status mustBe 409
+      osm.uploadCount mustBe uploads
+    }
+  }
 }
