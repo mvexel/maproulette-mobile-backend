@@ -8,6 +8,10 @@ POST    /oauth/mobile/consent                                           @control
 POST    /oauth/mobile/token                                             @controllers.MobileOAuthController.token
 POST    /oauth/mobile/revoke                                            @controllers.MobileOAuthController.revoke
 GET     /oauth/mobile/me                                                @controllers.MobileOAuthController.me
+# Deferred sign-up guests (fork): 404 unless mobileOAuth.guests.enabled, see docs/mobile-oauth.md "Guests"
+POST    /oauth/mobile/guest                                             @controllers.MobileGuestController.register
+GET     /api/v2/mobile-guest/me                                         @controllers.MobileGuestController.me
+DELETE  /api/v2/mobile-guest                                            @controllers.MobileGuestController.delete
 # Mobile admin API (fork): mobile:admin bearer grants of super-users only, see docs/mobile-admin-api.md
 GET     /api/v2/mobile-admin/clients                                    @controllers.MobileAdminController.listClients
 POST    /api/v2/mobile-admin/clients                                    @controllers.MobileAdminController.createClient
