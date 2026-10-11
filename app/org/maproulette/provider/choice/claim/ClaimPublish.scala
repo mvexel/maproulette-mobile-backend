@@ -192,7 +192,11 @@ class ClaimPublishService @Inject() (
   private sealed trait Step
   private case object Next      extends Step
   private case object Published extends Step
-  private case object Stop      extends Step
+
+  /** Why a claim's run stopped early: writes went off, or OSM refused the claim's token. */
+  private sealed trait Stop        extends Step
+  private case object WritesOff    extends Stop
+  private case object TokenRefused extends Stop
 
   private def result(outcome: PendingOutcome): Option[(String, JsObject)] = outcome match {
     case PendingOutcome.Published(body) => Some("published" -> body)
@@ -207,10 +211,10 @@ class ClaimPublishService @Inject() (
   private def publishRow(claim: OpenClaim, user: User, item: ClaimRow, now: Instant): Future[Step] =
     if (!preview.writesEnabled) {
       store.setState(claim.id, "waiting", now)
-      Future.successful(Stop)
+      Future.successful(WritesOff)
     } else
       choice.publishPending(item.row, user, claim.familyId).map {
-        case PendingOutcome.Reauth                 => Stop
+        case PendingOutcome.Reauth                 => TokenRefused
         case PendingOutcome.Retry("lock_required") => Next
         case PendingOutcome.Retry(code) =>
           if (store.attempt(item.row.id, now) >= ClaimPublish.MaxAttempts)
@@ -223,16 +227,20 @@ class ClaimPublishService @Inject() (
           if (outcome.isInstanceOf[PendingOutcome.Published]) Published else Next
       }
 
-  private def rows(claim: OpenClaim, user: User, now: Instant): Future[(Int, Int, Boolean)] =
-    store.rows(claim.id).foldLeft(Future.successful((0, 0, false))) {
+  private def rows(
+      claim: OpenClaim,
+      user: User,
+      now: Instant
+  ): Future[(Int, Int, Option[Stop])] =
+    store.rows(claim.id).foldLeft(Future.successful((0, 0, Option.empty[Stop]))) {
       case (previous, item) =>
         previous.flatMap {
-          case stopped @ (_, _, true) => Future.successful(stopped)
-          case (published, settled, _) =>
+          case stopped @ (_, _, Some(_)) => Future.successful(stopped)
+          case (published, settled, None) =>
             publishRow(claim, user, item, now).map {
-              case Published => (published + 1, settled + 1, false)
-              case Next      => (published, settled, false)
-              case Stop      => (published, settled, true)
+              case Published  => (published + 1, settled + 1, None)
+              case Next       => (published, settled, None)
+              case stop: Stop => (published, settled, Some(stop))
             }
         }
     }
@@ -258,9 +266,10 @@ class ClaimPublishService @Inject() (
       case Some((guest, summary)) =>
         // A new link: the stored token hashes can't be turned back into links.
         val token = MobileSecrets.generate()
-        emailStore.addClaimToken(guest, MobileSecrets.hash(token), now)
+        val hash  = MobileSecrets.hash(token)
+        emailStore.addClaimToken(guest, hash, now)
         send(guest, ClaimEmails.Reauth, mail => emails.linkValues(mail.expiresAt, summary, token))
-          .map(_ => ())
+          .map(sent => if (!sent) emailStore.removeClaimToken(hash))
       case None => Future.successful(())
     }
 
@@ -307,12 +316,13 @@ class ClaimPublishService @Inject() (
         case Some(user) =>
           if (claim.state != "running") store.setState(claim.id, "running", now)
           rows(claim, user, now).flatMap {
-            case (published, settled, true) if preview.writesEnabled =>
-              // Stopped with writes on: the OSM token was refused.
+            case (published, settled, Some(TokenRefused)) =>
               store.setState(claim.id, "failed", now)
               reauth(claim, now).map(_ => (published, settled, false))
-            case (published, settled, true) => Future.successful((published, settled, true))
-            case (published, settled, false) =>
+            // Parked as waiting by publishRow; writes coming back on meanwhile changes nothing.
+            case (published, settled, Some(WritesOff)) =>
+              Future.successful((published, settled, true))
+            case (published, settled, None) =>
               if (store.counts(claim.id).getOrElse("pending", 0) > 0)
                 Future.successful((published, settled, false))
               else {

@@ -883,9 +883,50 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
       osm.elements(("node", node)).tags mustBe
         Map("amenity" -> "bench", "backrest" -> "yes", "capacity" -> "3")
       fresh(task) mustBe ((Task.STATUS_FIXED, Some(cs)))
-      // The task is complete now, so a rerun of the row is superseded and agrees.
-      publish(row) mustBe PendingOutcome.Superseded(Some(true))
+      // A rerun after a crash before the row was settled: the task is Fixed by this very answer,
+      // and its own submission row says so. Same result, no second upload.
+      publish(row) mustBe outcome
       osm.uploadCount mustBe before + 1
+      // Another row with the same answer is superseded, and agrees.
+      publish(pendingRow(task, """{"answers": {"capacity": "c3", "backrest": "yes"}}""")) mustBe
+        PendingOutcome.Superseded(Some(true))
+    }
+
+    "finish a claimed answer whose status write failed, without a second upload" taggedAs ChoiceTag in {
+      val (task, node) = benchTask()
+      osm.edit("node", node)(_ + ("backrest" -> "yes"))
+      val row = pendingRow(task, """{"answers": {"capacity": "c3", "backrest": "no"}}""")
+      service.failStatus = true
+      try publish(row) mustBe PendingOutcome.Retry("status_pending")
+      finally service.failStatus = false
+      val uploads = osm.uploadCount
+      publish(row) match {
+        case PendingOutcome.Published(body) =>
+          (body \ "dropped").as[List[String]] mustBe List("backrest")
+          (body \ "applied" \ "set").as[JsObject] mustBe Json.obj("capacity" -> "3")
+        case other => fail(s"unexpected $other")
+      }
+      osm.uploadCount mustBe uploads
+      answers(task) mustBe Some(Json.obj("capacity" -> "c3"))
+    }
+
+    "resume a claimed answer whose upload landed unseen, reporting what was dropped" taggedAs ChoiceTag in {
+      val (task, node) = benchTask()
+      osm.edit("node", node)(_ + ("backrest" -> "yes"))
+      val row = pendingRow(task, """{"answers": {"capacity": "c3", "backrest": "no"}}""")
+      osm.uploadPlan.enqueue("500-applied")
+      publish(row) mustBe PendingOutcome.Retry("osm_unavailable")
+      val (cs, _) = lastChangeset
+      val uploads = osm.uploadCount
+      publish(row) match {
+        case PendingOutcome.Published(body) =>
+          (body \ "changesetId").as[Long] mustBe cs
+          (body \ "dropped").as[List[String]] mustBe List("backrest")
+          (body \ "applied" \ "set").as[JsObject] mustBe Json.obj("capacity" -> "3")
+        case other => fail(s"unexpected $other")
+      }
+      osm.uploadCount mustBe uploads
+      answers(task) mustBe Some(Json.obj("capacity" -> "c3"))
     }
 
     "drop the answers whose guard fails and apply the rest" taggedAs ChoiceTag in {
