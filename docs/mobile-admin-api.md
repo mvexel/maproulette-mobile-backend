@@ -169,7 +169,7 @@ exist.
 
 Any of `{"enabled": bool, "showAnswers": bool, "eventStart": "<ISO 8601 instant>"|null,
 "ended": bool}`; fields left out keep their value. The first PUT creates the page: on, answers
-hidden, live, no event start. `ended: true` ends live mode and keeps the first end time; `false`
+shown, live, no event start. `ended: true` ends live mode and keeps the first end time; `false`
 makes the page live again. `eventStart` turns on the people count (people who saved a stop since
 then); `null` turns it off. Records `live.create` or `live.update`, with the settings but not the
 token. `200` with the settings, `400 invalid_request`, or `404 not_found`.

@@ -10,7 +10,7 @@ CREATE TABLE mobile_live_pages (
   token        text NOT NULL UNIQUE,
   enabled      boolean NOT NULL DEFAULT true,
   -- Per-stop answers on the shared page. Off leaves them out of the response, not just the UI.
-  show_answers boolean NOT NULL DEFAULT false,
+  show_answers boolean NOT NULL DEFAULT true,
   -- "People tonight" counts distinct savers since this time, and there is no count without it.
   event_start  timestamptz,
   -- Set: the page shows final totals and the date, with no recent or people counts.
