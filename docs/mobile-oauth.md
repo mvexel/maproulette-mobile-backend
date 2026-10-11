@@ -248,6 +248,22 @@ submission for a task is unfinished, others get `409 submission_pending`.
 | 502 | `osm_unavailable` |
 | 503 | `osm_edits_unavailable` (no token key configured) |
 
+## Guests (deferred sign-up)
+
+*In progress.* A guest answers choice tasks before having an OSM account; the answers wait on the
+backend until the person signs in with OSM and claims them. Design and the full HTTP contract:
+`deferred-signup-api.md` in the project's design folder. This section grows with each step.
+
+So far (step B1):
+
+- `mobileOAuth.guests.enabled` (`MR_MOBILE_GUESTS_ENABLED`, default `false`; needs `enabled`).
+- Scope `guest` is a **client** capability, never part of a grant: an app client's `scopes` may add
+  `"guest"` (`["tasks:read", "tasks:write", "osm:tagfix", "guest"]`); admin clients may not.
+  `/oauth/mobile/authorize` and refresh still reject `guest` as `invalid_scope`.
+- Evolution 135 adds `mobile_guests`, `mobile_guest_tokens` and `mobile_guest_claim_tokens`. A
+  guest is never a `users` row. Secrets and tokens are stored as SHA-256 digests; "delete my data"
+  clears the secret, email and tokens and leaves a tombstone.
+
 ## Account identity
 
 The mobile callback verifies the person's numeric OSM user ID and looks up the

@@ -47,7 +47,7 @@ object MobileClientRows {
         row[String]("id"),
         row[String]("name"),
         row[Array[String]]("redirect_uris").toSet,
-        MobileScopes.parse(row[String]("scopes")).getOrElse(Set.empty),
+        MobileScopes.parseClient(row[String]("scopes")).getOrElse(Set.empty),
         row[Boolean]("enabled")
       )
     )
