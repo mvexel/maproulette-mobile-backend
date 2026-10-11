@@ -168,7 +168,7 @@ exist.
 ### `PUT /api/v2/mobile-admin/challenges/:id/live`
 
 Any of `{"enabled": bool, "showAnswers": bool, "eventStart": "<ISO 8601 instant>"|null,
-"ended": bool}`; fields left out keep their value. The first PUT creates the page: on, answers
+"ended": bool}`; fields left out keep their value. The first PUT creates the page: off unless it sets `enabled: true`, answers
 shown, live, no event start. `ended: true` ends live mode and keeps the first end time; `false`
 makes the page live again. `eventStart` turns on the people count (people who saved a stop since
 then); `null` turns it off. Records `live.create` or `live.update`, with the settings but not the

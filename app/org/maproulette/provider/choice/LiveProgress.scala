@@ -114,7 +114,7 @@ class LivePageRepository @Inject() (db: Database) {
       .as(SqlParser.scalar[Boolean].single)
   }
 
-  /** Creates the page on first use (on, answers shown, live) and applies `update`. */
+  /** Creates the page on first use (off until enabled, answers shown, live) and applies `update`. */
   def save(challengeId: Long, update: LivePageUpdate): LivePage = db.withTransaction { implicit c =>
     SQL"""INSERT INTO mobile_live_pages (challenge_id, token) VALUES ($challengeId, ${newToken()})
             ON CONFLICT (challenge_id) DO NOTHING""".execute()

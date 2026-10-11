@@ -110,12 +110,12 @@ class LivePageSpec(implicit val application: Application) extends FrameworkHelpe
   }
 
   "A live page" should {
-    "be created on first save, link-only with answers shown, and keep its first end time" taggedAs ChoiceTag in {
+    "be created off on first save, with answers shown, and keep its first end time" taggedAs ChoiceTag in {
       pages.byChallenge(challenge.id) mustBe None
       val created = pages.save(challenge.id, LivePageUpdate())
       created.token must fullyMatch regex "[A-Za-z0-9_-]{43}"
       (created.enabled, created.showAnswers, created.eventStart, created.endedAt) mustBe
-        (true, true, None, None)
+        (false, true, None, None)
       pages.byToken(created.token).map(_.challengeId) mustBe Some(challenge.id)
 
       val start = Instant.parse("2026-10-18T23:00:00Z")

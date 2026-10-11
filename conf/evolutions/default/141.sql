@@ -8,7 +8,7 @@
 CREATE TABLE mobile_live_pages (
   challenge_id bigint PRIMARY KEY REFERENCES challenges(id) ON DELETE CASCADE,
   token        text NOT NULL UNIQUE,
-  enabled      boolean NOT NULL DEFAULT true,
+  enabled      boolean NOT NULL DEFAULT false,
   -- Per-stop answers on the shared page. Off leaves them out of the response, not just the UI.
   show_answers boolean NOT NULL DEFAULT true,
   -- "People tonight" counts distinct savers since this time, and there is no count without it.
