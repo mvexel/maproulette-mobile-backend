@@ -174,6 +174,14 @@ class ClaimPreviewSpec extends PlaySpec {
       }
       from("https://admin.example", "POST", "/oauth/mobile/token") mustBe
         AllowOrigin("https://admin.example")
+      // The admin origin is not the claim page: no CORS on the claim API, simple or preflighted.
+      from("https://admin.example", "POST", "/api/v2/mobile-claim/preview") mustBe Plain
+      from("https://admin.example", "OPTIONS", "/api/v2/mobile-claim", Some("POST")) match {
+        case Preflight(result) => result.header.status mustBe 403
+        case other             => fail(other.toString)
+      }
+      // Deeper claim paths stay exclusive too, so Play's CORS never answers them.
+      from("https://evil.example", "POST", "/api/v2/mobile-claim/9/retry") mustBe Plain
       from("https://claim.example", "GET", "/api/v2/challenges/extendedFind") mustBe Delegate
     }
   }
