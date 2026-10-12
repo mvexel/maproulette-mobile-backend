@@ -183,17 +183,21 @@ class MobileChoicePendingSpec(implicit val application: Application) extends Fra
 
       val csv    = ChoiceResults.csv(Seq(row)).split("\r\n").toSeq
       val header = csv(1).split(",").toSeq
-      header.takeRight(4) mustBe Seq(
+      header.takeRight(6) mustBe Seq(
         "pending_count",
         "pending_outcomes",
         "pending:backrest",
-        "pending:material"
+        "pending:material",
+        "skipped_count",
+        "skipped_reasons"
       )
-      csv(2).split(",", -1).takeRight(4).toSeq mustBe Seq(
+      csv(2).split(",", -1).takeRight(6).toSeq mustBe Seq(
         "4",
         "Not a bench 1",
         "yes 2;no 1",
-        "wood 1"
+        "wood 1",
+        "0",
+        ""
       )
       val properties =
         (ChoiceResults.geojson(Seq(row)) \ "features" \ 0 \ "properties").as[JsObject]
@@ -202,6 +206,29 @@ class MobileChoicePendingSpec(implicit val application: Application) extends Fra
         .map(p => (p \ "answers").as[JsObject]) must contain(
         Json.obj("backrest" -> "yes", "material" -> "wood")
       )
+      Json.stringify(properties) must not include ("guest")
+    }
+
+    "count answers the publish guard skipped in the results, by reason (G1)" taggedAs ChoiceTag in {
+      val (task, _) = benchTask(identity)
+      submit(guest(), task, """{"answers":{"backrest":"yes"}}""").status mustBe 200
+      submit(guest(), task, """{"answers":{"backrest":"no"}}""").status mustBe 200
+      submit(guest(), task, """{"answers":{"material":"wood"}}""").status mustBe 200
+      db.withConnection { implicit c =>
+        SQL"""UPDATE choice_pending SET state = 'skipped_stale',
+                result = '{"reason":"key_changed"}'::jsonb
+              WHERE task_id = ${task.id} AND body->'answers'->>'backrest' IS NOT NULL"""
+          .executeUpdate()
+      }
+      val row =
+        new ChoiceResultsRepository(db).results(challenge.id).get.find(_.taskId == task.id).get
+      row.skipped mustBe Seq("key_changed", "key_changed")
+      row.pending.size mustBe 1
+      ChoiceResults.csv(Seq(row)).split("\r\n")(2).split(",", -1).takeRight(2).toSeq mustBe
+        Seq("2", "key_changed 2")
+      val properties =
+        (ChoiceResults.geojson(Seq(row)) \ "features" \ 0 \ "properties").as[JsObject]
+      (properties \ "skippedReasons").as[JsObject] mustBe Json.obj("key_changed" -> 2)
       Json.stringify(properties) must not include ("guest")
     }
 
@@ -219,10 +246,9 @@ class MobileChoicePendingSpec(implicit val application: Application) extends Fra
       await(service.withdraw(g, task.id)).status mustBe 404
     }
 
-    "refuse fixed-question tasks, deletes and completed tasks" taggedAs ChoiceTag in {
+    "accept fixed-question tasks (G1), and refuse deletes and completed tasks" taggedAs ChoiceTag in {
       val g = guest()
-      code(submit(g, benchTask(identity)._1, """{"answers":{"backrest":"yes"}}""")) mustBe
-        Some("unsupported_task")
+      submit(g, benchTask(identity)._1, """{"answers":{"backrest":"yes"}}""").status mustBe 200
       code(submit(g, benchTask()._1, """{"outcome":"gone","delete":true}""")) mustBe
         Some("invalid_submission")
       code(submit(g, benchTask()._1, """{"answers":{"nope":"yes"}}""")) mustBe

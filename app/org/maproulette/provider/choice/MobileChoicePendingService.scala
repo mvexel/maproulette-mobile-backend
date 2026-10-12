@@ -76,8 +76,6 @@ class MobileChoicePendingService @Inject() (
   def submit(guest: MobileGuest, taskId: Long, body: String): Future[ChoiceResponse] =
     Future(choice.validateSubmission(taskId, body)).flatMap {
       case Left(response) => done(response)
-      case Right(valid) if !valid.work.liveMissingQuestions =>
-        done(error(422, "unsupported_task"))
       case Right(valid) if valid.plan == DeleteNode =>
         done(
           error(422, "invalid_submission", "detail" -> "delete is not allowed for pending answers")
@@ -107,9 +105,11 @@ class MobileChoicePendingService @Inject() (
                   )
                 )
               case response
-                  if answered(valid.plan)
+                  if valid.work.liveMissingQuestions && answered(valid.plan)
                     .exists(id => !(response.body \ "questionIds").as[List[String]].contains(id)) =>
-                // A chosen question was answered in OSM meanwhile, as in submit.
+                // A chosen question was answered in OSM meanwhile, as in submit. Only a
+                // live-filtered campaign's check lists questionIds; a fixed one's guard is the
+                // eligibility above, re-checked at publish (G1).
                 done(
                   error(409, "task_ineligible", "reason" -> "key_changed", "detail" -> Json.arr())
                 )
