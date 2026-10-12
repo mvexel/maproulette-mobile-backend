@@ -152,6 +152,73 @@ turning it on lists those that are enabled and published. Records `project.enabl
 `project.disable` with the project after the change. Repeating the current value is a no-op.
 `200` with the project, or `404 not_found`.
 
+## Live progress page
+
+BACKLOG #12 (the project's design/live-progress.md). One link-only page per campaign (evolution
+141), reached by an unguessable token instead of the challenge id. The participant site serves it at
+`/live/<token>` and reads the public route below.
+
+### `GET /api/v2/mobile-admin/challenges/:id/live`
+
+`200` with the page's settings:
+`{"challengeId", "token", "enabled", "showAnswers", "eventStart", "endedAt", "updatedAt"}`.
+`404 no_live_page` when the campaign has none yet, `404 not_found` when the challenge doesn't
+exist.
+
+### `PUT /api/v2/mobile-admin/challenges/:id/live`
+
+Any of `{"enabled": bool, "showAnswers": bool, "eventStart": "<ISO 8601 instant>"|null,
+"ended": bool}`; fields left out keep their value. The first PUT creates the page: off unless it sets `enabled: true`, answers
+shown, live, no event start. `ended: true` ends live mode and keeps the first end time; `false`
+makes the page live again. `eventStart` turns on the people count (people who saved a stop since
+then); `null` turns it off. Records `live.create` or `live.update`, with the settings but not the
+token. `200` with the settings, `400 invalid_request`, or `404 not_found`.
+
+### `POST /api/v2/mobile-admin/challenges/:id/live/rotate`
+
+A new token; the old link answers `404 not_found` from then on. Records `live.rotate`. `200` with
+the settings, or `404 no_live_page`.
+
+### `GET /api/v2/live/:token` (public)
+
+No credential. `Cache-Control: no-store`, `X-Robots-Tag: noindex`, `Referrer-Policy: no-referrer`.
+`404 not_found` for an unknown or rotated token, `404 turned_off` for a page that is off. Open while
+field writes are off. CORS answers only the claim origin (`MR_CLAIM_ORIGIN`), which serves the
+participant site.
+
+```json
+{
+  "campaign": {"name": "Woodbine entrances", "hashtags": ["#StreetTallyWoodbine"],
+               "match": {"entrance": "main"}},
+  "mode": "live",
+  "answersShown": true,
+  "generatedAt": "2026-10-18T23:30:12Z",
+  "tally": {"checked": 9, "total": 16, "needsLook": 1, "people": 4},
+  "stops": [
+    {"id": 812, "lon": -111.9068, "lat": 40.7537, "state": "checked", "name": "Granary Live",
+     "at": "2026-10-18T23:12:00Z",
+     "answers": [{"question": "How does this door open?", "answer": "Swings open"}]},
+    {"id": 813, "lon": -111.9070, "lat": 40.7541, "state": "look", "at": "2026-10-18T23:20:00Z",
+     "reported": "There's no door"},
+    {"id": 814, "lon": -111.9059, "lat": 40.7530, "state": "todo", "ref": "B"}
+  ]
+}
+```
+
+- `state`: `checked` is status 1, 2 or 5, or a live pending guest answer (the excludePending
+  rule) whose outcome isn't a status-6 one. `look` ("Needs another look") is status 6, or a live
+  pending answer with a status-6 outcome: `too-hard`, `not-here`, `moved`, or a campaign outcome
+  declared with status 6. `todo` is status 0 or 3. Other tasks, and stale tasks still open, are
+  left out. `tally.total` counts the stops listed.
+- `at`: when the stop was checked or reported, cut to the minute. There's none on `todo`.
+- `answers` (question prompt and answer label, in question order) and `reported` (the outcome's
+  label, or "It's moved about 40 m") appear only when `answersShown`. They never appear for a
+  pending guest answer. A reported spot is never sent.
+- `tally.people` appears only while live with an event start. `endedAt` appears when ended.
+- `campaign.match` is the first task's identity guard, so the page can name its places as the
+  apps do. `hashtags` come from the changeset comment.
+- The response never carries a user, guest, OSM element or changeset.
+
 ## Field write policy
 
 On deployments using `conf/mobile-field.conf`,

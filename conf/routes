@@ -31,10 +31,15 @@ GET     /api/v2/mobile-admin/audit                                      @control
 GET     /api/v2/mobile-admin/write-policy                               @controllers.MobileAdminController.getWritePolicy
 PUT     /api/v2/mobile-admin/write-policy                               @controllers.MobileAdminController.setWritePolicy
 GET     /api/v2/mobile-admin/challenges/:id/results                     @controllers.MobileResultsController.results(id:Long, format:String ?= "csv")
+GET     /api/v2/mobile-admin/challenges/:id/live                        @controllers.MobileLiveController.get(id:Long)
+PUT     /api/v2/mobile-admin/challenges/:id/live                        @controllers.MobileLiveController.update(id:Long)
+POST    /api/v2/mobile-admin/challenges/:id/live/rotate                 @controllers.MobileLiveController.rotate(id:Long)
 GET     /api/v2/mobile-admin/campaigns                                  @controllers.MobileCampaignController.listCampaigns
 GET     /api/v2/mobile-admin/projects                                   @controllers.MobileCampaignController.listProjects
 POST    /api/v2/mobile-admin/projects                                   @controllers.MobileCampaignController.createProject
 PUT     /api/v2/mobile-admin/projects/:id/enabled                       @controllers.MobileCampaignController.setProjectEnabled(id:Long)
+# Live progress page (fork, BACKLOG #12): public and link-only, by an unguessable token
+GET     /api/v2/live/:token                                             @controllers.MobileLiveController.show(token:String)
 # Authentication Routes
 GET     /auth/authenticate                                              @controllers.AuthController.authenticate(redirectUri: String ?= "")
 GET     /auth/callback                                                  @controllers.AuthController.callback(code: String, state: String)
