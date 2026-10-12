@@ -314,9 +314,14 @@ tasks with a pending answer whose hold has not ended (next to `excludeStale`). `
 is not filtered.
 
 `includePending=true` on `tasks/box` keeps held tasks and adds `"pending": true|false` to each task,
-so the app can count a held task as Checked in its tally and leave it out of Nearest. The flag is
-yes/no only: nothing about the guest or the answer. Without the parameter the response is unchanged.
-`ChoicePendingStore.held` is the shared lookup for any other progress read.
+so the app can count a held task as Checked in its tally and leave it out of Nearest. It also adds
+`"heldKind"`: `"answer"` when the latest live pending answer is an answer or an outcome that counts
+as done, `"report"` when that outcome would set status 6 (too-hard, not-here, moved, or a campaign
+outcome with `status: 6`), and `null` when the task isn't held. A `report` hold shows as "Needs
+another look", isn't counted as Checked and isn't offered by Nearest, the same rule as the live page
+(design/not-here-moved.md §3.3, T-002). Nothing about the guest or the answer itself. Without the
+parameter the response is unchanged. `ChoicePendingStore.held` and `heldKinds` are the shared
+lookups for any other progress read.
 
 A guest token reaches only `MobileGuestRoutes`: the discovery reads of `MobileReadRoutes`, including
 `choice/check` (but not `/oauth/mobile/me`), pending answers and its own routes. It is never a

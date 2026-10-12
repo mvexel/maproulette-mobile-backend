@@ -83,8 +83,10 @@ class TaskController @Inject() (
 
   /**
     * Fork: with `includePending=true`, each task gets `"pending": true|false`, whether a live
-    * pending guest answer holds it (deferred sign-up). Yes/no only: nothing about the guest or the
-    * answer. Without the parameter the response is unchanged.
+    * pending guest answer holds it (deferred sign-up), and `"heldKind"`: `"answer"`, `"report"`
+    * (the hold's outcome would set status 6, so the stop "Needs another look"), or null when not
+    * held. Nothing about the guest or the answer itself. Without the parameter the response is
+    * unchanged.
     */
   private def withPending(
       json: JsValue,
@@ -94,12 +96,14 @@ class TaskController @Inject() (
   ): JsValue =
     if (!request.getQueryString("includePending").contains("true")) json
     else {
-      val held = pending.held(tasks.map(_.id))
+      val held = pending.heldKinds(tasks.map(_.id))
       json match {
         case JsArray(items) =>
           JsArray(items.map {
             case task: JsObject =>
-              task + ("pending" -> JsBoolean((task \ "id").asOpt[Long].exists(held.contains)))
+              val kind = (task \ "id").asOpt[Long].flatMap(held.get)
+              task + ("pending" -> JsBoolean(kind.isDefined)) +
+                ("heldKind"     -> kind.map(JsString).getOrElse(JsNull))
             case other => other
           })
         case other => other
