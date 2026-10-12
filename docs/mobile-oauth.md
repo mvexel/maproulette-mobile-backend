@@ -309,7 +309,8 @@ guest); `502 osm_unavailable`; `401 invalid_token` if the guest was deleted, cla
 the meantime. Evolution 137 adds `choice_pending`; "delete my data" deletes the guest's answers that
 are still pending. Publishing a claimed answer re-checks each answered question's `expect` against
 the element as it is then, for absent tags and fixed values alike; an answer whose guard no longer
-holds ends `skipped_stale` with its reason, and the campaign results count it.
+holds ends `skipped_stale` with its reason, and the campaign results count it. Status-only and report answers (too hard, an outcome, not here, moved) write no tags, so they
+publish without this re-check.
 
 Discovery: `excludePending=true` on `tasks/box`, `markers/box` and the cluster routes leaves out
 tasks with a pending answer whose hold has not ended (next to `excludeStale`). `challenge/:id/tasks`

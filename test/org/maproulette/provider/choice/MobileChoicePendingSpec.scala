@@ -249,6 +249,9 @@ class MobileChoicePendingSpec(implicit val application: Application) extends Fra
     "accept fixed-question tasks (G1), and refuse deletes and completed tasks" taggedAs ChoiceTag in {
       val g = guest()
       submit(g, benchTask(identity)._1, """{"answers":{"backrest":"yes"}}""").status mustBe 200
+      val (changed, _) = benchTask(identity, Map("amenity" -> "bench", "backrest" -> "no"))
+      val ineligible   = submit(g, changed, """{"answers":{"backrest":"yes"}}""")
+      (ineligible.status, (ineligible.body \ "reason").as[String]) mustBe ((409, "key_changed"))
       code(submit(g, benchTask()._1, """{"outcome":"gone","delete":true}""")) mustBe
         Some("invalid_submission")
       code(submit(g, benchTask()._1, """{"answers":{"nope":"yes"}}""")) mustBe
