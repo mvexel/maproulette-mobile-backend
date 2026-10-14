@@ -158,6 +158,7 @@ Off by default (`mobileOAuth.guests.enabled`). See [mobile-oauth.md](mobile-oaut
 | `MobileChoiceService.validateSubmission`: parsing and payload checks shared by submit and pending answers | `app/org/maproulette/provider/choice/MobileChoiceService.scala` |
 | `excludePending=true`: leave out tasks held by a pending answer | `SearchParameters.scala` (`excludePending`), `TaskClusterService.scala` (`excludeStaleChoiceTasks`) |
 | Campaign results count guest answers the publish guard skipped (`skipped_count`, `skipped_reasons`) | `app/org/maproulette/provider/choice/ChoiceResults.scala` |
+| `includePending=true` on `tasks/box`: `pending` and `heldKind` (`answer`/`report`/null) per task | `TaskController.scala` (`withPending`), `ChoicePendingRepository.scala` (`held`, `heldKinds`) |
 | `choice/check` accepts guest tokens | `app/org/maproulette/controllers/api/MobileChoiceController.scala` |
 | Routes `GET /api/v2/mobile-guest/pending`, `POST` and `DELETE /api/v2/task/:id/choice/pending` | `conf/routes` |
 

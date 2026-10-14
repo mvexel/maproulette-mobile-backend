@@ -5,6 +5,7 @@ import java.sql.Timestamp
 import java.time.Instant
 import java.util.UUID
 import javax.inject.{Inject, Singleton}
+import org.maproulette.framework.model.Task
 import play.api.db.Database
 import play.api.libs.json.{JsObject, Json}
 
@@ -69,6 +70,18 @@ trait ChoicePendingStore {
 
   /** Which of these tasks a live pending answer holds (the same rows `excludePending` hides). */
   def held(taskIds: Seq[Long]): Set[Long]
+
+  /**
+    * The held tasks among these, each with the kind of its latest live pending answer: `report` when
+    * its outcome would set status 6 (too-hard, not-here, moved, or a campaign outcome with status
+    * 6), otherwise `answer`. The same rule as the live page's "Needs another look".
+    */
+  def heldKinds(taskIds: Seq[Long]): Map[Long, String]
+}
+
+object ChoicePendingStore {
+  val Answer = "answer"
+  val Report = "report"
 }
 
 @Singleton
@@ -198,5 +211,30 @@ class ChoicePendingRepository @Inject() (db: Database) extends ChoicePendingStor
         ).on("ids" -> taskIds.distinct)
           .as(SqlParser.long("task_id").*)
           .toSet
+      }
+
+  override def heldKinds(taskIds: Seq[Long]): Map[Long, String] =
+    if (taskIds.isEmpty) Map.empty
+    else
+      db.withConnection { implicit c =>
+        SQL(
+          """SELECT DISTINCT ON (p.task_id) p.task_id, p.body->>'outcome' AS outcome,
+                    t.cooperative_work_json::text AS payload
+             FROM choice_pending p JOIN tasks t ON t.id = p.task_id
+             WHERE p.task_id IN ({ids}) AND p.state = 'pending' AND p.hold_until > NOW()
+             ORDER BY p.task_id, p.answered_at DESC"""
+        ).on("ids" -> taskIds.distinct)
+          .as(
+            (SqlParser.long("task_id") ~ SqlParser.get[Option[String]]("outcome") ~
+              SqlParser.get[Option[String]]("payload")).*
+          )
+          .map {
+            case taskId ~ outcome ~ payload =>
+              val report = outcome.exists(o =>
+                LiveProgress.outcomeStatus(o, payload.map(Json.parse)) == Task.STATUS_TOO_HARD
+              )
+              taskId -> (if (report) ChoicePendingStore.Report else ChoicePendingStore.Answer)
+          }
+          .toMap
       }
 }

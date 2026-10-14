@@ -387,5 +387,48 @@ class MobileChoicePendingSpec(implicit val application: Application) extends Fra
       flags("&excludePending=true").keySet must not contain held.id
       new ChoicePendingRepository(db).held(Seq(held.id, free.id, held.id)) mustBe Set(held.id)
     }
+
+    "say whether a held task holds an answer or a status-6 report (T-002)" taggedAs ChoiceTag in {
+      import play.api.test.FakeRequest
+      import play.api.test.Helpers.{contentAsJson, defaultAwaitTimeout, GET, OK}
+      val controller =
+        application.injector.instanceOf[org.maproulette.framework.controller.TaskController]
+      def kinds(query: String): Map[Long, JsValue] = {
+        val result = controller
+          .getTasksInBoundingBox(-180, -85, 180, 85, 5000, 0, false)
+          .apply(FakeRequest(GET, s"/api/v2/tasks/box/-180/-85/180/85?cid=${challenge.id}$query"))
+        play.api.test.Helpers.status(result) mustBe OK
+        contentAsJson(result)
+          .as[JsArray]
+          .value
+          .map { t =>
+            (t \ "id").as[Long] -> (t \ "heldKind").toOption.getOrElse(JsString("absent"))
+          }
+          .toMap
+      }
+      val (answered, _) = benchTask()
+      val (notHere, _)  = benchTask()
+      val (tooHard, _)  = benchTask()
+      val (gone, _)     = benchTask()
+      val (free, _)     = benchTask()
+      submit(guest(), answered, """{"answers":{"backrest":"yes"}}""").status mustBe 200
+      submit(guest(), notHere, """{"outcome":"not-here"}""").status mustBe 200
+      submit(guest(), tooHard, """{"outcome":"too-hard"}""").status mustBe 200
+      // A delete outcome without delete:true closes as false positive (2): counted, not a report.
+      submit(guest(), gone, """{"outcome":"gone"}""").status mustBe 200
+      val held = kinds("&includePending=true")
+      held(answered.id) mustBe JsString("answer")
+      held(notHere.id) mustBe JsString("report")
+      held(tooHard.id) mustBe JsString("report")
+      held(gone.id) mustBe JsString("answer")
+      held(free.id) mustBe JsNull
+      kinds("").values.toSet mustBe Set(JsString("absent"))
+
+      // The latest live answer decides: a later answer on the reported stop makes it an answer.
+      submit(guest(), notHere, """{"answers":{"backrest":"no"}}""").status mustBe 200
+      kinds("&includePending=true")(notHere.id) mustBe JsString("answer")
+      new ChoicePendingRepository(db).heldKinds(Seq(tooHard.id, free.id)) mustBe
+        Map(tooHard.id -> "report")
+    }
   }
 }
