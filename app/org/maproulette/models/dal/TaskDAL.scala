@@ -1142,8 +1142,9 @@ class TaskDAL @Inject() (
     * Links the task to a changeset the client names explicitly, instead of matching one
     * heuristically. The task must be fixed, the requesting user must have marked it fixed,
     * and the changeset must be closed, belong to that user, and have been opened close to
-    * the time the task was marked fixed. Unlike the heuristic match, this is not gated on
-    * changeset matching being enabled, since it makes a single lookup on the user's behalf.
+    * the time the task was marked fixed. It has its own switch,
+    * maproulette.tasks.changesets.linkEnabled (on by default), separate from heuristic
+    * matching, since it makes a single lookup on the user's behalf.
     *
     * @param task        The task that was fixed
     * @param user        The user making the request
@@ -1151,6 +1152,12 @@ class TaskDAL @Inject() (
     * @return The task with its changeset id updated
     */
   def linkOSMChangeSet(task: Task, user: User, changesetId: Long): Future[Task] = {
+    if (!config.changeSetLinkEnabled) {
+      throw new CodedIllegalAccessException(
+        "Linking changesets to tasks is disabled on this server.",
+        ErrorCodes.LinkDisabled
+      )
+    }
     if (changesetId <= 0) {
       throw new InvalidException(
         s"Invalid changeset id $changesetId.",
