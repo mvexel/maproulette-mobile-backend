@@ -40,7 +40,7 @@ trait MobileDrafts {
     * True when the task is a multiple-choice task (`cooperativeWork.meta.type = 3`); false when it
     * is not or is unknown. App grants change its status only through `POST /task/:id/choice`.
     */
-  def choiceTask(taskId: Long): Boolean = false
+  def choiceTask(taskId: Long): Boolean
 }
 
 object MobileDrafts {
@@ -48,6 +48,7 @@ object MobileDrafts {
   /** Everything is published (unit tests of other filter behaviour). */
   val NoDrafts: MobileDrafts = new MobileDrafts {
     def draft(target: MobileDraftRoutes.Target): Boolean = false
+    def choiceTask(taskId: Long): Boolean                = false
   }
 }
 

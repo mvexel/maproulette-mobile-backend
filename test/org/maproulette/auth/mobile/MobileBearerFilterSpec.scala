@@ -638,6 +638,7 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
         case MobileDraftRoutes.Challenge(id) => id == 7
         case MobileDraftRoutes.Task(id)      => id == 70
       }
+      def choiceTask(taskId: Long): Boolean = false
     }
     def draftFilter(superUser: Boolean) = {
       val oauth = mock[MobileOAuthService]
@@ -704,7 +705,7 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
     // Task 80 is a multiple-choice task; task 81 is not.
     val choices = new MobileDrafts {
       def draft(target: MobileDraftRoutes.Target): Boolean = false
-      override def choiceTask(taskId: Long): Boolean       = taskId == 80
+      def choiceTask(taskId: Long): Boolean                = taskId == 80
     }
     def choiceFilter(scopedGrant: MobileGrant) = {
       val oauth = mock[MobileOAuthService]

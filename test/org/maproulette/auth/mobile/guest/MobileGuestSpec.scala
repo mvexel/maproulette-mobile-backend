@@ -415,6 +415,7 @@ class MobileGuestSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll 
           case MobileDraftRoutes.Challenge(id) => id == 7
           case MobileDraftRoutes.Task(id)      => id == 70
         }
+        def choiceTask(taskId: Long): Boolean = false
       }
       val gated = new MobileBearerFilter(
         settings(),
