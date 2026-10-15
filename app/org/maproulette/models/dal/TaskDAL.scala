@@ -18,6 +18,7 @@ import org.maproulette.data._
 import org.maproulette.exception.{
   CodedIllegalAccessException,
   ErrorCodes,
+  InternalServerException,
   InvalidException,
   NotFoundException
 }
@@ -1055,6 +1056,95 @@ class TaskDAL @Inject() (
       result success false
     }
     result.future
+  }
+
+  private val LinkChangeSetActionLimit  = 10
+  private val LinkChangeSetWindowMillis = 24L * 60 * 60 * 1000
+
+  /**
+    * Links the task to a changeset the client names explicitly, instead of matching one
+    * heuristically. The task must be fixed, the requesting user must have marked it fixed,
+    * and the changeset must be closed, belong to that user, and have been opened close to
+    * the time the task was marked fixed. Unlike the heuristic match, this is not gated on
+    * changeset matching being enabled, since it makes a single lookup on the user's behalf.
+    *
+    * @param task        The task that was fixed
+    * @param user        The user making the request
+    * @param changesetId The OSM changeset to link
+    * @return The task with its changeset id updated
+    */
+  def linkOSMChangeSet(task: Task, user: User, changesetId: Long): Future[Task] = {
+    if (changesetId <= 0) {
+      throw new InvalidException(
+        s"Invalid changeset id $changesetId.",
+        Some(ErrorCodes.InvalidRequest)
+      )
+    }
+    if (!task.status.contains(Task.STATUS_FIXED)) {
+      throw new InvalidException(
+        s"Task ${task.id} is not fixed, so it cannot be linked to a changeset.",
+        Some(ErrorCodes.TaskNotFixed)
+      )
+    }
+    val statusAction = this.manager.statusAction
+      .getStatusActions(task, user, Some(List(Task.STATUS_FIXED)), LinkChangeSetActionLimit)
+      .find(_.osmUserId == user.osmProfile.id)
+      .getOrElse(
+        throw new CodedIllegalAccessException(
+          s"Task ${task.id} was not marked fixed by this user.",
+          ErrorCodes.NotTaskFixer
+        )
+      )
+    val windowMillis = Math.max(LinkChangeSetWindowMillis, config.changeSetTimeLimit.toMillis)
+
+    ws.url(s"${config.getOSMServer}/api/0.6/changeset/$changesetId")
+      .withHttpHeaders("User-Agent" -> "MapRoulette")
+      .get()
+      .map { response =>
+        response.status match {
+          case 200 =>
+            val element = (XML.loadString(response.body) \\ "changeset").headOption.getOrElse(
+              throw new InternalServerException(s"OSM returned no changeset $changesetId.")
+            )
+            // An open changeset has no closed_at, which the parser requires
+            if ((element \ "@open").text != "false") {
+              throw new InvalidException(
+                s"Changeset $changesetId is still open.",
+                Some(ErrorCodes.ChangesetOpen)
+              )
+            }
+            val changeset = ChangesetParser.parse(element)
+            if (changeset.userId != user.osmProfile.id) {
+              throw new CodedIllegalAccessException(
+                s"Changeset $changesetId belongs to another user.",
+                ErrorCodes.ChangesetNotOwned
+              )
+            }
+            val gapMillis =
+              Math.abs(changeset.createdAt.getMillis - statusAction.created.getMillis)
+            if (gapMillis > windowMillis) {
+              throw new InvalidException(
+                s"Changeset $changesetId was not opened near the time task ${task.id} was fixed.",
+                Some(ErrorCodes.ChangesetTooFar)
+              )
+            }
+            this.withMRConnection { implicit c =>
+              SQL"""UPDATE tasks SET changeset_id = $changesetId WHERE id = ${task.id}"""
+                .executeUpdate()
+            }
+            this.cacheManager.cache.remove(task.id)
+            task.copy(changesetId = Some(changesetId))
+          case 404 | 410 =>
+            throw new NotFoundException(
+              s"Changeset $changesetId not found.",
+              Some(ErrorCodes.NotFound)
+            )
+          case status =>
+            throw new InternalServerException(
+              s"OSM changeset lookup failed with status $status ${response.statusText}"
+            )
+        }
+      }
   }
 
   /**

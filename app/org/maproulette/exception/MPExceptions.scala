@@ -17,6 +17,12 @@ object ErrorCodes {
   val ChallengePaused: String   = "challenge_paused"
   val NotFound: String          = "not_found"
   val GuestNotAllowed: String   = "guest_not_allowed"
+  val InvalidRequest: String    = "invalid_request"
+  val TaskNotFixed: String      = "task_not_fixed"
+  val NotTaskFixer: String      = "not_task_fixer"
+  val ChangesetOpen: String     = "changeset_open"
+  val ChangesetNotOwned: String = "changeset_not_owned"
+  val ChangesetTooFar: String   = "changeset_out_of_window"
 }
 
 /**
