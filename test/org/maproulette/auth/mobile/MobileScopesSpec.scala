@@ -12,6 +12,20 @@ class MobileScopesSpec extends PlaySpec {
     }
   }
 
+  "MobileScopes tasks:edit" should {
+    "require tasks:write, refuse osm:tagfix and format in canonical order" in {
+      MobileScopes.parse("tasks:edit tasks:write tasks:read") mustBe
+        Some(Set("tasks:read", "tasks:write", "tasks:edit"))
+      MobileScopes.format(Set("tasks:edit", "tasks:read", "tasks:write")) mustBe
+        "tasks:read tasks:write tasks:edit"
+      MobileScopes.parse("tasks:read tasks:edit") mustBe None
+      MobileScopes.parse("tasks:edit") mustBe None
+      MobileScopes.parse("tasks:read tasks:write tasks:edit osm:tagfix") mustBe None
+      MobileScopes.parse("mobile:admin tasks:edit") mustBe None
+      MobileScopes.osmScope("tasks:read tasks:write tasks:edit") mustBe "read_prefs"
+    }
+  }
+
   "MobileOAuthSettings.validRedirect" should {
     "accept an http loopback IP literal with a port and path" in {
       Seq(

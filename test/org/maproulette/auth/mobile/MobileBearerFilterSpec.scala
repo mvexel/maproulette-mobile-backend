@@ -71,6 +71,24 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
   )
   private def bearer(method: String, path: String) =
     FakeRequest(method, path).withHeaders("Authorization" -> s"Bearer $token")
+  private def json(request: FakeRequest[_], body: String, extra: (String, String)*) =
+    request
+      .withHeaders(
+        Seq("Content-Type" -> "application/json", "Content-Length" -> body.length.toString) ++ extra: _*
+      )
+      .withBody(body)
+  private val editGrant = grant.copy(scope = "tasks:read tasks:write tasks:edit")
+  private def editorRequests = Seq(
+    bearer(PUT, "/api/v2/task/123/1?requestReview=true"),
+    bearer(PUT, "/api/v2/task/123/2?requestReview=true&tags=a,b"),
+    json(bearer(PUT, "/api/v2/task/123/5"), """{"answer":"yes"}"""),
+    json(bearer(PUT, "/api/v2/task/123/6?tags=x"), "x" * 16384),
+    json(bearer(POST, "/api/v2/task/123/comment"), """{"comment":"done"}"""),
+    json(bearer(POST, "/api/v2/task/123/comment?actionId=7"), """{"comment":"done"}"""),
+    bearer(GET, "/api/v2/task/123/refreshLock"),
+    bearer(PUT, "/api/v2/task/123/changeset"),
+    bearer(PUT, "/api/v2/task/123/changeset?changesetId=987654")
+  )
   private def writeFilter(scopedGrant: MobileGrant) = {
     val oauth = mock[MobileOAuthService]
     val users = mock[UserService]
@@ -268,7 +286,6 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
     "deny unaudited writes and status codes even with tasks:write, before authentication" in {
       val (filter, oauth) = writeFilter(writeGrant)
       Seq(
-        GET    -> "/api/v2/task/123/refreshLock",
         PUT    -> "/api/v2/task/123/0",
         PUT    -> "/api/v2/task/123/3",
         PUT    -> "/api/v2/task/123/4",
@@ -289,7 +306,6 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
         GET    -> "/api/v2/task/123/start/",
         GET    -> "/api/v2/task/abc/start",
         PUT    -> "/api/v2/task/123/unlock/request",
-        POST   -> "/api/v2/task/123/comment",
         GET    -> "/api/v2/task/123/tags/update",
         GET    -> "/api/v2/task/123/review/start",
         POST   -> "/api/v2/task/123/lockBundle",
@@ -310,8 +326,8 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
     "reject a query string or body on write routes, including review and tag overrides" in {
       val (filter, oauth) = writeFilter(writeGrant)
       Seq(
-        bearer(PUT, "/api/v2/task/123/1?requestReview=false"),
-        bearer(PUT, "/api/v2/task/123/1?tags=a,b"),
+        bearer(PUT, "/api/v2/task/123/1?requestReview=maybe"),
+        bearer(PUT, "/api/v2/task/123/1?comment=hi"),
         bearer(GET, "/api/v2/task/123/start?x=1"),
         bearer(POST, "/api/v2/task/123/skip?x=1"),
         bearer(PUT, "/api/v2/task/123/1").withHeaders("Content-Length"     -> "8"),
@@ -326,6 +342,15 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
         filter.apply(next)(bearer(PUT, "/api/v2/task/123/1").withHeaders("Content-Length" -> "0"))
       ) mustBe "123"
       verify(oauth).authenticate(token)
+    }
+
+    "deny editor requests to a tasks:write grant with insufficient_scope" in {
+      val (filter, _) = writeFilter(writeGrant)
+      editorRequests.foreach { request =>
+        val result = filter.apply(next)(request)
+        status(result) mustBe FORBIDDEN
+        contentAsJson(result) mustBe play.api.libs.json.Json.obj("error" -> "insufficient_scope")
+      }
     }
 
     "keep query strings on read routes, reject invalid tokens and leave legacy writes unchanged" in {
@@ -346,6 +371,65 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
         FakeRequest(GET, "/api/v2/task/123/start").withHeaders("apiKey" -> "legacy-key")
       ).foreach(request => contentAsString(open.apply(next)(request)) mustBe "legacy")
       verify(legacy, never()).authenticate(anyString())
+    }
+  }
+
+  "Mobile editor routes" should {
+    "allow each editor request and the lifecycle routes for a tasks:edit grant" in {
+      val (filter, _) = writeFilter(editGrant)
+      (editorRequests ++ allowedWrites.map { case (method, path) => bearer(method, path) })
+        .foreach(request => contentAsString(filter.apply(next)(request)) mustBe "123")
+    }
+
+    "reject editor requests outside the allowed shapes before authentication" in {
+      val (filter, oauth) = writeFilter(editGrant)
+      Seq(
+        bearer(PUT, "/api/v2/task/123/1?requestReview=yes"),
+        bearer(PUT, "/api/v2/task/123/1?requestReview=false"),
+        bearer(PUT, "/api/v2/task/123/1?requestReview"),
+        bearer(PUT, "/api/v2/task/123/1?requestReview=true&requestReview=false"),
+        bearer(PUT, "/api/v2/task/123/1?tags=" + "a" * 1025),
+        bearer(PUT, "/api/v2/task/123/1?comment=dropped"),
+        bearer(PUT, "/api/v2/task/123/1").withHeaders("Content-Length" -> "2").withBody("{}"),
+        json(bearer(PUT, "/api/v2/task/123/1"), "x" * 16385),
+        json(bearer(PUT, "/api/v2/task/123/1"), "{}", "Transfer-Encoding" -> "chunked"),
+        bearer(POST, "/api/v2/task/123/comment"),
+        bearer(POST, "/api/v2/task/123/comment?actionId=abc"),
+        json(bearer(POST, "/api/v2/task/123/comment?actionId=1&tags=x"), "{}"),
+        bearer(GET, "/api/v2/task/123/refreshLock?x=1"),
+        bearer(GET, "/api/v2/task/123/refreshLock").withHeaders("Content-Length" -> "2"),
+        bearer(PUT, "/api/v2/task/123/changeset?changesetId=x"),
+        bearer(PUT, "/api/v2/task/123/changeset?id=1"),
+        json(bearer(PUT, "/api/v2/task/123/changeset"), "{}")
+      ).foreach { request =>
+        val result = filter.apply(next)(request)
+        status(result) mustBe BAD_REQUEST
+        contentAsJson(result) mustBe play.api.libs.json.Json.obj("error" -> "invalid_request")
+      }
+      Seq(
+        PUT    -> "/api/v2/task/123/3?requestReview=true",
+        POST   -> "/api/v2/task/123/changeset",
+        PUT    -> "/api/v2/task/123/comment",
+        GET    -> "/api/v2/task/123/comments/x",
+        POST   -> "/api/v2/taskBundle/1/comment",
+        DELETE -> "/api/v2/task/123/comment/1"
+      ).foreach {
+        case (method, path) => status(filter.apply(next)(bearer(method, path))) mustBe FORBIDDEN
+      }
+      verify(oauth, never()).authenticate(anyString())
+    }
+
+    "refuse editor writes when task writes are off" in {
+      val oauth = mock[MobileOAuthService]
+      val filter =
+        new MobileBearerFilter(settings(true, allowTaskWrites = false), oauth, mock[UserService])
+      editorRequests.foreach { request =>
+        val result = filter.apply(next)(request)
+        status(result) mustBe FORBIDDEN
+        contentAsJson(result) mustBe play.api.libs.json.Json
+          .obj("error" -> "mobile_writes_disabled")
+      }
+      verify(oauth, never()).authenticate(anyString())
     }
   }
 
@@ -405,13 +489,20 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
         status(result) mustBe BAD_REQUEST
         contentAsJson(result) mustBe play.api.libs.json.Json.obj("error" -> "invalid_request")
       }
-      // Every other write keeps the no-body rule, JSON or not.
-      Seq(
-        bearer(POST, "/api/v2/task/123/skip")
-          .withHeaders("Content-Type" -> "application/json", "Content-Length" -> "2"),
-        bearer(PUT, "/api/v2/task/123/1")
-          .withHeaders("Content-Type" -> "application/json", "Content-Length" -> "2")
-      ).foreach(request => status(filter.apply(next)(request)) mustBe BAD_REQUEST)
+      // Every other lifecycle write keeps the no-body rule, JSON or not.
+      status(
+        filter.apply(next)(
+          bearer(POST, "/api/v2/task/123/skip")
+            .withHeaders("Content-Type" -> "application/json", "Content-Length" -> "2")
+        )
+      ) mustBe BAD_REQUEST
+      // A status write with completion responses is an editor request, which tasks:write can't make.
+      status(
+        filter.apply(next)(
+          bearer(PUT, "/api/v2/task/123/1")
+            .withHeaders("Content-Type" -> "application/json", "Content-Length" -> "2")
+        )
+      ) mustBe FORBIDDEN
     }
 
     "require tasks:write for the submit and allow the check to tasks:read without query or body" in {

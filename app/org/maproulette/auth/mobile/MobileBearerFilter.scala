@@ -154,7 +154,8 @@ object MobileClaimRoutes {
   * Task lifecycle writes for grants with `tasks:write`. Only the bare route is allowed: no query
   * string (which would carry requestReview or tags) and no body (completion responses). Status
   * codes are limited to Fixed, False positive, Already fixed and Too hard. Mobile clients lock late
-  * (start immediately before the status write), so refreshLock is deliberately not allowed.
+  * (start immediately before the status write), so refreshLock is not allowed here; desktop
+  * editors get it, and the extras above, through [[MobileEditorRoutes]] with `tasks:edit`.
   */
 object MobileWriteRoutes {
   private val task       = "/api/v2/task/[0-9]+"
@@ -184,6 +185,73 @@ object MobileWriteRoutes {
     contentType.exists(Set("application/json", "application/json;charset=utf-8").contains) &&
     length.exists(value => value > 0 && value <= MaxChoiceBodyBytes)
   }
+}
+
+/**
+  * Desktop editor writes for grants with `tasks:edit` (which implies `tasks:write`): the status
+  * write with its review request, tags and completion responses, task comments, refreshLock (an
+  * editing session outlasts the lock) and the changeset link. Each route takes only the listed
+  * query keys, each at most once, and only the status write and the comment take a JSON body of at
+  * most [[MaxBodyBytes]]. A bare status write stays a [[MobileWriteRoutes]] lifecycle write.
+  */
+object MobileEditorRoutes {
+  private val task   = "/api/v2/task/[0-9]+"
+  val MaxBodyBytes   = 16384
+  val MaxValueLength = 1024
+
+  private def status(method: String, path: String) =
+    method == "PUT" && path.matches(s"$task/[1256]")
+  private def comment(method: String, path: String) =
+    method == "POST" && path.matches(s"$task/comment")
+
+  private def changeset(method: String, path: String) =
+    method == "PUT" && path.matches(s"$task/changeset")
+  private val digits: String => Boolean = _.matches("[0-9]{1,18}")
+
+  def permits(method: String, path: String): Boolean =
+    status(method, path) || comment(method, path) || changeset(method, path) ||
+      method == "GET" && path.matches(s"$task/refreshLock")
+
+  /** True when the request needs `tasks:edit`: an editor-only route, or a status write with extras. */
+  def requires(request: RequestHeader): Boolean =
+    permits(request.method, request.path) &&
+      (!MobileWriteRoutes.permits(request.method, request.path) ||
+        request.rawQueryString.nonEmpty || request.hasBody)
+
+  private def query(request: RequestHeader): Boolean = {
+    val allowed: Map[String, String => Boolean] =
+      if (status(request.method, request.path))
+        // Only "true": "false" would skip a review the user's settings make mandatory
+        // (docs/upstream-issues.md §5).
+        Map("requestReview" -> Set("true").contains, "tags" -> (_ => true))
+      else if (comment(request.method, request.path)) Map("actionId" -> digits)
+      else if (changeset(request.method, request.path)) Map("changesetId" -> digits)
+      else Map.empty
+    request.rawQueryString.isEmpty || request.queryString.forall {
+      case (key, Seq(value)) =>
+        allowed.get(key).exists(valid => value.length <= MaxValueLength && valid(value))
+      case _ => false
+    }
+  }
+
+  private def body(request: RequestHeader): Boolean =
+    if (!status(request.method, request.path) && !comment(request.method, request.path))
+      !request.hasBody
+    else if (!request.hasBody) !comment(request.method, request.path)
+    else {
+      val contentType = request.headers
+        .get("Content-Type")
+        .map(_.toLowerCase(java.util.Locale.ROOT).replace(" ", ""))
+      val length = request.headers.getAll("Content-Length") match {
+        case Seq(value) if value.matches("[0-9]{1,5}") => Some(value.toInt)
+        case _                                         => None
+      }
+      request.headers.get("Transfer-Encoding").isEmpty &&
+      contentType.exists(Set("application/json", "application/json;charset=utf-8").contains) &&
+      length.exists(value => value > 0 && value <= MaxBodyBytes)
+    }
+
+  def acceptable(request: RequestHeader): Boolean = query(request) && body(request)
 }
 
 /** The live progress page (BACKLOG #12): its public read and its admin settings routes. */
@@ -468,7 +536,8 @@ class MobileBearerFilter @Inject() (
     val parts = authorizations.head.split(" ", -1)
     if (parts.length != 2 || !parts(0).equalsIgnoreCase("Bearer") ||
         !parts(1).matches("[A-Za-z0-9_-]{32,256}")) return denied(401, "invalid_token")
-    val write       = MobileWriteRoutes.permits(request.method, request.path)
+    val editor      = MobileEditorRoutes.requires(request)
+    val write       = MobileWriteRoutes.permits(request.method, request.path) || editor
     val read        = MobileReadRoutes.permits(request.method, request.path)
     val admin       = MobileAdminRoutes.permits(request.method, request.path, request.queryString)
     val guest       = guests.enabled && MobileGuestRoutes.permits(request.method, request.path)
@@ -478,7 +547,8 @@ class MobileBearerFilter @Inject() (
       return denied(403, "mobile_writes_disabled")
     if (!write && !read && !admin && !guest) return denied(403, "insufficient_scope")
     val badShape =
-      if (write && MobileWriteRoutes.takesBody(request.method, request.path))
+      if (editor) !MobileEditorRoutes.acceptable(request)
+      else if (write && MobileWriteRoutes.takesBody(request.method, request.path))
         !MobileWriteRoutes.acceptableBody(request)
       else if (guest && !write && !read) !MobileGuestRoutes.acceptable(request)
       else
@@ -495,7 +565,8 @@ class MobileBearerFilter @Inject() (
           else if (!adminGrant && settings.writeControlEnabled &&
                    MobileGuestRoutes.guestOnlyWhenDisabled(request.method, request.path) &&
                    !writePolicy.enabled) denied(403, "mobile_writes_disabled")
-          else if (write && !scopes.contains(MobileScopes.Write)) denied(403, "insufficient_scope")
+          else if (write && !scopes.contains(MobileScopes.Write) ||
+                   editor && !scopes.contains(MobileScopes.Edit)) denied(403, "insufficient_scope")
           // D13 (1): the claim page's grant writes only through the claim routes.
           else if (value.clientId == MobileClaimRoutes.ClientId && (write && !claimRoute ||
                    MobileGuestRoutes.guestOnlyWhenDisabled(request.method, request.path)))

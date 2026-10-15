@@ -14,7 +14,10 @@ case class MobileClient(
 
 /**
   * OAuth scope sets. An app grant includes `tasks:read`; `tasks:write` is an optional addition, and
-  * `osm:tagfix` (apply choice answers to OSM) is only valid together with `tasks:write`.
+  * `osm:tagfix` (apply choice answers to OSM) is only valid together with `tasks:write`, as is
+  * `tasks:edit` (desktop editors: review requests, completion responses, comments, refreshLock and
+  * the changeset link, see [[MobileEditorRoutes]]). An editor makes its own OSM edits, so
+  * `tasks:edit` and `osm:tagfix` never share a grant.
   * `mobile:admin` stands alone: an admin grant has no app scopes, so it reaches only the admin
   * allowlist, and app grants never reach it. `guest` is never part of a grant: it is a client
   * capability (the client may register guests, see [[org.maproulette.auth.mobile.guest]]) and the
@@ -23,11 +26,12 @@ case class MobileClient(
 object MobileScopes {
   val Read   = "tasks:read"
   val Write  = "tasks:write"
+  val Edit   = "tasks:edit"
   val TagFix = "osm:tagfix"
   val Admin  = "mobile:admin"
   val Guest  = "guest"
   // Canonical order for stored and returned scope strings.
-  private val supported = Seq(Read, Write, TagFix, Admin, Guest)
+  private val supported = Seq(Read, Write, Edit, TagFix, Admin, Guest)
 
   /** Strict RFC 6749 scope parsing: single-space separated, known, unique; read or admin alone. */
   def parse(value: String): Option[Set[String]] = {
@@ -35,7 +39,8 @@ object MobileScopes {
     val known = items.forall(item => item != Guest && supported.contains(item)) &&
       items.distinct.size == items.size
     val app = items.contains(Read) && !items.contains(Admin) &&
-      (!items.contains(TagFix) || items.contains(Write))
+      (!items.contains(TagFix) || items.contains(Write)) &&
+      (!items.contains(Edit) || items.contains(Write) && !items.contains(TagFix))
     if (known && (app || items == Seq(Admin))) Some(items.toSet) else None
   }
 
