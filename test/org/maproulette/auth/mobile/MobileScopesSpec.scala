@@ -72,8 +72,10 @@ class MobileScopesSpec extends PlaySpec {
         Seq("mobile:admin"),
         Seq("tasks:read", "tasks:write"),
         Seq("tasks:read", "guest"),
+        Seq("tasks:read", "tasks:write", "tasks:edit"),
         Seq("tasks:read", "tasks:write", "osm:tagfix"),
         Seq("tasks:read", "tasks:write", "guest"),
+        Seq("tasks:read", "tasks:write", "tasks:edit", "guest"),
         Seq("tasks:read", "tasks:write", "osm:tagfix", "guest")
       )
       MobileScopes.clientScopeSets.map(_.mkString(" ")).foreach { scope =>
