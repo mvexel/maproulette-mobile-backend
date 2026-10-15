@@ -247,6 +247,7 @@ class MobileOAuthControllerSpec extends PlaySpec with MockitoSugar with BeforeAn
       val body = contentAsString(result)
       body must include("request a review")
       body must include("comment on tasks")
+      body must include("bundle tasks")
       body must include("It cannot edit OpenStreetMap")
     }
 

@@ -190,9 +190,12 @@ object MobileWriteRoutes {
 /**
   * Desktop editor writes for grants with `tasks:edit` (which implies `tasks:write`): the status
   * write with its review request, tags and completion responses, task comments, refreshLock (an
-  * editing session outlasts the lock) and the changeset link. Each route takes only the listed
-  * query keys, each at most once, and only the status write and the comment take a JSON body of at
-  * most [[MaxBodyBytes]]. A bare status write stays a [[MobileWriteRoutes]] lifecycle write.
+  * editing session outlasts the lock) and the changeset link, plus the task bundle routes: create,
+  * read, update, unbundle, delete, lock and unlock, bundle status and bundle comments (not bundle
+  * review). Each route takes only the listed query keys, each at most once except `taskIds` (at
+  * most [[MaxBundleTasks]] values), and only the status writes, the comments and bundle create take
+  * a JSON body of at most [[MaxBodyBytes]]. A bare status write stays a [[MobileWriteRoutes]]
+  * lifecycle write.
   */
 object MobileEditorRoutes {
   private val task   = "/api/v2/task/[0-9]+"
@@ -208,9 +211,32 @@ object MobileEditorRoutes {
     method == "PUT" && path.matches(s"$task/changeset")
   private val digits: String => Boolean = _.matches("[0-9]{1,18}")
 
+  private val bundle = "/api/v2/taskBundle/[0-9]+"
+  // Same cap as the web UI's bundle limit.
+  val MaxBundleTasks = 50
+
+  private def bundleCreate(method: String, path: String) =
+    method == "POST" && path == "/api/v2/taskBundle"
+  private def bundleStatus(method: String, path: String) =
+    method == "PUT" && path.matches(s"$bundle/[1256]")
+  private def bundleComment(method: String, path: String) =
+    method == "POST" && path.matches(s"$bundle/comment")
+  // Routes whose only query is the required `taskIds` list.
+  private def bundleMembers(method: String, path: String) =
+    method == "POST" && path.matches(s"$bundle/(update|unbundle)") ||
+      method == "POST" && path == "/api/v2/task/bundle/unlock"
+  private def lockBundle(method: String, path: String) =
+    method == "PUT" && path.matches(s"$task/lockBundle")
+  private def bundleBare(method: String, path: String) =
+    (method == "POST" || method == "DELETE") && path.matches(bundle)
+
+  private def bundleRoute(method: String, path: String) =
+    bundleCreate(method, path) || bundleStatus(method, path) || bundleComment(method, path) ||
+      bundleMembers(method, path) || lockBundle(method, path) || bundleBare(method, path)
+
   def permits(method: String, path: String): Boolean =
     status(method, path) || comment(method, path) || changeset(method, path) ||
-      method == "GET" && path.matches(s"$task/refreshLock")
+      method == "GET" && path.matches(s"$task/refreshLock") || bundleRoute(method, path)
 
   /** True when the request needs `tasks:edit`: an editor-only route, or a status write with extras. */
   def requires(request: RequestHeader): Boolean =
@@ -219,25 +245,43 @@ object MobileEditorRoutes {
         request.rawQueryString.nonEmpty || request.hasBody)
 
   private def query(request: RequestHeader): Boolean = {
+    val (method, path) = (request.method, request.path)
+    // Only "true": "false" would skip a review the user's settings make mandatory
+    // (docs/upstream-issues.md §5).
+    val review: (String, String => Boolean) = "requestReview" -> Set("true")
     val allowed: Map[String, String => Boolean] =
-      if (status(request.method, request.path))
-        // Only "true": "false" would skip a review the user's settings make mandatory
-        // (docs/upstream-issues.md §5).
-        Map("requestReview" -> Set("true").contains, "tags" -> (_ => true))
-      else if (comment(request.method, request.path)) Map("actionId" -> digits)
-      else if (changeset(request.method, request.path)) Map("changesetId" -> digits)
+      if (status(method, path)) Map(review, "tags" -> (_ => true))
+      else if (bundleStatus(method, path))
+        Map("primaryId" -> digits, review, "tags" -> (_ => true))
+      else if (comment(method, path) || bundleComment(method, path)) Map("actionId" -> digits)
+      else if (changeset(method, path)) Map("changesetId" -> digits)
+      else if (bundleMembers(method, path) || lockBundle(method, path)) Map("taskIds" -> digits)
       else Map.empty
-    request.rawQueryString.isEmpty || request.queryString.forall {
-      case (key, Seq(value)) =>
-        allowed.get(key).exists(valid => value.length <= MaxValueLength && valid(value))
-      case _ => false
+    val required =
+      if (bundleStatus(method, path)) Set("primaryId")
+      else if (bundleMembers(method, path)) Set("taskIds")
+      else Set.empty[String]
+    def values(key: String, given: Seq[String]) =
+      given.nonEmpty && given.size <= (if (key == "taskIds") MaxBundleTasks else 1)
+    required.subsetOf(request.queryString.keySet) && request.queryString.forall {
+      case (key, given) =>
+        values(key, given) && allowed.get(key).exists { valid =>
+          given.forall(value => value.length <= MaxValueLength && valid(value))
+        }
     }
   }
 
+  private def takesBody(method: String, path: String) =
+    status(method, path) || comment(method, path) || bundleStatus(method, path) ||
+      bundleComment(method, path) || bundleCreate(method, path)
+
+  // Comments and bundle create need their JSON; status writes may omit completion responses.
+  private def needsBody(method: String, path: String) =
+    comment(method, path) || bundleComment(method, path) || bundleCreate(method, path)
+
   private def body(request: RequestHeader): Boolean =
-    if (!status(request.method, request.path) && !comment(request.method, request.path))
-      !request.hasBody
-    else if (!request.hasBody) !comment(request.method, request.path)
+    if (!takesBody(request.method, request.path)) !request.hasBody
+    else if (!request.hasBody) !needsBody(request.method, request.path)
     else {
       val contentType = request.headers
         .get("Content-Type")

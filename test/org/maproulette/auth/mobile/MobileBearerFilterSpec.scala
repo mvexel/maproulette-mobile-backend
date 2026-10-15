@@ -87,7 +87,19 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
     json(bearer(POST, "/api/v2/task/123/comment?actionId=7"), """{"comment":"done"}"""),
     bearer(GET, "/api/v2/task/123/refreshLock"),
     bearer(PUT, "/api/v2/task/123/changeset"),
-    bearer(PUT, "/api/v2/task/123/changeset?changesetId=987654")
+    bearer(PUT, "/api/v2/task/123/changeset?changesetId=987654"),
+    json(bearer(POST, "/api/v2/taskBundle"), """{"name":"b","taskIds":[123,124]}"""),
+    bearer(POST, "/api/v2/taskBundle/9"),
+    bearer(DELETE, "/api/v2/taskBundle/9"),
+    bearer(POST, "/api/v2/taskBundle/9/update?taskIds=123&taskIds=124"),
+    bearer(POST, "/api/v2/taskBundle/9/unbundle?taskIds=124"),
+    bearer(PUT, "/api/v2/task/123/lockBundle"),
+    bearer(PUT, "/api/v2/task/123/lockBundle?taskIds=123&taskIds=124"),
+    bearer(POST, "/api/v2/task/bundle/unlock?taskIds=123&taskIds=124"),
+    bearer(PUT, "/api/v2/taskBundle/9/1?primaryId=123"),
+    bearer(PUT, "/api/v2/taskBundle/9/2?primaryId=123&requestReview=true&tags=a"),
+    json(bearer(PUT, "/api/v2/taskBundle/9/5?primaryId=123"), """{"answer":"yes"}"""),
+    json(bearer(POST, "/api/v2/taskBundle/9/comment?actionId=7"), """{"comment":"done"}""")
   )
   private def writeFilter(scopedGrant: MobileGrant) = {
     val oauth = mock[MobileOAuthService]
@@ -313,7 +325,8 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
         DELETE -> "/api/v2/task/123",
         PUT    -> "/api/v2/task/123/review/1",
         PUT    -> "/api/v2/tasks/changeStatus",
-        POST   -> "/api/v2/taskBundle",
+        PUT    -> "/api/v2/taskBundle",
+        PUT    -> "/api/v2/taskBundle/1/review/1",
         GET    -> "/api/v2/challenge/1/start",
         POST   -> "/api/v2/task/123/changeset"
       ).foreach {
@@ -400,7 +413,20 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
         bearer(GET, "/api/v2/task/123/refreshLock").withHeaders("Content-Length" -> "2"),
         bearer(PUT, "/api/v2/task/123/changeset?changesetId=x"),
         bearer(PUT, "/api/v2/task/123/changeset?id=1"),
-        json(bearer(PUT, "/api/v2/task/123/changeset"), "{}")
+        json(bearer(PUT, "/api/v2/task/123/changeset"), "{}"),
+        bearer(POST, "/api/v2/taskBundle"),
+        json(bearer(POST, "/api/v2/taskBundle?name=b"), "{}"),
+        bearer(POST, "/api/v2/taskBundle/9?lockTasks=true"),
+        json(bearer(DELETE, "/api/v2/taskBundle/9"), "{}"),
+        bearer(POST, "/api/v2/taskBundle/9/update"),
+        bearer(POST, "/api/v2/taskBundle/9/update?taskIds=1,2"),
+        bearer(POST, "/api/v2/taskBundle/9/unbundle?" + Seq.fill(51)("taskIds=1").mkString("&")),
+        bearer(PUT, "/api/v2/task/123/lockBundle?taskIds=x"),
+        json(bearer(POST, "/api/v2/task/bundle/unlock?taskIds=1"), "[1]"),
+        bearer(PUT, "/api/v2/taskBundle/9/1"),
+        bearer(PUT, "/api/v2/taskBundle/9/1?primaryId=123&requestReview=false"),
+        bearer(PUT, "/api/v2/taskBundle/9/1?primaryId=123&primaryId=124"),
+        bearer(POST, "/api/v2/taskBundle/9/comment?actionId=7")
       ).foreach { request =>
         val result = filter.apply(next)(request)
         status(result) mustBe BAD_REQUEST
@@ -411,7 +437,10 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
         POST   -> "/api/v2/task/123/changeset",
         PUT    -> "/api/v2/task/123/comment",
         GET    -> "/api/v2/task/123/comments/x",
-        POST   -> "/api/v2/taskBundle/1/comment",
+        PUT    -> "/api/v2/taskBundle/1/review/1",
+        PUT    -> "/api/v2/taskBundle/1/metareview/1",
+        PUT    -> "/api/v2/taskBundle/1/3?primaryId=1",
+        GET    -> "/api/v2/taskBundle/1",
         DELETE -> "/api/v2/task/123/comment/1"
       ).foreach {
         case (method, path) => status(filter.apply(next)(bearer(method, path))) mustBe FORBIDDEN
