@@ -35,6 +35,12 @@ trait MobileDrafts {
 
   /** True when the challenge (or the task's challenge) is a draft; false when published or unknown. */
   def draft(target: MobileDraftRoutes.Target): Boolean
+
+  /**
+    * True when the task is a multiple-choice task (`cooperativeWork.meta.type = 3`); false when it
+    * is not or is unknown. App grants change its status only through `POST /task/:id/choice`.
+    */
+  def choiceTask(taskId: Long): Boolean = false
 }
 
 object MobileDrafts {
@@ -59,5 +65,12 @@ class MobileDraftLookup @Inject() (db: Database) extends MobileDrafts {
                 JOIN projects p ON p.id = c.parent_id WHERE t.id = $id"""
     }
     visible.as(SqlParser.bool("visible").singleOpt).contains(false)
+  }
+
+  override def choiceTask(taskId: Long): Boolean = db.withConnection { implicit c =>
+    SQL"""SELECT 1 FROM tasks
+            WHERE id = $taskId AND cooperative_work_json->'meta'->>'type' = '3'"""
+      .as(SqlParser.scalar[Int].singleOpt)
+      .isDefined
   }
 }

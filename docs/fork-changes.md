@@ -148,6 +148,7 @@ repo:
 | A replaced payload clears its `choice_stale` row                                                                                  | `app/org/maproulette/models/dal/TaskDAL.scala:428`                                                                                                                                                           |
 | A challenge holds only choice tasks or none                                                                                       | `TaskDAL.checkChoiceConsistency` (:564), called from `extractCooperativeWork` (:482)                                                                                                                         |
 | The status write can run extra work inside its transaction (`inTransaction` hook)                                                 | `TaskDAL.setTaskStatus` (:670)                                                                                                                                                                               |
+| App grants can't write a choice task's status directly (`403 choice_task_status`); only `POST choice` sets it | `MobileBearerFilter.scala` (`choiceGate`), `MobileDrafts.scala` (`choiceTask`) |
 
 ### Guests (deferred sign-up, in progress)
 
