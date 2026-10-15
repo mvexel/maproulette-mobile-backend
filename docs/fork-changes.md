@@ -4,8 +4,8 @@ This fork (`mvexel/maproulette-mobile-backend`, branch `feat/mobile-oauth`) is
 based on upstream
 [`maproulette/maproulette-backend`](https://github.com/maproulette/maproulette-backend)
 at commit
-[`bbdc2d64`](https://github.com/maproulette/maproulette-backend/commit/bbdc2d6478175911c92d639f139ba335326fa3fe)
-(2026-10-10, "Validate OAuth state in callback"). The fork was first imported
+[`d9989212`](https://github.com/maproulette/maproulette-backend/commit/d998921292e400c5ebd2473024be7f6276057f2a)
+(2026-10-10, "Restrict info about who mapped each task to challenge owners", v4.12.0). The fork was first imported
 from an archive of `b9b2e69b`; that commit is recorded as an ancestor, so later
 upstream syncs are ordinary merges of `upstream/main`.
 
@@ -31,7 +31,7 @@ existing routes behave as upstream, apart from the general fixes listed under
 base commit:
 
 ```sh
-git -C <upstream checkout> archive bbdc2d64 | tar -x -C /tmp/up
+git -C <upstream checkout> archive d9989212 | tar -x -C /tmp/up
 diff -r /tmp/up . --exclude=.git
 ```
 
@@ -235,3 +235,15 @@ Disabled escalation, same-status takeover, status writes without a lock, the
 `requestReview=false` bypass, fix/apply trust and ordering, and Swagger gaps.
 Its §10 lists the parts of this fork proposed for upstream: `meta.type = 3`,
 the `cct` filter and `addFileTasks?report=true`. Nothing has been filed yet.
+
+These changes touch only upstream code. They were made on branches cut from the
+upstream base `d9989212`, so each series applies to upstream `main` without
+fork code:
+
+| Change | Commits | Where |
+| ------ | ------- | ----- |
+| Lock responses (`start`, `lockBundle`, `refreshLock`) include `expiresAt`; error bodies add a machine-readable `error` code next to `status`/`message` | `52dbe965` (#36) | `TaskController.scala`, `Locking.resolveLockExpiry`, `MPExceptions.scala` (`ErrorCodes`, `ErrorCoded`), `MPExceptionUtil.body` |
+| `PUT /task/:id/changeset?changesetId=` links a named changeset after ownership and timing checks, behind `maproulette.tasks.changesets.linkEnabled` (default `true`) | `7d04c452` (#36), `a2919099` (#37) | `TaskDAL.linkOSMChangeSet`, `TaskController.matchToOSMChangeSet`, `conf/v2_route/task.api` |
+
+`831ca67f` in #36 is a copy of the fork's CI fix `e2fe49d2`, which keeps the
+upstream-based branch's own CI green. It is not part of these upstream changes.
