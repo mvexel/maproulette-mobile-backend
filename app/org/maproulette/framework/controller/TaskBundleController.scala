@@ -6,6 +6,7 @@
 package org.maproulette.framework.controller
 
 import javax.inject.Inject
+import org.maproulette.auth.mobile.{MobileBearerIdentity, MobileDrafts}
 import org.maproulette.exception.{ErrorCodes, InvalidException, LockConflictException}
 import org.maproulette.data._
 import org.maproulette.framework.model.{Task, TaskBundle, Tag, User}
@@ -29,7 +30,8 @@ class TaskBundleController @Inject() (
     components: ControllerComponents,
     serviceManager: ServiceManager,
     taskDAL: TaskDAL,
-    webSocketProvider: WebSocketProvider
+    webSocketProvider: WebSocketProvider,
+    drafts: MobileDrafts
 ) extends AbstractController(components)
     with MapRouletteController
     with TagsControllerMixin[Task] {
@@ -269,13 +271,19 @@ class TaskBundleController @Inject() (
         case Some(tasks) => tasks
         case None        => throw new InvalidException("No task ids provided for task bundle")
       }
-      try {
-        val bundle = this.serviceManager.taskBundle.createTaskBundle(user, name, primaryId, taskIds)
-        this.broadcastBundleClaimed(bundle, user)
-        Created(Json.toJson(bundle))
-      } catch {
-        case e: LockConflictException => this.lockConflictResponse(e)
-      }
+      // Preview mode for app grants (MobileBearerFilter checks the routes that name their tasks in
+      // the path or query): a bundle of draft tasks reads as unknown.
+      if (request.attrs.contains(MobileBearerIdentity.UserKey) && drafts.draftTasks(taskIds))
+        NotFound.withHeaders("Cache-Control" -> "no-store")
+      else
+        try {
+          val bundle =
+            this.serviceManager.taskBundle.createTaskBundle(user, name, primaryId, taskIds)
+          this.broadcastBundleClaimed(bundle, user)
+          Created(Json.toJson(bundle))
+        } catch {
+          case e: LockConflictException => this.lockConflictResponse(e)
+        }
     }
   }
 

@@ -506,34 +506,40 @@ class MobileBearerFilter @Inject() (
       user: Option[User],
       write: Boolean,
       request: RequestHeader
-  ): Future[Option[Result]] =
+  ): Future[Option[Result]] = {
+    val members = MobileDraftRoutes.members(request.method, request.path, request.queryString)
     MobileDraftRoutes.target(request.method, request.path) match {
-      case None => Future.successful(None)
-      case Some(target) =>
-        Future(drafts.draft(target)).flatMap {
+      case target if target.isDefined || members.nonEmpty =>
+        Future(target.exists(drafts.draft) || drafts.draftTasks(members)).flatMap {
           case false => Future.successful(None)
           case true if !user.exists(u => admins.isAdmin(u)) =>
             Future.successful(Some(Results.NotFound.withHeaders("Cache-Control" -> "no-store")))
           case true if write => denied(403, "challenge_draft").map(Some(_))
           case true          => Future.successful(None)
         }
+      case _ => Future.successful(None)
     }
+  }
 
-  private val statusWrite = "/api/v2/task/([0-9]+)/[1256]".r
+  private val statusWrite  = "/api/v2/task/([0-9]+)/[1256]".r
+  private val bundleStatus = "/api/v2/taskBundle/([0-9]+)/[1256]".r
 
   /**
     * A multiple-choice task's status is set by `POST /task/:id/choice`, which makes the OSM edit and
     * dedupes submissions. A direct status write would skip both, so app grants can't make one,
-    * with `tasks:write` or `tasks:edit`.
+    * with `tasks:write` or `tasks:edit`, on the task or on a bundle that holds one.
     */
   private def choiceGate(request: RequestHeader): Future[Option[Result]] =
     (request.method, request.path) match {
-      case ("PUT", statusWrite(id)) =>
-        Future(drafts.choiceTask(id.toLong)).flatMap {
-          case true  => denied(403, "choice_task_status").map(Some(_))
-          case false => Future.successful(None)
-        }
-      case _ => Future.successful(None)
+      case ("PUT", statusWrite(id))  => choiceRefusal(drafts.choiceTask(id.toLong))
+      case ("PUT", bundleStatus(id)) => choiceRefusal(drafts.choiceBundle(id.toLong))
+      case _                         => Future.successful(None)
+    }
+
+  private def choiceRefusal(choice: => Boolean): Future[Option[Result]] =
+    Future(choice).flatMap {
+      case true  => denied(403, "choice_task_status").map(Some(_))
+      case false => Future.successful(None)
     }
 
   /**

@@ -215,7 +215,8 @@ instead of 204, and a rejected line does not mark the challenge FAILED. `report=
 **Status only through `choice`.** App grants (`tasks:write` and `tasks:edit`) can't set a choice
 task's status directly: `PUT /api/v2/task/:id/{1,2,5,6}` answers `403 {"error":
 "choice_task_status"}`, with or without editor extras. `POST /task/:id/choice` sets it, after the
-OSM edit and with submission dedupe. Start, release, skip, comments and `refreshLock` stay open.
+OSM edit and with submission dedupe. The bundle status write `PUT
+/api/v2/taskBundle/:id/{1,2,5,6}` is refused the same way when the bundle holds a choice task. Start, release, skip, comments and `refreshLock` stay open.
 
 **Discovery.** `cct` (comma-separated `challenges.cooperative_type` values) filters `tasks/box`,
 `markers/box`, `taskCluster` and `tasksInCluster`; a non-integer gives 400. The separate,
@@ -421,6 +422,11 @@ grants and guest tokens:
   everyone: 404 for other users, 403 `challenge_draft` for super-users.
   `release` stays open, so a lock taken before the challenge was disabled can be
   dropped.
+- Bundles (`tasks:edit`): a bundle is a draft when any of its tasks is. Reading,
+  updating, commenting on or setting the status of a draft bundle, `lockBundle` on
+  a draft task, and any `taskIds` member that is a draft answer as above. Creating
+  a bundle that holds a draft task answers a bare 404 for every app grant,
+  super-users included. Bundle delete, unbundle and `task/bundle/unlock` stay open.
 
 Discovery (`tasks/box`, `markers/box`, `extendedFind`) already lists enabled
 challenges in enabled projects only. Admin grants and web sessions are unchanged.
