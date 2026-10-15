@@ -23,6 +23,7 @@ object ErrorCodes {
   val ChangesetOpen: String     = "changeset_open"
   val ChangesetNotOwned: String = "changeset_not_owned"
   val ChangesetTooFar: String   = "changeset_out_of_window"
+  val LinkDisabled: String      = "changeset_link_disabled"
 }
 
 /**

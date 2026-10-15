@@ -869,7 +869,7 @@ GET     /taskTilesMvt/:z/:x/:y  @org.maproulette.framework.controller.TaskContro
 #   '401':
 #     description: The user is not authorized to make this request
 #   '403':
-#     description: The user did not mark the task fixed, or the changeset belongs to another user.
+#     description: The user did not mark the task fixed, the changeset belongs to another user, or linking changesets is disabled on this server.
 #   '404':
 #     description: The task or the changeset was not found.
 # parameters:
