@@ -48,6 +48,11 @@ A client is `{"id", "name", "redirectUris", "scopes", "enabled"}`.
   `["mobile:admin"]`.
 - `enabled`: defaults to `true`.
 
+### `GET /api/v2/mobile-admin/scope-sets`
+
+`200 {"scopeSets": [["tasks:read"], ...]}`: every scope set a client may hold, each in canonical
+order, derived from the backend's scope rules. Offer these instead of a fixed list.
+
 ### `GET /api/v2/mobile-admin/clients`
 
 `200 {"clients": [...]}`, ordered by id. Each client also has `source` (`config` or `admin`),
