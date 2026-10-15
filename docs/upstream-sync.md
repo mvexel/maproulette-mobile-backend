@@ -29,7 +29,7 @@ So the fork and upstream keep **one gapless sequence**, and the rule is:
   sync, with a comment naming the upstream file. Upstream's number is never used
   as is.
 
-At the last sync (upstream `bbdc2d64`, 2026-10-10) upstream's newest migration was
+At the last sync (upstream `d9989212`, 2026-10-10) upstream's newest migration was
 `129.sql`. It is the fork's `133.sql`.
 
 A database migrated by this fork can't go back to upstream code, and the reverse
