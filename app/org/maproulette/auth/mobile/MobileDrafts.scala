@@ -13,7 +13,8 @@ object MobileDraftRoutes {
   private val challenge = "/api/v2/challenge/([0-9]+)(?:/tags|/tasks)?".r
   private val task      = "/api/v2/task/([0-9]+)(?:/choice/check|/tags)?".r
   // Release stays open so a lock taken before the challenge was disabled can still be dropped.
-  private val taskWrite = "/api/v2/task/([0-9]+)/(?:start|skip|choice|[1256])".r
+  private val taskWrite =
+    "/api/v2/task/([0-9]+)/(?:start|skip|choice|[1256]|comment|refreshLock|changeset)".r
 
   sealed trait Target
   case class Challenge(id: Long) extends Target
