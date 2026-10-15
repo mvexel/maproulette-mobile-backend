@@ -35,7 +35,7 @@ mobileOAuth {
 }
 ```
 
-The OSM callback and the app callback are different URLs. The app callback must match an entry exactly, including its path. HTTPS app links and reverse-domain custom schemes are accepted; query strings and fragments are not accepted in registered callbacks. There is no dynamic registration endpoint or public-client secret. Each host app owns its callback registration and operating-system integration.
+The OSM callback and the app callback are different URLs. The app callback must match an entry exactly, including its path. HTTPS app links, reverse-domain custom schemes and, for desktop apps, HTTP loopback callbacks on an IP literal with an explicit port (`http://127.0.0.1:8111/oauth_authorization`, RFC 8252 §7.3; `localhost` is refused) are accepted; query strings and fragments are not accepted in registered callbacks. There is no dynamic registration endpoint or public-client secret. Each host app owns its callback registration and operating-system integration.
 
 For loopback development only, `allowInsecureLoopback = true` permits an HTTP backend callback on localhost. Production callbacks require HTTPS. The existing OSM consumer configuration supplies the server-side OSM client credentials. A login asks OSM for `read_prefs` only, unless the app requests `osm:tagfix` (see [Choice tasks](#choice-tasks-osmtagfix)); then it asks for `read_prefs write_api`, and the OSM application must allow `write_api`.
 
@@ -45,7 +45,7 @@ Default lifetimes are 10 minutes for a browser interaction, 2 minutes for an aut
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /oauth/mobile/authorize` | Start browser login with `response_type=code`, `client_id`, exact `redirect_uri`, `scope` (`tasks:read`, `tasks:read tasks:write`, `tasks:read tasks:write osm:tagfix` or `mobile:admin`), `state`, `code_challenge` and `code_challenge_method=S256`. |
+| `GET /oauth/mobile/authorize` | Start browser login with `response_type=code`, `client_id`, exact `redirect_uri`, `scope` (`tasks:read`, `tasks:read tasks:write`, `tasks:read tasks:write osm:tagfix`, `tasks:read tasks:write tasks:edit` or `mobile:admin`), `state`, `code_challenge` and `code_challenge_method=S256`. |
 | `GET /oauth/mobile/callback` | Server callback from OSM. The browser interaction must match persisted state and its separate HTTP-only cookie. |
 | `POST /oauth/mobile/consent` | Browser consent form with a transaction-bound CSRF value. Approval redirects to the app with only a short-lived code and its original state; denial returns `access_denied`. |
 | `POST /oauth/mobile/token` | Form-encoded authorization-code exchange or refresh. |
@@ -89,7 +89,7 @@ it. Enabling it again restores its grants.
 
 ## Scope and credential lifecycle
 
-Scopes are a space-separated set. Every app grant includes `tasks:read`; `tasks:write` is optional and only granted to clients whose `scopes` configuration lists it. `osm:tagfix` is optional too, valid only together with `tasks:write`, and only granted to clients configured for it; new grants also need a valid `osmTokenKey`. Unknown, duplicate, write-only or `osm:tagfix`-without-`tasks:write` requests fail with `invalid_scope`. Stored and returned scope strings use the canonical order `tasks:read tasks:write osm:tagfix`. `mobile:admin` stands alone (see [Admin scope](#admin-scope-mobileadmin)); combining it with any other scope is `invalid_scope`.
+Scopes are a space-separated set. Every app grant includes `tasks:read`; `tasks:write` is optional and only granted to clients whose `scopes` configuration lists it. `osm:tagfix` is optional too, valid only together with `tasks:write`, and only granted to clients configured for it; new grants also need a valid `osmTokenKey`. Unknown, duplicate, write-only or `osm:tagfix`-without-`tasks:write` requests fail with `invalid_scope`. `tasks:edit` (see [Editor scope](#editor-scope-tasksedit)) is likewise valid only together with `tasks:write`, never with `osm:tagfix`, and only for clients configured for it. Stored and returned scope strings use the canonical order `tasks:read tasks:write tasks:edit osm:tagfix`. `mobile:admin` stands alone (see [Admin scope](#admin-scope-mobileadmin)); combining it with any other scope is `invalid_scope`.
 
 `tasks:read` permits the SDK's challenge discovery/detail/tags, task listing/detail, spatial queries, read-only marker query, the choice check (`GET /api/v2/task/:id/choice/check`, no query or body) and the new identity endpoint. The HTTP method **and exact route pattern** must be allowlisted in `MobileReadRoutes`. Legacy `whoami`, task-start/release and mutation routes are excluded. The user's existing permissions still apply. The marker query is a read-only PUT; not every GET is read-only.
 
@@ -108,6 +108,19 @@ resolution, then write the status (which releases the lock). Skip needs no
 lock. `refreshLock` is therefore not allowed for bearer tokens.
 
 These write requests must have **no query string and no body** (`400 invalid_request` otherwise). The one exception is `POST /api/v2/task/:id/choice`: no query string, `Content-Type: application/json`, a `Content-Length` of 1 to 2048 bytes and no `Transfer-Encoding`. That excludes `requestReview` (the user's review setting applies), task `tags` and `completionResponses`. All other mutations, including statuses 0, 3, 4, 7, 8 and 9, comments, tags, bundles, review routes, `refreshLock`, unlock requests and anything that edits OpenStreetMap, return `403 insufficient_scope` for every bearer token. A `tasks:read`-only token on a lifecycle route also gets `403 insufficient_scope`.
+
+### Editor scope (`tasks:edit`)
+
+Desktop editors such as the JOSM MapRoulette plugin hold a task for a whole editing session and record more than a status. `tasks:edit` adds these requests (`MobileEditorRoutes`); anything else stays `403 insufficient_scope`:
+
+| Route | Query keys | Body |
+| --- | --- | --- |
+| `PUT /api/v2/task/:id/(1\|2\|5\|6)` | `requestReview` (`true` only: `false` would skip a mandatory review, see [upstream-issues.md](upstream-issues.md) §5), `tags` | optional JSON `completionResponses` |
+| `POST /api/v2/task/:id/comment` | `actionId` (digits) | required JSON `{"comment": "..."}` |
+| `GET /api/v2/task/:id/refreshLock` | none | none |
+| `PUT /api/v2/task/:id/changeset` | `changesetId` (digits) | none |
+
+Each query key may appear once, with a value of at most 1024 characters. A body needs `Content-Type: application/json`, a `Content-Length` of 1 to 16384 bytes and no `Transfer-Encoding`. A request outside these shapes is `400 invalid_request`, before the token is checked. A request in these shapes from a grant without `tasks:edit` is `403 insufficient_scope`; a bare status write is still a `tasks:write` lifecycle write. The write switches (`allowTaskWrites`, the field write policy) and preview mode apply as for other writes. The consent page lists the extra permissions.
 
 Existing `tasks:read` grants keep working unchanged for reads. They are never upgraded: the user signs in again and approves the write permission, which creates a new grant. The consent page names the write permission only when it is requested. If an operator removes `tasks:write` from a client's configuration, that client's existing write grants stop authenticating (`401 invalid_token`) until the user signs in again.
 

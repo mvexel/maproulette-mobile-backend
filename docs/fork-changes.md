@@ -60,11 +60,11 @@ scoped per grant.
 | Routes: `authorize`, `callback`, `consent`, `token`, `revoke`, `me`                                                                                                    | `conf/routes:5-10` → `app/controllers/MobileOAuthController.scala` (`authorize` :124, `callback` :170, `consent` :297, `token` :353, `revoke` :372, `me` :394) |
 | Grant, token and code lifecycle (hashing, rotation, replay revocation)                                                                                                 | `app/org/maproulette/auth/mobile/MobileOAuthService.scala:36`                                                                                                  |
 | Storage                                                                                                                                                                | `app/org/maproulette/auth/mobile/MobileOAuthRepository.scala`, models in `MobileOAuthModels.scala`                                                             |
-| Scopes `tasks:read`, `tasks:write`, `osm:tagfix` and `mobile:admin` (strict parsing; `osm:tagfix` requires `tasks:write`; `mobile:admin` stands alone), config clients | `app/org/maproulette/auth/mobile/MobileOAuthSettings.scala:21,30,86`                                                                                           |
+| Scopes `tasks:read`, `tasks:write`, `tasks:edit`, `osm:tagfix` and `mobile:admin` (strict parsing; `osm:tagfix` and `tasks:edit` require `tasks:write` and exclude each other; `mobile:admin` stands alone), config clients | `app/org/maproulette/auth/mobile/MobileOAuthSettings.scala:21,30,86`                                                                                           |
 | Clients read from `mobile_oauth_clients` with a 10 s cache, seeded from config (see [Mobile admin](#mobile-admin))                                                     | `app/org/maproulette/auth/mobile/MobileClientRegistry.scala:14,130`                                                                                            |
 | OSM identity lookup, and provisioning of a MapRoulette user on first sign-in                                                                                           | `MobileOSMIdentity.scala:11`, `MobileUserProvisioner.scala:13`                                                                                                 |
 | Configuration block (off by default) and its dispatcher                                                                                                                | `conf/application.conf` (`mobileOAuth { … }`, `mobile-oauth-dispatcher`)                                                                                       |
-| Staging client registrations (`maproulette-android-example`, `maproulette-ios-example`)                                                                                | `conf/mobile-staging.conf`                                                                                                                                     |
+| Staging client registrations (`maproulette-android-example`, `maproulette-ios-example`, `maproulette-josm`)                                                                                | `conf/mobile-staging.conf`                                                                                                                                     |
 | Tables `mobile_oauth_interactions`, `_families`, `_codes`, `_access_tokens`, `_refresh_tokens`                                                                         | `conf/evolutions/default/129.sql`                                                                                                                              |
 | Dependency `scala-oauth2-core` 1.6.0                                                                                                                                   | `build.sbt`                                                                                                                                                    |
 
@@ -82,9 +82,24 @@ without a bearer token pass through unchanged.
 | Filter registration                                                                                                                                                                                 | `app/org/maproulette/filters/Filters.scala`                                        |
 | Read allowlist (`tasks:read`): challenge search, challenge, tags, tasks, task, `choice/check`, task and marker boxes, `me`                                                                          | `app/org/maproulette/auth/mobile/MobileBearerFilter.scala:55` (`MobileReadRoutes`) |
 | Write allowlist (`tasks:write`): `GET` `start` and `release`; `POST` `skip` and `choice`; `PUT` status `1`, `2`, `5`, `6`. No query string and no body, except the choice JSON (at most 2048 bytes) | `MobileBearerFilter.scala:84` (`MobileWriteRoutes`)                                |
+| Editor allowlist (`tasks:edit`): status `1`, `2`, `5`, `6` with `requestReview=true`, `tags` and a JSON body; `POST` comment; `GET` `refreshLock`; `PUT` `changeset`. Listed query keys only, bodies at most 16 KiB. See [Desktop editor login](#desktop-editor-login-josm) | `MobileBearerFilter.scala` (`MobileEditorRoutes`) |
 | Admin allowlist (`mobile:admin` only): see [Mobile admin](#mobile-admin)                                                                                                                            | `MobileBearerFilter.scala:25` (`MobileAdminRoutes`)                                |
 | Filter logic and error responses (`insufficient_scope`, `invalid_request`, `admin_required`)                                                                                                        | `MobileBearerFilter.scala:115,162`                                                 |
 | The bearer user takes precedence in `userAwareRequest`                                                                                                                                              | `app/org/maproulette/session/SessionManager.scala:239`                             |
+
+### Desktop editor login (JOSM)
+
+Lets desktop editors such as the JOSM MapRoulette plugin use the mobile OAuth
+provider (epic mvexel/MapRoulette-JOSM#54, issue #55). Items 1 and 2 are
+upstream-bound, as part of the provider; items 3 and 4 are fork-only. Each item
+is its own commit.
+
+| What | Where | Kind |
+| ---- | ----- | ---- |
+| 1. Loopback callbacks: `http://127.0.0.1:<port>/…` or `http://[::1]:<port>/…`, exact match, `localhost` refused (RFC 8252 §7.3, §8.3). The consent page's `form-action` names the loopback origin | `MobileOAuthSettings.validRedirect`, `MobileOAuthController.consentPage`, `mobile-oauth.md` | upstream-bound |
+| 2. `tasks:edit` scope, `MobileEditorRoutes`, consent text, docs | `MobileOAuthSettings.scala` (`MobileScopes`), `MobileBearerFilter.scala`, `MobileOAuthController.scala`, `mobile-oauth.md` | upstream-bound |
+| 3. Admin API validation and docs for loopback callbacks and `tasks:edit`; preview mode treats the editor routes as task writes | `MobileAdminController.scala`, `mobile-admin-api.md`, `MobileDrafts.scala` | fork-only |
+| 4. `maproulette-josm` staging client (`tasks:read tasks:write tasks:edit`, callback `http://127.0.0.1:8111/oauth_authorization`) | `conf/mobile-staging.conf` | fork-only |
 
 ### Mobile admin
 

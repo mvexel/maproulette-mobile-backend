@@ -12,6 +12,45 @@ class MobileScopesSpec extends PlaySpec {
     }
   }
 
+  "MobileScopes tasks:edit" should {
+    "require tasks:write, refuse osm:tagfix and format in canonical order" in {
+      MobileScopes.parse("tasks:edit tasks:write tasks:read") mustBe
+        Some(Set("tasks:read", "tasks:write", "tasks:edit"))
+      MobileScopes.format(Set("tasks:edit", "tasks:read", "tasks:write")) mustBe
+        "tasks:read tasks:write tasks:edit"
+      MobileScopes.parse("tasks:read tasks:edit") mustBe None
+      MobileScopes.parse("tasks:edit") mustBe None
+      MobileScopes.parse("tasks:read tasks:write tasks:edit osm:tagfix") mustBe None
+      MobileScopes.parse("mobile:admin tasks:edit") mustBe None
+      MobileScopes.osmScope("tasks:read tasks:write tasks:edit") mustBe "read_prefs"
+    }
+  }
+
+  "MobileOAuthSettings.validRedirect" should {
+    "accept an http loopback IP literal with a port and path" in {
+      Seq(
+        "http://127.0.0.1:8111/oauth_authorization",
+        "http://[::1]:8111/oauth_authorization",
+        "https://app.example/callback",
+        "org.example.app:/callback"
+      ).foreach(uri => MobileOAuthSettings.validRedirect(uri) mustBe true)
+    }
+    "refuse other http callbacks and loopbacks without a port, path or clean URI" in {
+      Seq(
+        "http://localhost:8111/oauth_authorization",
+        "http://127.0.0.2:8111/oauth_authorization",
+        "http://example.org:8111/oauth_authorization",
+        "http://127.0.0.1/oauth_authorization",
+        "http://127.0.0.1:8111",
+        "http://127.0.0.1:8111/cb?x=1",
+        "http://127.0.0.1:8111/cb#x",
+        "http://user@127.0.0.1:8111/cb",
+        "http://127.0.0.1.example.org:8111/cb",
+        "ftp://127.0.0.1:8111/cb"
+      ).foreach(uri => MobileOAuthSettings.validRedirect(uri) mustBe false)
+    }
+  }
+
   "MobileScopes.parseClient" should {
     "accept guest next to app scopes" in {
       MobileScopes.parseClient("tasks:read guest") mustBe Some(Set("tasks:read", "guest"))

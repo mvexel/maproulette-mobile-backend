@@ -40,10 +40,12 @@ A client is `{"id", "name", "redirectUris", "scopes", "enabled"}`.
 
 - `id`: 1 to 100 of `A-Z a-z 0-9 . _ -`.
 - `name`: 1 to 200 characters, with no surrounding spaces or control characters.
-- `redirectUris`: 1 to 10 distinct URIs. Each is `https://host/...` or a reverse-domain custom
-  scheme (`com.example.app:/path`), with no query, fragment or user info.
+- `redirectUris`: 1 to 10 distinct URIs. Each is `https://host/...`, a reverse-domain custom
+  scheme (`com.example.app:/path`) or an HTTP loopback IP literal with a port
+  (`http://127.0.0.1:8111/path`, `http://[::1]:8111/path`), with no query, fragment or user info.
 - `scopes`: one of `["tasks:read"]` (the default), `["tasks:read","tasks:write"]`,
-  `["tasks:read","tasks:write","osm:tagfix"]` or `["mobile:admin"]`.
+  `["tasks:read","tasks:write","osm:tagfix"]`, `["tasks:read","tasks:write","tasks:edit"]` or
+  `["mobile:admin"]`.
 - `enabled`: defaults to `true`.
 
 ### `GET /api/v2/mobile-admin/clients`
