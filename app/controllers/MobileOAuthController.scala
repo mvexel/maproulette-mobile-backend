@@ -312,7 +312,8 @@ class MobileOAuthController(
     val callback = new URI(interaction.redirectUri)
     // Chromium applies form-action to the consent response's redirect chain too.
     val callbackSource =
-      if (callback.getScheme == "https") s"https://${callback.getRawAuthority}"
+      if (Set("https", "http").contains(callback.getScheme))
+        s"${callback.getScheme}://${callback.getRawAuthority}"
       else callback.getScheme + ":"
     Ok(s"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Authorize MapRoulette access</title></head>
       <body><h1>Connect ${html(clientName)}?</h1><p>Signed in as ${html(userName)}.</p>

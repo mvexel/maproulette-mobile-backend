@@ -35,7 +35,7 @@ mobileOAuth {
 }
 ```
 
-The OSM callback and the app callback are different URLs. The app callback must match an entry exactly, including its path. HTTPS app links and reverse-domain custom schemes are accepted; query strings and fragments are not accepted in registered callbacks. There is no dynamic registration endpoint or public-client secret. Each host app owns its callback registration and operating-system integration.
+The OSM callback and the app callback are different URLs. The app callback must match an entry exactly, including its path. HTTPS app links, reverse-domain custom schemes and, for desktop apps, HTTP loopback callbacks on an IP literal with an explicit port (`http://127.0.0.1:8111/oauth_authorization`, RFC 8252 §7.3; `localhost` is refused) are accepted; query strings and fragments are not accepted in registered callbacks. There is no dynamic registration endpoint or public-client secret. Each host app owns its callback registration and operating-system integration.
 
 For loopback development only, `allowInsecureLoopback = true` permits an HTTP backend callback on localhost. Production callbacks require HTTPS. The existing OSM consumer configuration supplies the server-side OSM client credentials. A login asks OSM for `read_prefs` only, unless the app requests `osm:tagfix` (see [Choice tasks](#choice-tasks-osmtagfix)); then it asks for `read_prefs write_api`, and the OSM application must allow `write_api`.
 

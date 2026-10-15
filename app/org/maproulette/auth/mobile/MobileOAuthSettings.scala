@@ -217,8 +217,11 @@ object MobileOAuthSettings {
   val DefaultClaimOrigin = "https://streettally.osm.lol"
 
   /**
-    * A registered app callback: https with a host, or a reverse-domain custom scheme. No fragment,
-    * query or user info, because the code is appended as the query.
+    * A registered app callback: https with a host, a reverse-domain custom scheme, or an http
+    * loopback IP literal with an explicit port and path (RFC 8252 §7.3; desktop editors such as
+    * JOSM, whose Remote Control listens on 127.0.0.1:8111). `localhost` is refused (RFC 8252 §8.3).
+    * Matching stays exact, so the port is part of the registration. No fragment, query or user
+    * info, because the code is appended as the query.
     */
   def validRedirect(value: String): Boolean =
     scala.util
@@ -227,7 +230,10 @@ object MobileOAuthSettings {
         val scheme = Option(uri.getScheme).getOrElse("")
         val web    = scheme == "https" && uri.getHost != null
         val native = scheme.contains(".") && scheme.matches("[a-z][a-z0-9+.-]*")
-        (web || native) && uri.getFragment == null && uri.getUserInfo == null && uri.getQuery == null
+        val loopback = scheme == "http" && Set("127.0.0.1", "[::1]").contains(uri.getHost) &&
+          uri.getPort > 0 && Option(uri.getRawPath).exists(_.startsWith("/"))
+        (web || native || loopback) && uri.getFragment == null && uri.getUserInfo == null &&
+        uri.getQuery == null
       }
       .getOrElse(false)
 }
