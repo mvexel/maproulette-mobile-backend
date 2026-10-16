@@ -52,28 +52,25 @@ class WizardOverpass @Inject() (ws: WSClient, config: Config)(implicit ec: Execu
   /**
     * One line per endpoint saying whether Overpass answers from this server, with the addresses its
     * host resolves to, for the deploy log (Rex reads it after each deploy; no container shell
-    * needed). Each endpoint's status page, 5 s, no retry.
+    * needed). A tiny real query to the endpoint itself, as the wizard asks (not every instance
+    * serves `/status`), 5 s, no retry.
     */
   def probe(): Future[Seq[String]] = Future.sequence(urls.map(probe))
 
-  private def probe(url: String): Future[String] = {
-    val status = url.replaceFirst("/interpreter$", "/status")
-    Future(WizardOverpass.resolved(status)).flatMap { addresses =>
+  private def probe(url: String): Future[String] =
+    Future(WizardOverpass.resolved(url)).flatMap { addresses =>
       val started = System.nanoTime()
       def ms      = (System.nanoTime() - started) / 1000000
-      ws.url(status)
+      ws.url(url)
         .withRequestTimeout(5.seconds)
         .withHttpHeaders("User-Agent" -> userAgent)
-        .get()
-        .map(response =>
-          s"Overpass answered: HTTP ${response.status} in $ms ms ($status, $addresses)"
-        )
+        .post(Map("data" -> Seq(WizardOverpass.ProbeQuery)))
+        .map(response => s"Overpass answered: HTTP ${response.status} in $ms ms ($url, $addresses)")
         .recover {
           case e: Exception =>
-            s"Overpass not reachable: ${e.getClass.getSimpleName} after $ms ms ($status, $addresses)"
+            s"Overpass not reachable: ${e.getClass.getSimpleName} after $ms ms ($url, $addresses)"
         }
     }
-  }
 
   /** The query's `elements`, from the cache when `cached` and present. */
   def elements(
@@ -121,6 +118,10 @@ class WizardOverpass @Inject() (ws: WSClient, config: Config)(implicit ec: Execu
 }
 
 object WizardOverpass {
+
+  /** The startup probe's query: one node's id, a few bytes back. */
+  val ProbeQuery = "[out:json][timeout:5];node(1);out ids;"
+
   val DefaultUrls: Seq[String] = Seq(
     "https://overpass-api.de/api/interpreter",
     "https://overpass.private.coffee/api/interpreter"
