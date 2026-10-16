@@ -247,8 +247,9 @@ query: `{"counts": [{"set", "version", "open", "complete"}]}`, or every set `{"s
 ### `GET /api/v2/mobile-admin/wizard/question-sets/:id/features?lat=&lon=&radius=`
 
 `{"set", "version", "complete", "truncated", "open": [{"id": "node/<n>"|"way/<n>", "lon", "lat",
-"name"}]}`, at most 2000 open places (`truncated: true` past that). `503 osm_unavailable` when
-Overpass didn't answer.
+"name"}]}`, at most 2000 open places (`truncated: true` past that). `502 osm_unavailable` when
+Overpass failed, `504 osm_timeout` when it timed out (no retry), `429 rate_limited` past 20 calls
+a minute.
 
 ### `POST /api/v2/mobile-admin/wizard/campaigns`
 
@@ -261,11 +262,13 @@ version, area and event date go in `mobile_campaign_sources` (evolution 146); th
 `campaign.create`.
 
 - `201 {"id", "tasks"}`.
-- `400 invalid_request` with `detail`; `404 project_not_found`; `403 organizer_forbidden` for a
-  project that isn't theirs.
+- `400 invalid_request` with `detail` (radius outside 200 to 3000 metres among them);
+  `404 project_not_found`; `403 organizer_forbidden` for a project that isn't theirs, their Home
+  project included.
 - `409 set_changed` when `version` isn't current.
-- `422 nothing_to_check` when no place is left; `422 area_too_big` past 2000 open places.
-- `503 osm_unavailable`.
+- `400 area_too_big` past 2000 open places; `422 nothing_to_check` when no place is left.
+- `502 osm_unavailable`, `504 osm_timeout`, `429 rate_limited`; Overpass is asked once, never
+  retried.
 
 ### `POST /api/v2/mobile-admin/wizard/campaigns/:id/publish`
 
@@ -274,8 +277,8 @@ Lists the campaign in the app as the admin's Publish does: enabled and tagged
 is off. `404 not_found` for anything but a choice campaign, `422 nothing_to_check` without tasks.
 Audited as `campaign.publish`.
 
-While the write switch is off, super-users may create and publish; organizers get `403
-mobile_writes_disabled` (see [Organizers](#organizers)).
+While the write switch is off, create and publish are `403 mobile_writes_disabled` for everyone,
+super-users included (Ada, #48: no draft exemption until Martijn decides).
 
 ## Live progress page
 

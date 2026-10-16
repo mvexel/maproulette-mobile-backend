@@ -353,7 +353,8 @@ class MobileOrganizeSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
       verify(audit, never()).record(anyLong(), anyString(), anyString(), any())
     }
 
-    "refuse an organizer's writes while answer saving is off, and let the super-user write" in {
+    "refuse an organizer's writes while answer saving is off, and let the super-user write" +
+      " everything but the wizard's" in {
       val switched = new MobileOAuthSettings(
         Configuration(
           ConfigFactory
@@ -374,9 +375,7 @@ class MobileOrganizeSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
         PUT  -> "/api/v2/mobile-admin/projects/3/enabled",
         PUT  -> "/api/v2/mobile-admin/challenges/70/live",
         POST -> "/api/v2/mobile-admin/challenges/70/live/rotate",
-        POST -> "/api/v2/mobile-admin/challenges/70/queue",
-        POST -> "/api/v2/mobile-admin/wizard/campaigns",
-        POST -> "/api/v2/mobile-admin/wizard/campaigns/70/publish"
+        POST -> "/api/v2/mobile-admin/challenges/70/queue"
       )
       writes.foreach {
         case (method, path) =>
@@ -386,6 +385,19 @@ class MobileOrganizeSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
             contentAsJson(result) mustBe Json.obj("error" -> "mobile_writes_disabled")
             contentAsString(gate(adminGrant).apply(next)(bearer(method, path))) mustBe "admin"
           }
+      }
+      // No draft exemption: wizard create and publish wait for the switch, for everyone.
+      Seq(
+        "/api/v2/mobile-admin/wizard/campaigns",
+        "/api/v2/mobile-admin/wizard/campaigns/70/publish"
+      ).foreach { path =>
+        Seq(organizeGrant, adminGrant).foreach { grant =>
+          withClue(s"POST $path ${grant.scope}") {
+            val result = gate(grant).apply(next)(bearer(POST, path))
+            status(result) mustBe FORBIDDEN
+            contentAsJson(result) mustBe Json.obj("error" -> "mobile_writes_disabled")
+          }
+        }
       }
       contentAsString(
         gate(organizeGrant).apply(next)(bearer(GET, "/api/v2/mobile-admin/campaigns"))

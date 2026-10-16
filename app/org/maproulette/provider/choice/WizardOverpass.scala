@@ -20,7 +20,8 @@ case class WizardQueryFailure(code: String)
   */
 @Singleton
 class WizardOverpass @Inject() (ws: WSClient, config: Config)(implicit ec: ExecutionContext) {
-  protected def url: String = config.getOSMQLProvider.providerURL
+  protected def url: String                    = config.getOSMQLProvider.providerURL
+  protected def requestTimeout: FiniteDuration = (OverpassQuery.Timeout + 2).seconds
   private val userAgent =
     "Street Tally campaign wizard (+https://github.com/mvexel/maproulette-mobile-backend)"
   private val PerMinute = 20
@@ -76,7 +77,7 @@ class WizardOverpass @Inject() (ws: WSClient, config: Config)(implicit ec: Execu
         Future.successful(Left(WizardQueryFailure("rate_limited")))
       case None =>
         ws.url(url)
-          .withRequestTimeout((OverpassQuery.Timeout + 2).seconds)
+          .withRequestTimeout(requestTimeout)
           .withHttpHeaders("User-Agent" -> userAgent)
           .post(Map("data" -> Seq(query)))
           .map { response =>
@@ -93,7 +94,10 @@ class WizardOverpass @Inject() (ws: WSClient, config: Config)(implicit ec: Execu
               case None => Left(WizardQueryFailure("osm_unavailable"))
             }
           }
-          .recover { case _: Exception => Left(WizardQueryFailure("osm_unavailable")) }
+          .recover {
+            case _: java.util.concurrent.TimeoutException => Left(WizardQueryFailure("osm_timeout"))
+            case _: Exception                             => Left(WizardQueryFailure("osm_unavailable"))
+          }
           .andThen { case _ => inFlight.release() }
     }
 }

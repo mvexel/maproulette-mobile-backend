@@ -17,6 +17,7 @@ import play.api.libs.ws.WSClient
 import play.api.test.FakeRequest
 import play.api.test.Helpers._
 import scala.concurrent.ExecutionContext
+import scala.concurrent.duration._
 
 /**
   * The campaign wizard's create and publish against the database, with a fake Overpass and the
@@ -57,7 +58,8 @@ class MobileWizardSpec(implicit val application: Application) extends FrameworkH
   private val wizard = new CampaignWizard(
     new QuestionSetLibrary(),
     new WizardOverpass(application.injector.instanceOf[WSClient], mock[Config]) {
-      override protected def url: String = fake.url
+      override protected def url: String                    = fake.url
+      override protected def requestTimeout: FiniteDuration = 1.second
     },
     db,
     application.injector.instanceOf[DALManager],
@@ -157,7 +159,7 @@ class MobileWizardSpec(implicit val application: Application) extends FrameworkH
         SqlParser.scalar[Long]
       ) mustBe organizer.id
 
-      // Nothing left once every open place is left out; Overpass failing is 503.
+      // Nothing left once every open place is left out; Overpass failing is 502, timing out 504.
       val empty = controller.create(
         as(organizer).withBody(campaign(mine.id, Seq("node/1", "node/2", "node/3")))
       )
@@ -165,8 +167,24 @@ class MobileWizardSpec(implicit val application: Application) extends FrameworkH
       contentAsJson(empty) mustBe Json.obj("error" -> "nothing_to_check")
       fake.answer = _ => (504, "")
       val down = controller.create(as(organizer).withBody(campaign(mine.id)))
-      status(down) mustBe SERVICE_UNAVAILABLE
+      status(down) mustBe BAD_GATEWAY
       contentAsJson(down) mustBe Json.obj("error" -> "osm_unavailable")
+      contentAsString(down) must not include "Exception"
+      fake.answer = _ => { Thread.sleep(1500); (200, FakeOverpass.elements()) }
+      val slow = controller.create(as(organizer).withBody(campaign(mine.id)))
+      status(slow) mustBe GATEWAY_TIMEOUT
+      contentAsJson(slow) mustBe Json.obj("error" -> "osm_timeout")
+      val queried = fake.count
+      // Past 2000 open places the area is too big; Overpass is asked once, never retried.
+      fake.answer = _ =>
+        (
+          200,
+          FakeOverpass.elements(FakeOverpass.countElement(2001), FakeOverpass.countElement(2001))
+        )
+      val big = controller.create(as(organizer).withBody(campaign(mine.id)))
+      status(big) mustBe BAD_REQUEST
+      contentAsJson(big) mustBe Json.obj("error" -> "area_too_big")
+      fake.count mustBe queried + 1
 
       // Publish: listed when the project is on.
       val published = controller.publish(id)(as(organizer))
@@ -204,8 +222,20 @@ class MobileWizardSpec(implicit val application: Application) extends FrameworkH
       contentAsJson(controller.publish(otherId)(as(organizer))) mustBe Json.obj(
         "error" -> "organizer_forbidden"
       )
-      contentAsJson(controller.create(as(organizer).withBody(campaign(theirs.id)))) mustBe
-        Json.obj("error" -> "organizer_forbidden")
+      val notTheirs = controller.create(as(organizer).withBody(campaign(theirs.id)))
+      status(notTheirs) mustBe FORBIDDEN
+      contentAsJson(notTheirs) mustBe Json.obj("error" -> "organizer_forbidden")
+      // Their Home project is never theirs to run campaigns in, though they administer it.
+      val homeName = s"Home_${organizer.osmProfile.id}"
+      val home = serviceManager.project
+        .retrieveByName(homeName)
+        .getOrElse(
+          serviceManager.project.create(Project(-1, organizer.osmProfile.id, homeName), organizer)
+        )
+      serviceManager.user.clearCache(organizer.id)
+      val inHome = controller.create(as(organizer).withBody(campaign(home.id)))
+      status(inHome) mustBe FORBIDDEN
+      contentAsJson(inHome) mustBe Json.obj("error" -> "organizer_forbidden")
       status(controller.publish(Long.MaxValue)(as(User.superUser, MobileScopes.Admin))) mustBe NOT_FOUND
     }
   }

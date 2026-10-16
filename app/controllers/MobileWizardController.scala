@@ -29,9 +29,12 @@ class MobileWizardController @Inject() (
       else Json.obj("error"                -> code, "detail" -> detail)
     )
 
-  private def failed(f: WizardQueryFailure): Result =
-    if (f.code == "rate_limited") problem(TooManyRequests, f.code)
-    else problem(ServiceUnavailable, f.code)
+  /** Our limit is 429; Overpass timing out is 504 and any other Overpass failure 502. */
+  private def failed(f: WizardQueryFailure): Result = f.code match {
+    case "rate_limited" => problem(TooManyRequests, f.code)
+    case "osm_timeout"  => problem(GatewayTimeout, f.code)
+    case _              => problem(BadGateway, "osm_unavailable")
+  }
 
   private def organizer[A](request: Request[A])(work: User => Future[Result]): Future[Result] =
     MobileAdminAccess.capability(request, settings, service, MobileCapability.ListCampaigns)(work)
@@ -113,7 +116,7 @@ class MobileWizardController @Inject() (
                   wizard.features(set, input.area, user.id, cached = false).flatMap {
                     case Left(f) => Future.successful(failed(f))
                     case Right(open) if open.truncated =>
-                      Future.successful(problem(UnprocessableEntity, "area_too_big"))
+                      Future.successful(problem(BadRequest, "area_too_big"))
                     case Right(open) =>
                       service.storage(wizard.create(user, input, set, open)).map {
                         case Left(code)         => problem(UnprocessableEntity, code)

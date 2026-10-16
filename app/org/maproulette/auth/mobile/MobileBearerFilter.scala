@@ -407,10 +407,6 @@ object MobileFieldRoutes {
           MobileLiveRoutes.rotate(request.path) ||
           // The confirm queue reads OSM and writes only our tables (H1b).
           request.path.matches("/api/v2/mobile-admin/challenges/[0-9]+/queue") ||
-          // The wizard prepares and lists campaigns: no task or OSM write. Organizers' grants are
-          // still refused below while the switch is off.
-          request.path == "/api/v2/mobile-admin/wizard/campaigns" ||
-          request.path.matches("/api/v2/mobile-admin/wizard/campaigns/[0-9]+/publish") ||
           MobileGuestRoutes.claimToken(request.method, request.path) ||
           // D13: the bearer filter below lets only the claim page's grant through.
           (bearer && MobileClaimRoutes.permits(request.method, request.path))
