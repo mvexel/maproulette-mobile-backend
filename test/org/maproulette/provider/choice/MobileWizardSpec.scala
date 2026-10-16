@@ -58,7 +58,7 @@ class MobileWizardSpec(implicit val application: Application) extends FrameworkH
   private val wizard = new CampaignWizard(
     new QuestionSetLibrary(),
     new WizardOverpass(application.injector.instanceOf[WSClient], mock[Config]) {
-      override protected def url: String                    = fake.url
+      override protected def urls: Seq[String]              = Seq(fake.url)
       override protected def requestTimeout: FiniteDuration = 1.second
     },
     db,

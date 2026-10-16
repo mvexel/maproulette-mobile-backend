@@ -50,8 +50,8 @@ class CampaignWizardSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
   private val library = new QuestionSetLibrary()
   private var clock   = 1000000L
   private def overpass() = new WizardOverpass(ws, mock[Config]) {
-    override protected def url: String = fake.url
-    override protected def now(): Long = clock
+    override protected def urls: Seq[String] = Seq(fake.url)
+    override protected def now(): Long       = clock
   }
   private def wizard(client: WizardOverpass = overpass()) =
     new CampaignWizard(
@@ -210,14 +210,41 @@ class CampaignWizardSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
       fake.count mustBe before + 2
     }
 
-    "say in one line whether Overpass answers" in {
-      result(overpass().probe()) must fullyMatch regex
-        s"Overpass answered: HTTP 200 in [0-9]+ ms \\(${java.util.regex.Pattern
-          .quote(fake.url.replace("interpreter", "status"))}\\)"
-      val down = new WizardOverpass(ws, mock[Config]) {
-        override protected def url: String = "http://127.0.0.1:9/api/interpreter"
+    "say in one line per endpoint whether Overpass answers, and where its host resolves" in {
+      val down = "http://127.0.0.1:9/api/interpreter"
+      val both = new WizardOverpass(ws, mock[Config]) {
+        override protected def urls: Seq[String] = Seq(down, fake.url)
       }
-      result(down.probe()) must startWith("Overpass not reachable: ")
+      val lines = result(both.probe())
+      lines.size mustBe 2
+      lines.head must startWith("Overpass not reachable: ")
+      lines.head must endWith("(http://127.0.0.1:9/api/status, resolves to 127.0.0.1 (IPv4))")
+      lines(1) must fullyMatch regex
+        s"Overpass answered: HTTP 200 in [0-9]+ ms \\(${java.util.regex.Pattern
+          .quote(fake.url.replace("interpreter", "status"))}, resolves to 127\\.0\\.0\\.1 \\(IPv4\\)\\)"
+      WizardOverpass.resolved("https://[::1]/api/status") mustBe "resolves to 0:0:0:0:0:0:0:1 (IPv6)"
+    }
+
+    "read its endpoints from OVERPASS_URLS, and try the next only when connecting fails" in {
+      WizardOverpass.parseUrls(None) mustBe WizardOverpass.DefaultUrls
+      WizardOverpass.parseUrls(Some(" ")) mustBe WizardOverpass.DefaultUrls
+      WizardOverpass.parseUrls(Some("https://a/api/interpreter, https://b/api/interpreter")) mustBe
+        Seq("https://a/api/interpreter", "https://b/api/interpreter")
+      fake.answer = _ => (200, FakeOverpass.elements(FakeOverpass.countElement(3)))
+      val fallback = new WizardOverpass(ws, mock[Config]) {
+        override protected def urls: Seq[String] =
+          Seq("http://127.0.0.1:9/api/interpreter", fake.url)
+      }
+      val before = fake.count
+      result(fallback.elements("query-fallback", 1)).isRight mustBe true
+      fake.count mustBe before + 1
+      // A failure after connecting is the answer: the next endpoint isn't asked.
+      fake.answer = _ => (504, "")
+      val second = new WizardOverpass(ws, mock[Config]) {
+        override protected def urls: Seq[String] = Seq(fake.url, fake.url)
+      }
+      result(second.elements("query-504", 1)) mustBe Left(WizardQueryFailure("osm_unavailable"))
+      fake.count mustBe before + 2
     }
 
     "say when Overpass fails, runs out of time or is asked too often" in {
