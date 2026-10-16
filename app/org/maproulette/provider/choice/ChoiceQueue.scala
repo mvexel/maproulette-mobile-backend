@@ -31,7 +31,8 @@ object ChoiceQueue {
       question: ChoiceQuestion,
       option: ChoiceOption,
       people: Int,
-      at: Instant
+      at: Instant,
+      first: Instant
   ) {
     def tags: Map[String, Option[String]] =
       option.setTags.map { case (k, v) => k -> Some(v) } ++ option.unsetTags.map(_ -> None)
@@ -39,14 +40,27 @@ object ChoiceQueue {
     /** OSM already carries the answer. */
     def applied(current: Map[String, String]): Boolean = carries(option, current)
 
-    private val dayFormat = DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH)
-    def day: String       = at.atOffset(ZoneOffset.UTC).format(dayFormat)
+    /** `14 Oct`, or the range from the first to the latest answer: `13–14 Oct`, `30 Sep–2 Oct`. */
+    def days: String = {
+      def utc(i: Instant) = i.atOffset(ZoneOffset.UTC).toLocalDate
+      val (from, to)      = (utc(first), utc(at))
+      val month           = DateTimeFormatter.ofPattern("MMM", Locale.ENGLISH)
+      if (from == to) s"${to.getDayOfMonth} ${to.format(month)}"
+      else if (from.getMonth == to.getMonth && from.getYear == to.getYear)
+        s"${from.getDayOfMonth}–${to.getDayOfMonth} ${to.format(month)}"
+      else s"${from.getDayOfMonth} ${from.format(month)}–${to.getDayOfMonth} ${to.format(month)}"
+    }
 
-    /** handback-copy §2: `2 people surveyed this on 14 Oct and said …`. */
+    /** The answer's tag changes: `door=sliding`, and `no key` for a removed one. */
+    def tagText: String =
+      (option.setTags.toSeq.sorted.map { case (k, v) => s"$k=$v" } ++
+        option.unsetTags.sorted.map(k => s"no $k")).mkString(", ")
+
+    /** Iris (2026-10-16): the task instruction a mapper reads on maproulette.org. */
     def evidence: String = {
       val who = if (people == 1) "1 person" else s"$people people"
-      s"""$who surveyed this on $day and answered "${question.prompt}" with "${option.label}". """ +
-        "Add it if it looks right; skip if unsure."
+      s"""Surveyed on $days by $who. Question: "${question.prompt}" Answer: "${option.label}" """ +
+        s"($tagText). Add it if it looks right; skip if unsure."
     }
 
     def element: String = s"${place.elementType.getOrElse("node")}/${place.elementId.getOrElse(0L)}"
@@ -117,7 +131,12 @@ object ChoiceQueue {
         found.collect {
           case (q, opts) if opts.size == 1 =>
             val (oid, (people, at)) = opts.head
-            q.options.find(_.id == oid).map(o => Candidate(place, q, o, people, at))
+            val first = place.answers
+              .filter(a => (a.body \ "answers" \ q.id).asOpt[String].contains(oid))
+              .map(_.at)
+              .minOption
+              .getOrElse(at)
+            q.options.find(_.id == oid).map(o => Candidate(place, q, o, people, at, first))
         }.flatten,
         found.count(_._2.size > 1)
       )

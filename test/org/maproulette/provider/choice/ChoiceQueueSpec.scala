@@ -47,6 +47,7 @@ class ChoiceQueueSpec extends PlaySpec {
       found.candidates.map(c => (c.question.id, c.option.id, c.people)) mustBe
         Seq(("backrest", "yes", 2))
       found.candidates.head.at mustBe day2
+      found.candidates.head.first mustBe day1
       found.disagree mustBe 1
       split.shown mustBe Disagree
     }
@@ -61,9 +62,10 @@ class ChoiceQueueSpec extends PlaySpec {
 
     "write the evidence line, name and cooperative tag fix" in {
       val c = candidates(split, Set.empty).candidates.head
-      c.evidence mustBe "2 people surveyed this on 15 Oct and answered \"Does the bench have a " +
-        "backrest?\" with \"Yes\". Add it if it looks right; skip if unsure."
-      c.copy(people = 1).evidence must startWith("1 person surveyed this on 15 Oct")
+      c.evidence mustBe "Surveyed on 14–15 Oct by 2 people. Question: \"Does the bench have a " +
+        "backrest?\" Answer: \"Yes\" (backrest=yes). Add it if it looks right; skip if unsure."
+      c.copy(people = 1, first = day2).evidence must startWith("Surveyed on 15 Oct by 1 person.")
+      c.copy(first = Instant.parse("2026-09-30T12:00:00Z")).days mustBe "30 Sep–15 Oct"
       c.name mustBe "node/1001 backrest=yes"
       c.cooperativeWork mustBe Json.obj(
         "meta" -> Json.obj("version" -> 2, "type" -> 1),
@@ -96,8 +98,9 @@ class ChoiceQueueSpec extends PlaySpec {
         Map("backrest" -> "no"),
         List("backrest:material")
       )
-      val c = Candidate(split, q, o, 1, day1)
+      val c = Candidate(split, q, o, 1, day1, day1)
       c.name mustBe "node/1001 backrest=no backrest:material="
+      c.tagText mustBe "backrest=no, no backrest:material"
       val ops = (c.cooperativeWork \ "operations")(0) \ "data" \ "operations"
       ops.as[Seq[JsObject]].map(o => (o \ "operation").as[String]) mustBe
         Seq("setTags", "unsetTags")

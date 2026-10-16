@@ -174,7 +174,7 @@ class ChoiceQueueServiceSpec(implicit val application: Application) extends Fram
       lines.size mustBe 1
       ((lines.head \ "features")(0) \ "properties" \ "@id").as[String] mustBe "node/8801"
       ((lines.head \ "features")(0) \ "properties" \ "evidence").as[String] must
-        startWith("2 people surveyed this on ")
+        startWith("Surveyed on ")
       (lines.head \ "cooperativeWork" \ "operations")(0) \ "data" \ "operations" mustBe
         JsDefined(
           Json.arr(Json.obj("operation" -> "setTags", "data" -> Json.obj("backrest" -> "yes")))
