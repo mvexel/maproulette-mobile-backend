@@ -46,6 +46,12 @@ GET     /api/v2/mobile-admin/organizers                                 @control
 POST    /api/v2/mobile-admin/organizers                                 @controllers.MobileOrganizerController.add
 DELETE  /api/v2/mobile-admin/organizers/:userId                         @controllers.MobileOrganizerController.remove(userId:Long)
 DELETE  /api/v2/mobile-admin/organizers/:userId/projects/:projectId     @controllers.MobileOrganizerController.removeProject(userId:Long, projectId:Long)
+# Campaign wizard (fork): question sets, counts and open features from Overpass, create and publish
+GET     /api/v2/mobile-admin/wizard/question-sets                       @controllers.MobileWizardController.questionSets
+GET     /api/v2/mobile-admin/wizard/question-sets/:id/features          @controllers.MobileWizardController.features(id:String)
+GET     /api/v2/mobile-admin/wizard/counts                              @controllers.MobileWizardController.counts
+POST    /api/v2/mobile-admin/wizard/campaigns                           @controllers.MobileWizardController.create
+POST    /api/v2/mobile-admin/wizard/campaigns/:id/publish               @controllers.MobileWizardController.publish(id:Long)
 # Live progress page (fork, BACKLOG #12): public and link-only, by an unguessable token
 GET     /api/v2/live/:token                                             @controllers.MobileLiveController.show(token:String)
 # Review page (fork, H1a): read by the live page token; marks need an app grant (docs/mobile-admin-api.md)

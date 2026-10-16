@@ -282,6 +282,11 @@ class MobileOrganizeSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
       POST -> "/api/v2/mobile-admin/challenges/70/queue",
       GET  -> "/api/v2/mobile-admin/challenges/70/queue/export",
       GET  -> "/oauth/mobile/me",
+      GET  -> "/api/v2/mobile-admin/wizard/question-sets",
+      GET  -> "/api/v2/mobile-admin/wizard/counts?lat=40.75&lon=-111.9&radius=800",
+      GET  -> "/api/v2/mobile-admin/wizard/question-sets/entrance-doors/features?lat=40.75&lon=-111.9&radius=800",
+      POST -> "/api/v2/mobile-admin/wizard/campaigns",
+      POST -> "/api/v2/mobile-admin/wizard/campaigns/70/publish",
       GET  -> "/api/v2/challenge/70/tasks?limit=5",
       GET  -> "/api/v2/task/9"
     )
@@ -369,7 +374,9 @@ class MobileOrganizeSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
         PUT  -> "/api/v2/mobile-admin/projects/3/enabled",
         PUT  -> "/api/v2/mobile-admin/challenges/70/live",
         POST -> "/api/v2/mobile-admin/challenges/70/live/rotate",
-        POST -> "/api/v2/mobile-admin/challenges/70/queue"
+        POST -> "/api/v2/mobile-admin/challenges/70/queue",
+        POST -> "/api/v2/mobile-admin/wizard/campaigns",
+        POST -> "/api/v2/mobile-admin/wizard/campaigns/70/publish"
       )
       writes.foreach {
         case (method, path) =>
