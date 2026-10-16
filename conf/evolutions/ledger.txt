@@ -34,3 +34,4 @@ synced d9989212 129
 145 fork mobile_memberships: organizer list for mobile:organize grants (D8, organizer role)
 146 fork mobile_campaign_sources: campaigns made by the campaign wizard (question set, area, event date)
 147 fork choice_queue_items stale_at: stale queued edits in the hourly check (H1d)
+148 fork choice_pending on_map hold and gone-place backfill, choice_stale for gone places (#50)

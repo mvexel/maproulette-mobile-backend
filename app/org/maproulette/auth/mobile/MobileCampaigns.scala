@@ -71,7 +71,8 @@ class MobileCampaignRepository @Inject() (db: Database) {
             COUNT(*) FILTER (WHERE t.status = 6 AND NOT h.held) AS needs_look
           FROM tasks t
           CROSS JOIN LATERAL (SELECT EXISTS(SELECT 1 FROM choice_pending cp
-            WHERE cp.task_id = t.id AND cp.state = 'pending' AND cp.hold_until > NOW()) AS held) h
+            WHERE cp.task_id = t.id AND ${org.maproulette.provider.choice.ChoicePendingStore
+      .holds("cp")}) AS held) h
           WHERE t.parent_id = c.id AND t.status NOT IN (4, 9)
         ) s ON true
         WHERE c.cooperative_type = 3 AND NOT c.deleted AND NOT p.deleted

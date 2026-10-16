@@ -259,7 +259,9 @@ class ChoiceQueueRepository @Inject() (db: Database) {
     */
   def markOnMap(taskId: Long, question: String, answer: String): Int = db.withConnection {
     implicit c =>
-      SQL"""UPDATE choice_pending p SET state = 'on_map', updated_at = NOW()
+      // Held for good: an answer on the map keeps its place checked (ChoicePendingStore.holds).
+      SQL"""UPDATE choice_pending p SET state = 'on_map', updated_at = NOW(),
+              hold_until = ${java.util.Date.from(ChoiceQueue.QueuedHold)}
             WHERE p.task_id = $taskId AND p.state = 'pending'
               AND p.body->'answers'->>$question = $answer
               AND NOT EXISTS (SELECT 1 FROM choice_queue_items i
@@ -280,8 +282,15 @@ class ChoiceQueueRepository @Inject() (db: Database) {
               AND body->'answers'->>$question = $answer""".executeUpdate()
   }
 
-  /** The place's element is deleted: its guest answers still waiting are skipped (Ada, KI-1). */
-  def skipGone(taskId: Long): Int = db.withConnection { implicit c =>
+  /**
+    * The place's element is deleted: its guest answers still waiting are skipped (Ada, KI-1), and
+    * the task is recorded stale, so discovery (`excludeStale`) stops offering it.
+    */
+  def skipGone(taskId: Long): Int = db.withTransaction { implicit c =>
+    SQL"""INSERT INTO choice_stale(task_id, reason, detail, element_version, payload_md5)
+          SELECT id, 'element_gone', '[]'::jsonb, NULL, md5(cooperative_work_json::text) FROM tasks
+          WHERE id = $taskId AND cooperative_work_json IS NOT NULL
+          ON CONFLICT (task_id) DO NOTHING""".executeUpdate()
     SQL"""UPDATE choice_pending SET state = 'skipped_stale',
             result = '{"reason": "element_gone"}'::jsonb, updated_at = NOW()
           WHERE task_id = $taskId AND state = 'pending'""".executeUpdate()

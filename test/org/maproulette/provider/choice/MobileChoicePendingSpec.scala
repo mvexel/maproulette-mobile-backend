@@ -388,6 +388,93 @@ class MobileChoicePendingSpec(implicit val application: Application) extends Fra
       new ChoicePendingRepository(db).held(Seq(held.id, free.id, held.id)) mustBe Set(held.id)
     }
 
+    "keep a task held once its answer is on the map, and offer it again once only skipped" taggedAs ChoiceTag in {
+      import play.api.test.FakeRequest
+      import play.api.test.Helpers.{contentAsJson, defaultAwaitTimeout, GET, OK}
+      val controller =
+        application.injector.instanceOf[org.maproulette.framework.controller.TaskController]
+      def flags(query: String): Map[Long, Option[Boolean]] = {
+        val result = controller
+          .getTasksInBoundingBox(-180, -85, 180, 85, 5000, 0, false)
+          .apply(FakeRequest(GET, s"/api/v2/tasks/box/-180/-85/180/85?cid=${challenge.id}$query"))
+        play.api.test.Helpers.status(result) mustBe OK
+        contentAsJson(result)
+          .as[JsArray]
+          .value
+          .map { t =>
+            (t \ "id").as[Long] -> (t \ "pending").asOpt[Boolean]
+          }
+          .toMap
+      }
+      val queue        = new ChoiceQueueRepository(db)
+      val (landed, _)  = benchTask()
+      val (repaint, _) = benchTask()
+      submit(guest(), landed, """{"answers":{"backrest":"yes"}}""").status mustBe 200
+      submit(guest(), repaint, """{"answers":{"backrest":"yes"}}""").status mustBe 200
+      // The hourly check sees the first answer on the map and the second one's key changed.
+      queue.markOnMap(landed.id, "backrest", "yes") mustBe 1
+      queue.skipChanged(repaint.id, "backrest", "yes") mustBe 1
+      // Nearest (excludePending) leaves the place on the map out; the tally (includePending)
+      // counts it as checked; the skipped place is offered again.
+      val box = flags("&includePending=true")
+      box(landed.id) mustBe Some(true)
+      box(repaint.id) mustBe Some(false)
+      flags("&excludePending=true").keySet must not contain landed.id
+      flags("&excludePending=true").keySet must contain(repaint.id)
+      new ChoicePendingRepository(db).held(Seq(landed.id, repaint.id)) mustBe Set(landed.id)
+      new ChoicePendingRepository(db).heldKinds(Seq(landed.id, repaint.id)) mustBe
+        Map(landed.id -> "answer")
+      // Held for good, past the answer's own hold.
+      db.withConnection { implicit c =>
+        SQL"SELECT hold_until > NOW() + INTERVAL '1000 years' FROM choice_pending WHERE task_id = ${landed.id}"
+          .as(SqlParser.scalar[Boolean].single)
+      } mustBe true
+      status(landed) mustBe Task.STATUS_CREATED
+
+      // Answers that went on the map before this change kept their old hold; evolution 148
+      // extends it, and running it again changes nothing.
+      val (earlier, _) = benchTask()
+      submit(guest(), earlier, """{"answers":{"backrest":"yes"}}""").status mustBe 200
+      db.withConnection { implicit c =>
+        SQL"""UPDATE choice_pending SET state = 'on_map', hold_until = NOW() - INTERVAL '1 day'
+              WHERE task_id = ${earlier.id}""".executeUpdate()
+      }
+      new ChoicePendingRepository(db).held(Seq(earlier.id)) mustBe empty
+      val ups = new String(
+        java.nio.file.Files.readAllBytes(
+          java.nio.file.Paths.get("conf/evolutions/default/148.sql")
+        ),
+        java.nio.charset.StandardCharsets.UTF_8
+      ).split("# --- !Ups")(1).split("# --- !Downs")(0).replace(";;", ";")
+      // Plain JDBC, as Play runs evolutions: Anorm would read the JSON braces as placeholders.
+      def runUps(): Unit = db.withConnection { c =>
+        c.createStatement().execute(ups)
+        ()
+      }
+      // A place found gone before #49 still has a waiting answer and no stale record.
+      val (gone, _) = benchTask()
+      submit(guest(), gone, """{"answers":{"backrest":"yes"}}""").status mustBe 200
+      db.withConnection { implicit c =>
+        SQL"""INSERT INTO choice_review_places (task_id, challenge_id, state, marked_by, marked_at)
+              VALUES (${gone.id}, ${challenge.id}, 'gone', NULL, NOW())""".executeUpdate()
+      }
+      def goneState = db.withConnection { implicit c =>
+        SQL"""SELECT p.state || ' ' || COALESCE(p.result->>'reason', '-') || ' ' ||
+                COALESCE((SELECT reason FROM choice_stale WHERE task_id = p.task_id), '-')
+              FROM choice_pending p WHERE p.task_id = ${gone.id}"""
+          .as(SqlParser.scalar[String].single)
+      }
+      goneState mustBe "pending - -"
+      runUps()
+      new ChoicePendingRepository(db).held(Seq(earlier.id)) mustBe Set(earlier.id)
+      flags("&excludePending=true").keySet must not contain earlier.id
+      goneState mustBe "skipped_stale element_gone element_gone"
+      // Running it again changes nothing.
+      runUps()
+      goneState mustBe "skipped_stale element_gone element_gone"
+      new ChoicePendingRepository(db).held(Seq(earlier.id)) mustBe Set(earlier.id)
+    }
+
     "say whether a held task holds an answer or a status-6 report (T-002)" taggedAs ChoiceTag in {
       import play.api.test.FakeRequest
       import play.api.test.Helpers.{contentAsJson, defaultAwaitTimeout, GET, OK}

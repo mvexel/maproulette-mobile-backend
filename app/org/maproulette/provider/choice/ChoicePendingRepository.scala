@@ -85,6 +85,14 @@ trait ChoicePendingStore {
 object ChoicePendingStore {
   val Answer = "answer"
   val Report = "report"
+
+  /**
+    * SQL on a `choice_pending` row named `p`: it holds its task, so discovery leaves the task out
+    * (`excludePending`) and progress counts it as checked. A live pending answer holds until it is
+    * published, expires or someone marks the place "Needs a visit"; so does an answer OSM now
+    * carries (`on_map`, H1c), since guests never change the task's status (Ada, 2026-10-16).
+    */
+  def holds(p: String): String = s"$p.state IN ('pending', 'on_map') AND $p.hold_until > NOW()"
 }
 
 @Singleton
@@ -222,8 +230,8 @@ class ChoicePendingRepository @Inject() (db: Database) extends ChoicePendingStor
     else
       db.withConnection { implicit c =>
         SQL(
-          """SELECT DISTINCT task_id FROM choice_pending WHERE task_id IN ({ids})
-             AND state = 'pending' AND hold_until > NOW()"""
+          s"""SELECT DISTINCT p.task_id FROM choice_pending p WHERE p.task_id IN ({ids})
+             AND ${ChoicePendingStore.holds("p")}"""
         ).on("ids" -> taskIds.distinct)
           .as(SqlParser.long("task_id").*)
           .toSet
@@ -234,10 +242,10 @@ class ChoicePendingRepository @Inject() (db: Database) extends ChoicePendingStor
     else
       db.withConnection { implicit c =>
         SQL(
-          """SELECT DISTINCT ON (p.task_id) p.task_id, p.body->>'outcome' AS outcome,
+          s"""SELECT DISTINCT ON (p.task_id) p.task_id, p.body->>'outcome' AS outcome,
                     t.cooperative_work_json::text AS payload
              FROM choice_pending p JOIN tasks t ON t.id = p.task_id
-             WHERE p.task_id IN ({ids}) AND p.state = 'pending' AND p.hold_until > NOW()
+             WHERE p.task_id IN ({ids}) AND ${ChoicePendingStore.holds("p")}
              ORDER BY p.task_id, p.answered_at DESC"""
         ).on("ids" -> taskIds.distinct)
           .as(
