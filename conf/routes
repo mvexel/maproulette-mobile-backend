@@ -23,7 +23,8 @@ POST    /api/v2/mobile-claim/stop-reminders                             @control
 GET     /api/v2/mobile-guest/pending                                    @org.maproulette.controllers.api.MobileChoicePendingController.list
 POST    /api/v2/task/:id/choice/pending                                 @org.maproulette.controllers.api.MobileChoicePendingController.submit(id:Long)
 DELETE  /api/v2/task/:id/choice/pending                                 @org.maproulette.controllers.api.MobileChoicePendingController.withdraw(id:Long)
-# Mobile admin API (fork): mobile:admin bearer grants of super-users only, see docs/mobile-admin-api.md
+# Mobile admin API (fork): mobile:admin bearer grants of super-users, and mobile:organize grants
+# of organizers for the campaign routes (D8), see docs/mobile-admin-api.md
 GET     /api/v2/mobile-admin/clients                                    @controllers.MobileAdminController.listClients
 GET     /api/v2/mobile-admin/scope-sets                                 @controllers.MobileAdminController.scopeSets
 POST    /api/v2/mobile-admin/clients                                    @controllers.MobileAdminController.createClient
@@ -41,6 +42,10 @@ GET     /api/v2/mobile-admin/campaigns                                  @control
 GET     /api/v2/mobile-admin/projects                                   @controllers.MobileCampaignController.listProjects
 POST    /api/v2/mobile-admin/projects                                   @controllers.MobileCampaignController.createProject
 PUT     /api/v2/mobile-admin/projects/:id/enabled                       @controllers.MobileCampaignController.setProjectEnabled(id:Long)
+GET     /api/v2/mobile-admin/organizers                                 @controllers.MobileOrganizerController.list
+POST    /api/v2/mobile-admin/organizers                                 @controllers.MobileOrganizerController.add
+DELETE  /api/v2/mobile-admin/organizers/:userId                         @controllers.MobileOrganizerController.remove(userId:Long)
+DELETE  /api/v2/mobile-admin/organizers/:userId/projects/:projectId     @controllers.MobileOrganizerController.removeProject(userId:Long, projectId:Long)
 # Live progress page (fork, BACKLOG #12): public and link-only, by an unguessable token
 GET     /api/v2/live/:token                                             @controllers.MobileLiveController.show(token:String)
 # Review page (fork, H1a): read by the live page token; marks need an app grant (docs/mobile-admin-api.md)

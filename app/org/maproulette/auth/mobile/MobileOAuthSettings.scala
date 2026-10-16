@@ -19,36 +19,45 @@ case class MobileClient(
   * the changeset link, see [[MobileEditorRoutes]]). An editor makes its own OSM edits, so
   * `tasks:edit` and `osm:tagfix` never share a grant.
   * `mobile:admin` stands alone: an admin grant has no app scopes, so it reaches only the admin
-  * allowlist, and app grants never reach it. `guest` is never part of a grant: it is a client
+  * allowlist, and app grants never reach it. `mobile:organize` (D8) stands alone too: an
+  * organizer's grant reaches the campaign part of that allowlist, in their own projects only. A
+  * client that may hold `mobile:admin` may also hold `mobile:organize`, so the admin app needs no
+  * second client. `guest` is never part of a grant: it is a client
   * capability (the client may register guests, see [[org.maproulette.auth.mobile.guest]]) and the
   * scope of guest access tokens, which are not OAuth grants.
   */
 object MobileScopes {
-  val Read   = "tasks:read"
-  val Write  = "tasks:write"
-  val Edit   = "tasks:edit"
-  val TagFix = "osm:tagfix"
-  val Admin  = "mobile:admin"
-  val Guest  = "guest"
+  val Read     = "tasks:read"
+  val Write    = "tasks:write"
+  val Edit     = "tasks:edit"
+  val TagFix   = "osm:tagfix"
+  val Admin    = "mobile:admin"
+  val Organize = "mobile:organize"
+  val Guest    = "guest"
   // Canonical order for stored and returned scope strings.
-  private val supported = Seq(Read, Write, Edit, TagFix, Admin, Guest)
+  private val supported = Seq(Read, Write, Edit, TagFix, Admin, Organize, Guest)
 
-  /** Strict RFC 6749 scope parsing: single-space separated, known, unique; read or admin alone. */
+  /** Strict RFC 6749 scope parsing: single-space separated, known, unique; read, admin or organize alone. */
   def parse(value: String): Option[Set[String]] = {
     val items = value.split(" ", -1).toSeq
     val known = items.forall(item => item != Guest && supported.contains(item)) &&
       items.distinct.size == items.size
-    val app = items.contains(Read) && !items.contains(Admin) &&
+    val app = items.contains(Read) && !items.contains(Admin) && !items.contains(Organize) &&
       (!items.contains(TagFix) || items.contains(Write)) &&
       (!items.contains(Edit) || items.contains(Write) && !items.contains(TagFix))
-    if (known && (app || items == Seq(Admin))) Some(items.toSet) else None
+    if (known && (app || items == Seq(Admin) || items == Seq(Organize))) Some(items.toSet) else None
   }
+
+  /** The scopes a client may be granted: its own, plus `mobile:organize` where it has `mobile:admin`. */
+  def granted(clientScopes: Set[String]): Set[String] =
+    if (clientScopes.contains(Admin)) clientScopes + Organize else clientScopes
 
   /** A client's scopes: a valid grant scope set, plus `guest` on app clients only. */
   def parseClient(value: String): Option[Set[String]] = {
     val items = value.split(" ", -1).toSeq
     if (items.count(_ == Guest) != 1) parse(value)
-    else parse(items.filterNot(_ == Guest).mkString(" ")).filterNot(isAdmin).map(_ + Guest)
+    else
+      parse(items.filterNot(_ == Guest).mkString(" ")).filterNot(isStaff).map(_ + Guest)
   }
 
   /**
@@ -60,8 +69,13 @@ object MobileScopes {
       .flatMap(supported.combinations)
       .filter(set => parseClient(set.mkString(" ")).isDefined)
 
-  def isAdmin(scopes: Set[String]): Boolean = scopes.contains(Admin)
-  def isAdmin(scope: String): Boolean       = parse(scope).exists(isAdmin)
+  def isAdmin(scopes: Set[String]): Boolean    = scopes.contains(Admin)
+  def isAdmin(scope: String): Boolean          = parse(scope).exists(isAdmin)
+  def isOrganize(scopes: Set[String]): Boolean = scopes.contains(Organize)
+  def isOrganize(scope: String): Boolean       = parse(scope).exists(isOrganize)
+
+  /** An admin app grant, `mobile:admin` or `mobile:organize`: never app scopes. */
+  def isStaff(scopes: Set[String]): Boolean = isAdmin(scopes) || isOrganize(scopes)
 
   def format(scopes: Set[String]): String = supported.filter(scopes.contains).mkString(" ")
 

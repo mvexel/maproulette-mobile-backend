@@ -4,21 +4,77 @@ import anorm._
 import java.sql.Connection
 import java.time.Instant
 import javax.inject.{Inject, Provider, Singleton}
-import org.maproulette.framework.model.User
-import org.maproulette.framework.service.UserService
+import org.maproulette.framework.model.{Grant, User}
+import org.maproulette.framework.psql.Paging
+import org.maproulette.framework.service.{ProjectService, UserService}
 import org.maproulette.permissions.Permission
 import play.api.db.Database
 import play.api.libs.json.{JsValue, Json}
 
 /**
-  * Who may hold or use `mobile:admin`: MapRoulette super-users only. Checked when the grant is
-  * created, on code exchange and refresh, and on every admin request, so a demotion takes effect
-  * at once.
+  * What an admin app grant may do (D8). Super-users with `mobile:admin` may do everything; listed
+  * organizers with `mobile:organize` may run campaigns in the projects where they hold Write or
+  * better, and read the write switch. Checked on every request, so a demotion takes effect on the
+  * next one.
+  */
+sealed trait MobileCapability
+
+object MobileCapability {
+
+  /** Clients, the audit log, setting the write switch, organizers, creating projects. */
+  case object Operate extends MobileCapability
+
+  /** The campaign and project lists; an organizer's are filtered to their projects. */
+  case object ListCampaigns extends MobileCapability
+
+  /** Reading the write switch. */
+  case object SeeWritePolicy extends MobileCapability
+
+  /** Running the campaigns of one project: turning it on or off, live page, results, queue. */
+  case class Campaigns(projectId: Long) extends MobileCapability
+}
+
+/**
+  * Who may hold or use the admin app's grants: `mobile:admin` is for MapRoulette super-users only,
+  * `mobile:organize` for users on the organizer list (`mobile_memberships`, evolution 145). Checked
+  * when the grant is created, on code exchange and refresh, and on every request.
   */
 @com.google.inject.ImplementedBy(classOf[MobileAdminGate])
 trait MobileAdminCheck {
   def isAdmin(user: User): Boolean
   def isAdmin(userId: Long): Boolean
+
+  /** On the organizer list. */
+  def isOrganizer(userId: Long): Boolean = false
+
+  /** The projects whose campaigns this organizer may run. */
+  def organizerProjects(user: User): Set[Long] = Set.empty
+
+  /** The project of a challenge that is not deleted. */
+  def projectOf(challengeId: Long): Option[Long] = None
+
+  /** Whether the user may be given, or keep using, a grant of this scope. */
+  final def mayHold(scope: String, userId: Long): Boolean =
+    if (MobileScopes.isAdmin(scope)) isAdmin(userId)
+    else if (MobileScopes.isOrganize(scope)) isOrganizer(userId)
+    else true
+
+  /** Whether this grant may do this now. Never for app grants. */
+  final def can(user: User, scopes: Set[String], capability: MobileCapability): Boolean =
+    if (MobileScopes.isAdmin(scopes)) isAdmin(user)
+    else if (MobileScopes.isOrganize(scopes))
+      user.id > 0 && !user.guest && isOrganizer(user.id) && (capability match {
+        case MobileCapability.Operate            => false
+        case MobileCapability.ListCampaigns      => true
+        case MobileCapability.SeeWritePolicy     => true
+        case MobileCapability.Campaigns(project) => organizerProjects(user).contains(project)
+      })
+    else false
+
+  /** [[can]] for routes about one challenge: its project's campaigns. */
+  final def canChallenge(user: User, scopes: Set[String], challengeId: Long): Boolean =
+    if (MobileScopes.isAdmin(scopes)) isAdmin(user)
+    else projectOf(challengeId).exists(p => can(user, scopes, MobileCapability.Campaigns(p)))
 }
 
 object MobileAdminCheck {
@@ -32,11 +88,39 @@ object MobileAdminCheck {
 
 // Providers: UserService reads the database when it is built, which must wait for evolutions.
 @Singleton
-class MobileAdminGate @Inject() (users: Provider[UserService], permission: Provider[Permission])
-    extends MobileAdminCheck {
+class MobileAdminGate @Inject() (
+    users: Provider[UserService],
+    permission: Provider[Permission],
+    projects: Provider[ProjectService],
+    db: Database
+) extends MobileAdminCheck {
   def isAdmin(user: User): Boolean =
     user.id > 0 && !user.guest && permission.get().isSuperUser(user)
   def isAdmin(userId: Long): Boolean = users.get().retrieve(userId).exists(isAdmin)
+
+  override def isOrganizer(userId: Long): Boolean = MobileOrganizers.listed(db, userId)
+
+  /**
+    * Write or better, through the user's own grants or their teams (upstream `effectiveRole`),
+    * on projects upstream counts as managed. Not their Home project: campaigns run in projects a
+    * super-user set up.
+    */
+  override def organizerProjects(user: User): Set[Long] = {
+    val fresh = users.get().retrieve(user.id).getOrElse(user)
+    val home  = s"Home_${fresh.osmProfile.id}"
+    projects
+      .get()
+      .getManagedProjects(fresh, Paging(MobileOrganizers.MaxProjects))
+      .filter(p => !p.deleted && p.name != home)
+      .filter(p => permission.get().effectiveRole(p, fresh).exists(_ <= Grant.ROLE_WRITE_ACCESS))
+      .map(_.id)
+      .toSet
+  }
+
+  override def projectOf(challengeId: Long): Option[Long] = db.withConnection { implicit c =>
+    SQL"SELECT parent_id FROM challenges WHERE id = $challengeId AND NOT deleted"
+      .as(SqlParser.long("parent_id").singleOpt)
+  }
 }
 
 case class MobileAuditEntry(
@@ -79,7 +163,7 @@ class MobileAdminRepository @Inject() (db: Database, registry: MobileClientRegis
     "enabled"      -> client.enabled
   )
 
-  private def record(
+  private[mobile] def record(
       actor: Long,
       action: String,
       target: String,

@@ -70,6 +70,7 @@ class MobileScopesSpec extends PlaySpec {
       MobileScopes.clientScopeSets mustBe Seq(
         Seq("tasks:read"),
         Seq("mobile:admin"),
+        Seq("mobile:organize"),
         Seq("tasks:read", "tasks:write"),
         Seq("tasks:read", "guest"),
         Seq("tasks:read", "tasks:write", "tasks:edit"),

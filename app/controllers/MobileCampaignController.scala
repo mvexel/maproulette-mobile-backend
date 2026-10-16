@@ -10,8 +10,9 @@ import scala.concurrent.{ExecutionContext, Future}
 
 /**
   * The admin app's Campaigns list and project picker (docs/mobile-admin-api.md "Campaigns and
-  * projects"). Same gate as [[MobileAdminController]]: `mobile:admin` bearer grants of current
-  * super-users only. Creating a project and turning one on or off are recorded in the audit log.
+  * projects"). Gate: [[MobileAdminAccess]]. Super-users see every project; organizers see theirs
+  * and may turn them on or off, but only super-users create projects. Creating a project and
+  * turning one on or off are recorded in the audit log.
   */
 class MobileCampaignController @Inject() (
     components: ControllerComponents,
@@ -30,31 +31,46 @@ class MobileCampaignController @Inject() (
       else Json.obj("error"                -> code, "detail" -> detail)
     )
 
-  private def admin[A](request: Request[A])(work: User => Future[Result]): Future[Result] = {
-    val result =
-      if (!settings.enabled) Future.successful(NotFound)
-      else
-        (
-          request.attrs.get(MobileBearerIdentity.UserKey),
-          request.attrs.get(MobileBearerIdentity.ScopesKey)
-        ) match {
-          // The bearer filter checked this already; checked again so no route can skip it.
-          case (Some(user), Some(scopes))
-              if MobileScopes.isAdmin(scopes) && service.admins.isAdmin(user) =>
-            work(user)
-          case _ => Future.successful(problem(Forbidden, "mobile_admin_only"))
-        }
-    result.map(_.withHeaders(CACHE_CONTROL -> "no-store"))
-  }
+  private def admin[A](
+      request: Request[A],
+      capability: MobileCapability = MobileCapability.Operate
+  )(work: User => Future[Result]): Future[Result] =
+    MobileAdminAccess.capability(request, settings, service, capability)(work)
 
   private def db[A](operation: => A): Future[A] = service.storage(operation)
 
+  /** An organizer sees only their own projects and their campaigns. */
+  private def visible[A](request: Request[A], user: User)(
+      rows: Seq[JsObject],
+      project: JsObject => Long
+  ): Seq[JsObject] =
+    MobileAdminAccess.visibleProjects(request, service, user) match {
+      case None      => rows
+      case Some(ids) => rows.filter(row => ids.contains(project(row)))
+    }
+
   def listProjects: Action[AnyContent] = Action.async { request =>
-    admin(request)(_ => db(Ok(Json.obj("projects" -> campaigns.projects))))
+    admin(request, MobileCapability.ListCampaigns)(user =>
+      db(
+        Ok(
+          Json
+            .obj("projects" -> visible(request, user)(campaigns.projects, p => (p \ "id").as[Long]))
+        )
+      )
+    )
   }
 
   def listCampaigns: Action[AnyContent] = Action.async { request =>
-    admin(request)(_ => db(Ok(Json.obj("campaigns" -> campaigns.campaigns))))
+    admin(request, MobileCapability.ListCampaigns)(user =>
+      db(
+        Ok(
+          Json.obj(
+            "campaigns" ->
+              visible(request, user)(campaigns.campaigns, c => (c \ "project" \ "id").as[Long])
+          )
+        )
+      )
+    )
   }
 
   /** `{"name", "displayName"?}`: a new project, created on, owned by the signed-in user. */
@@ -82,7 +98,7 @@ class MobileCampaignController @Inject() (
   /** `{"enabled": bool}`: turns a project on or off, which lists or hides all its campaigns. */
   def setProjectEnabled(id: Long): Action[JsValue] = Action.async(parse.tolerantJson(MaxBody)) {
     request =>
-      admin(request) { user =>
+      admin(request, MobileCapability.Campaigns(id)) { user =>
         request.body match {
           case value: JsObject if value.keys == Set("enabled") =>
             (value \ "enabled").asOpt[Boolean] match {

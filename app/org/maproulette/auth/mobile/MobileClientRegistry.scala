@@ -30,7 +30,7 @@ object MobileClientRegistry {
   def allowedScopes(client: Option[MobileClient], scope: String): Option[Set[String]] =
     for {
       value  <- client if value.enabled
-      scopes <- MobileScopes.parse(scope) if scopes.subsetOf(value.scopes)
+      scopes <- MobileScopes.parse(scope) if scopes.subsetOf(MobileScopes.granted(value.scopes))
     } yield scopes
 }
 
