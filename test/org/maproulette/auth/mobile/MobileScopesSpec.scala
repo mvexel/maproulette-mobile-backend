@@ -66,6 +66,22 @@ class MobileScopesSpec extends PlaySpec {
       MobileScopes.parseClient("mobile:admin") mustBe Some(Set("mobile:admin"))
       MobileScopes.parseClient("tasks:write") mustBe None
     }
+    "list every valid client scope set in canonical order" in {
+      MobileScopes.clientScopeSets mustBe Seq(
+        Seq("tasks:read"),
+        Seq("mobile:admin"),
+        Seq("tasks:read", "tasks:write"),
+        Seq("tasks:read", "guest"),
+        Seq("tasks:read", "tasks:write", "tasks:edit"),
+        Seq("tasks:read", "tasks:write", "osm:tagfix"),
+        Seq("tasks:read", "tasks:write", "guest"),
+        Seq("tasks:read", "tasks:write", "tasks:edit", "guest"),
+        Seq("tasks:read", "tasks:write", "osm:tagfix", "guest")
+      )
+      MobileScopes.clientScopeSets.map(_.mkString(" ")).foreach { scope =>
+        MobileScopes.parseClient(scope).map(MobileScopes.format) mustBe Some(scope)
+      }
+    }
     "format guest last" in {
       MobileScopes.format(Set("guest", "tasks:write", "tasks:read")) mustBe
         "tasks:read tasks:write guest"

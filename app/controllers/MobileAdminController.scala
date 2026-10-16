@@ -104,6 +104,11 @@ class MobileAdminController @Inject() (
     admin(request)(_ => db(Ok(Json.obj("clients" -> repository.listClients))))
   }
 
+  def scopeSets: Action[AnyContent] = Action.async { request =>
+    val body = Json.obj("scopeSets" -> MobileScopes.clientScopeSets)
+    admin(request)(_ => Future.successful(Ok(body)))
+  }
+
   def createClient: Action[JsValue] = Action.async(parse.tolerantJson(MaxBody)) { request =>
     admin(request) { user =>
       MobileAdminController.parseClient(request.body) match {

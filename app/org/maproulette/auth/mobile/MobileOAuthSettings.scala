@@ -51,6 +51,15 @@ object MobileScopes {
     else parse(items.filterNot(_ == Guest).mkString(" ")).filterNot(isAdmin).map(_ + Guest)
   }
 
+  /**
+    * Every scope set a client may hold, each in canonical order, derived from [[parseClient]] so
+    * the admin app needs no copy of these rules.
+    */
+  lazy val clientScopeSets: Seq[Seq[String]] =
+    (1 to supported.size)
+      .flatMap(supported.combinations)
+      .filter(set => parseClient(set.mkString(" ")).isDefined)
+
   def isAdmin(scopes: Set[String]): Boolean = scopes.contains(Admin)
   def isAdmin(scope: String): Boolean       = parse(scope).exists(isAdmin)
 
