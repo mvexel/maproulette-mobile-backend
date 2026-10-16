@@ -462,7 +462,8 @@ class MobileChoicePendingSpec(implicit val application: Application) extends Fra
       }
       // A place found gone before #49 still has a waiting answer and no stale record.
       val (gone, _) = benchTask()
-      submit(guest(), gone, """{"answers":{"backrest":"yes"}}""").status mustBe 200
+      val goneGuest = guest()
+      submit(goneGuest, gone, """{"answers":{"backrest":"yes"}}""").status mustBe 200
       db.withConnection { implicit c =>
         SQL"""INSERT INTO choice_review_places (task_id, challenge_id, state, marked_by, marked_at)
               VALUES (${gone.id}, ${challenge.id}, 'gone', NULL, NOW())""".executeUpdate()
@@ -482,6 +483,14 @@ class MobileChoicePendingSpec(implicit val application: Application) extends Fra
       runUps()
       goneState mustBe "skipped_stale element_gone element_gone"
       new ChoicePendingRepository(db).held(Seq(earlier.id)) mustBe Set(earlier.id)
+      // Only the campaign tally drops a gone place (Iris): the review list keeps it as gone,
+      // and the guest's own list still has their answer.
+      new ReviewRepository(db)
+        .places(challenge.id)
+        .find(_.id == gone.id)
+        .map(_.state) mustBe Some(ReviewPage.Gone)
+      val mine = (await(service.list(goneGuest, None, None)).body \ "items").as[JsArray].value
+      mine.map(i => (i \ "taskId").as[Long]) mustBe Seq(gone.id)
     }
 
     "say whether a held task holds an answer or a status-6 report (T-002)" taggedAs ChoiceTag in {
