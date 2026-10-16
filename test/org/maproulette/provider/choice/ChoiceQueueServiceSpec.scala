@@ -108,6 +108,13 @@ class ChoiceQueueServiceSpec(implicit val application: Application) extends Fram
           WHERE task_id = ${t.id} ORDER BY id""".as(SqlParser.bool("held").*)
   }
 
+  private def rows(t: Task): Seq[String] = db.withConnection { implicit c =>
+    SQL"SELECT state FROM choice_pending WHERE task_id = ${t.id} ORDER BY id"
+      .as(SqlParser.str("state").*)
+  }
+
+  private def detect(): ChoiceQueue.OnMapReport = Await.result(service.detect(1000), 30.seconds)
+
   private def generate(id: Long): Option[ChoiceQueue.Report] =
     Await.result(service.generate(id, User.superUser), 30.seconds)
 
@@ -147,6 +154,9 @@ class ChoiceQueueServiceSpec(implicit val application: Application) extends Fram
         Seq(None, Some("done"), Some("stale"), Some("gone"))
       heldForever(split) mustBe Seq(true, true)
       heldForever(changed) mustBe Seq(false)
+      // H1c: the answer OSM already carried is on the map.
+      rows(onMap) mustBe Seq("on_map")
+      rows(gone) mustBe Seq("pending")
 
       val queue = challengeDAL.retrieveById(first.queueChallengeId).get
       queue.name mustBe "Benches: confirm survey answers"
@@ -164,7 +174,7 @@ class ChoiceQueueServiceSpec(implicit val application: Application) extends Fram
       lines.size mustBe 1
       ((lines.head \ "features")(0) \ "properties" \ "@id").as[String] mustBe "node/8801"
       ((lines.head \ "features")(0) \ "properties" \ "evidence").as[String] must
-        startWith("2 people surveyed this on ")
+        startWith("Surveyed on ")
       (lines.head \ "cooperativeWork" \ "operations")(0) \ "data" \ "operations" mustBe
         JsDefined(
           Json.arr(Json.obj("operation" -> "setTags", "data" -> Json.obj("backrest" -> "yes")))
@@ -202,6 +212,52 @@ class ChoiceQueueServiceSpec(implicit val application: Application) extends Fram
       Await.result(service.exportQueue(quiet.id), 10.seconds) mustBe None
       generate(quiet.id) mustBe Some(ChoiceQueue.Report(0, 0, 0, 0, 0, 0, 0))
       Await.result(service.exportQueue(quiet.id), 10.seconds) mustBe None
+    }
+    "see queued answers land on the map, or their element go (H1c)" taggedAs ChoiceTag in {
+      val campaign = newChallenge("Doors")
+      val door     = task(campaign, 8821)
+      val deleted  = task(campaign, 8822)
+      answer(door, "backrest"    -> "no", "material" -> "metal")
+      answer(door, "backrest"    -> "no")
+      answer(deleted, "material" -> "wood")
+      osm.put("node", 8821, Map("amenity" -> "bench"))
+      osm.put("node", 8822, Map("amenity" -> "bench"))
+      val partial = task(campaign, 8823)
+      answer(partial, "backrest" -> "yes", "material" -> "wood")
+      osm.put("node", 8823, Map("amenity" -> "bench", "backrest" -> "yes"))
+      generate(campaign.id).get.queued mustBe 4
+      // OSM already carries the backrest, but the material is still queued.
+      rows(partial) mustBe Seq("pending")
+
+      detect().failures mustBe 0
+      rows(door) mustBe Seq("pending", "pending")
+      state(door) mustBe None
+
+      // A mapper adds one of the two queued edits on maproulette.org.
+      osm.edit("node", 8821)(_ + ("backrest" -> "no"))
+      osm.elements(("node", 8822L)).visible = false
+      detect().failures mustBe 0
+      // The first guest's material answer is still queued, so only the second guest's is on the map.
+      rows(door) mustBe Seq("pending", "on_map")
+      state(door) mustBe None
+      state(deleted) mustBe Some("gone")
+      def lastChecked = db.withConnection { implicit c =>
+        SQL"SELECT max(checked_at)::text AS at FROM choice_queue_items WHERE source_task_id = ${deleted.id}"
+          .as(SqlParser.str("at").single)
+      }
+      val goneAt = lastChecked
+
+      osm.edit("node", 8821)(_ + ("material" -> "metal"))
+      detect()
+      // The deleted element isn't read again.
+      lastChecked mustBe goneAt
+      rows(door) mustBe Seq("on_map", "on_map")
+      state(door) mustBe Some("done")
+      db.withConnection { implicit c =>
+        SQL"""SELECT count(*) FROM choice_queue_items
+              WHERE source_task_id = ${door.id} AND on_map_at IS NOT NULL"""
+          .as(SqlParser.scalar[Long].single)
+      } mustBe 2
     }
   }
 }

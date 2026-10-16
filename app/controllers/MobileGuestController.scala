@@ -77,8 +77,9 @@ class MobileGuestController @Inject() (
   /** `GET /api/v2/mobile-guest/me`, guest bearer. */
   def me: Action[AnyContent] = Action.async { request =>
     guestRequest(request)(guest =>
-      Future(pending.counts(guest.id)).map(counts => Ok(MobileGuestController.status(guest, counts))
-      )
+      Future((pending.counts(guest.id), pending.byChallenge(guest.id))).map {
+        case (counts, byChallenge) => Ok(MobileGuestController.status(guest, counts, byChallenge))
+      }
     )
   }
 
@@ -91,7 +92,14 @@ class MobileGuestController @Inject() (
 object MobileGuestController {
 
   /** The guest status body of `GET /api/v2/mobile-guest/me`; `PUT /email` answers with it too. */
-  def status(guest: MobileGuest, counts: Map[String, Int]): JsObject =
+  def status(
+      guest: MobileGuest,
+      counts: Map[String, Int],
+      byChallenge: Map[Long, Map[String, Int]]
+  ): JsObject = {
+    // H1c: an answer is on the map once published, or once OSM carries it from the confirm queue.
+    def onMap(states: Map[String, Int]) =
+      states.getOrElse[Int]("published", 0) + states.getOrElse[Int]("on_map", 0)
     Json.obj(
       "guestId" -> guest.id.toString,
       // Only live, unclaimed guests authenticate; claimed and expired states come with claiming.
@@ -100,9 +108,20 @@ object MobileGuestController {
                   else if (guest.emailSet) "pending"
                   else "none"),
       "pending"   -> counts.getOrElse[Int]("pending", 0),
-      "published" -> counts.getOrElse[Int]("published", 0),
+      "published" -> onMap(counts),
       "expiresAt" -> guest.expiresAt.toString,
       // Set once claiming exists; a claimed guest's token no longer authenticates.
-      "claimedAs" -> JsNull
+      "claimedAs" -> JsNull,
+      "byChallenge" -> JsObject(
+        byChallenge.toSeq
+          .map { case (id, states) => (id, states.getOrElse[Int]("pending", 0), onMap(states)) }
+          .filter { case (_, pending, done) => pending + done > 0 }
+          .sortBy(_._1)
+          .map {
+            case (id, pending, done) =>
+              id.toString -> Json.obj("pending" -> pending, "onMap" -> done)
+          }
+      )
     )
+  }
 }
