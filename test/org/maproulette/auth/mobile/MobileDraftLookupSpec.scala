@@ -1,5 +1,6 @@
 package org.maproulette.auth.mobile
 
+import anorm._
 import org.maproulette.framework.model._
 import org.maproulette.framework.util.FrameworkHelper
 import org.maproulette.provider.choice.ChoiceTag
@@ -32,11 +33,11 @@ class MobileDraftLookupSpec(implicit val application: Application) extends Frame
       User.superUser
     )
 
-  private def task(parent: Challenge): Task =
+  private def task(parent: Challenge, name: String = "task"): Task =
     taskDAL.insert(
       Task(
         -1,
-        s"${parent.name}-task",
+        s"${parent.name}-$name",
         null,
         null,
         parent.id,
@@ -68,6 +69,23 @@ class MobileDraftLookupSpec(implicit val application: Application) extends Frame
       serviceManager.project.update(defaultProject.id, Json.obj("enabled" -> false), User.superUser)
       drafts.draft(MobileDraftRoutes.Task(liveTask.id)) mustBe true
       serviceManager.project.update(defaultProject.id, Json.obj("enabled" -> true), User.superUser)
+    }
+
+    "recognize multiple-choice tasks by cooperativeWork.meta.type 3, and unknown ids as not" taggedAs ChoiceTag in {
+      val parent              = challenge("choiceLookup", enabled = true)
+      val (choice, cooperate) = (task(parent, "choice"), task(parent, "cooperative"))
+      def work(id: Long, meta: String) =
+        application.injector.instanceOf[Database].withConnection { implicit c =>
+          SQL("UPDATE tasks SET cooperative_work_json = {work}::JSONB WHERE id = {id}")
+            .on("work" -> s"""{"meta":$meta}""", "id" -> id)
+            .executeUpdate()
+        }
+      work(choice.id, """{"version":2,"type":3,"choiceVersion":1}""")
+      work(cooperate.id, """{"version":2,"type":2}""")
+      drafts.choiceTask(choice.id) mustBe true
+      drafts.choiceTask(cooperate.id) mustBe false
+      drafts.choiceTask(task(parent, "plain").id) mustBe false
+      drafts.choiceTask(Long.MaxValue) mustBe false
     }
   }
 }

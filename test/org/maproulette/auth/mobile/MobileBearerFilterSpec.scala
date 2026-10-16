@@ -638,6 +638,7 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
         case MobileDraftRoutes.Challenge(id) => id == 7
         case MobileDraftRoutes.Task(id)      => id == 70
       }
+      def choiceTask(taskId: Long): Boolean = false
     }
     def draftFilter(superUser: Boolean) = {
       val oauth = mock[MobileOAuthService]
@@ -697,6 +698,57 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
       contentAsString(
         draftFilter(superUser = false).apply(next)(bearer(GET, "/api/v2/task/70/release"))
       ) mustBe "123"
+    }
+  }
+
+  "Mobile choice tasks" should {
+    // Task 80 is a multiple-choice task; task 81 is not.
+    val choices = new MobileDrafts {
+      def draft(target: MobileDraftRoutes.Target): Boolean = false
+      def choiceTask(taskId: Long): Boolean                = taskId == 80
+    }
+    def choiceFilter(scopedGrant: MobileGrant) = {
+      val oauth = mock[MobileOAuthService]
+      val users = mock[UserService]
+      when(oauth.authenticate(token)).thenReturn(Future.successful(Some(scopedGrant)))
+      when(users.retrieve(123)).thenReturn(Some(user))
+      val admins = new MobileAdminCheck {
+        def isAdmin(u: User): Boolean  = false
+        def isAdmin(id: Long): Boolean = false
+      }
+      new MobileBearerFilter(settings(true), oauth, users, admins, null, null, choices)
+    }
+
+    "refuse direct status writes for tasks:write and tasks:edit grants with choice_task_status" in {
+      val bare = Seq("1", "2", "5", "6").map(code => bearer(PUT, s"/api/v2/task/80/$code"))
+      val extras = Seq(
+        bearer(PUT, "/api/v2/task/80/1?requestReview=true"),
+        json(bearer(PUT, "/api/v2/task/80/2"), """{"answer":"yes"}""")
+      )
+      Seq(writeGrant -> bare, editGrant -> (bare ++ extras)).foreach {
+        case (scopedGrant, requests) =>
+          val filter = choiceFilter(scopedGrant)
+          requests.foreach { request =>
+            val result = filter.apply(next)(request)
+            status(result) mustBe FORBIDDEN
+            contentAsJson(result) mustBe play.api.libs.json.Json
+              .obj("error" -> "choice_task_status")
+          }
+      }
+    }
+
+    "leave the choice flow, other task routes and other tasks' status writes open" in {
+      val filter = choiceFilter(editGrant)
+      Seq(
+        bearer(GET, "/api/v2/task/80/start"),
+        bearer(GET, "/api/v2/task/80/release"),
+        bearer(POST, "/api/v2/task/80/skip"),
+        json(bearer(POST, "/api/v2/task/80/choice"), "{}"),
+        json(bearer(POST, "/api/v2/task/80/comment"), """{"comment":"done"}"""),
+        bearer(GET, "/api/v2/task/80/refreshLock"),
+        bearer(PUT, "/api/v2/task/81/1"),
+        bearer(PUT, "/api/v2/task/81/1?requestReview=true")
+      ).foreach(request => contentAsString(filter.apply(next)(request)) mustBe "123")
     }
   }
 }

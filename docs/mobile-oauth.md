@@ -206,6 +206,11 @@ it returns `200 {"created": n, "updated": n, "rejected": [{"line": 1, "errors": 
 instead of 204, and a rejected line does not mark the challenge FAILED. `report=true` without
 `lineByLine`, or over the task cap, is a 400. Without `report` nothing changes.
 
+**Status only through `choice`.** App grants (`tasks:write` and `tasks:edit`) can't set a choice
+task's status directly: `PUT /api/v2/task/:id/{1,2,5,6}` answers `403 {"error":
+"choice_task_status"}`, with or without editor extras. `POST /task/:id/choice` sets it, after the
+OSM edit and with submission dedupe. Start, release, skip, comments and `refreshLock` stay open.
+
 **Discovery.** `cct` (comma-separated `challenges.cooperative_type` values) filters `tasks/box`,
 `markers/box`, `taskCluster` and `tasksInCluster`; a non-integer gives 400. The separate,
 fork-only `excludeStale=true` leaves out tasks recorded in `choice_stale`. Mobile sends

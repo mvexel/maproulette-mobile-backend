@@ -475,6 +475,23 @@ class MobileBearerFilter @Inject() (
         }
     }
 
+  private val statusWrite = "/api/v2/task/([0-9]+)/[1256]".r
+
+  /**
+    * A multiple-choice task's status is set by `POST /task/:id/choice`, which makes the OSM edit and
+    * dedupes submissions. A direct status write would skip both, so app grants can't make one,
+    * with `tasks:write` or `tasks:edit`.
+    */
+  private def choiceGate(request: RequestHeader): Future[Option[Result]] =
+    (request.method, request.path) match {
+      case ("PUT", statusWrite(id)) =>
+        Future(drafts.choiceTask(id.toLong)).flatMap {
+          case true  => denied(403, "choice_task_status").map(Some(_))
+          case false => Future.successful(None)
+        }
+      case _ => Future.successful(None)
+    }
+
   /**
     * Admin writes through stock routes: who, which route, and the outcome. Also recorded when the
     * action fails with an exception (status 500 and the exception class), since part of the write
@@ -581,7 +598,12 @@ class MobileBearerFilter @Inject() (
                 denied(403, "admin_required")
               case Some(user) =>
                 val gate =
-                  if (adminGrant) Future.successful(None) else draftGate(Some(user), write, request)
+                  if (adminGrant) Future.successful(None)
+                  else
+                    draftGate(Some(user), write, request).flatMap {
+                      case None => choiceGate(request)
+                      case some => Future.successful(some)
+                    }
                 gate.flatMap {
                   case Some(refusal) => Future.successful(refusal)
                   case None =>
