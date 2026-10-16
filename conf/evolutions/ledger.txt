@@ -30,3 +30,4 @@ synced d9989212 129
 141 fork mobile_live_pages: live progress page tokens (BACKLOG #12)
 142 fork choice_review_marks, choice_review_places: review page (H1a)
 143 fork choice_queues, choice_queue_items, review place states stale/gone: confirm queue (H1b)
+144 fork choice_pending state on_map, choice_queue_items on_map_at/checked_at: on the map (H1c)

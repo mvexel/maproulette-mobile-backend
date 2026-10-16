@@ -124,9 +124,16 @@ class MobileGuestSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll 
           limit: Int,
           guestExpiresAt: Instant,
           now: Instant
-      )                                                         = ???
-      def withdraw(guestId: UUID, taskId: Long)                 = ???
-      def counts(guestId: UUID)                                 = Map("pending" -> 2, "published" -> 1, "expired" -> 4)
+      )                                         = ???
+      def withdraw(guestId: UUID, taskId: Long) = ???
+      def counts(guestId: UUID) =
+        Map("pending" -> 2, "published" -> 1, "expired" -> 4, "on_map" -> 1)
+      def byChallenge(guestId: UUID) =
+        Map(
+          7L -> Map("pending"   -> 2, "on_map" -> 1),
+          8L -> Map("published" -> 1),
+          9L -> Map("expired"   -> 4)
+        )
       def list(guestId: UUID, limit: Int, before: Option[Long]) = ???
       def held(taskIds: Seq[Long])                              = ???
       def heldKinds(taskIds: Seq[Long])                         = ???
@@ -275,8 +282,13 @@ class MobileGuestSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll 
       (body \ "state").as[String] mustBe "active"
       (body \ "email").as[String] mustBe "none"
       (body \ "pending").as[Int] mustBe 2
-      (body \ "published").as[Int] mustBe 1
+      // H1c: answers OSM carries from the confirm queue count as published.
+      (body \ "published").as[Int] mustBe 2
       (body \ "claimedAs").toOption mustBe Some(play.api.libs.json.JsNull)
+      (body \ "byChallenge").as[play.api.libs.json.JsObject] mustBe play.api.libs.json.Json.obj(
+        "7" -> play.api.libs.json.Json.obj("pending" -> 2, "onMap" -> 1),
+        "8" -> play.api.libs.json.Json.obj("pending" -> 0, "onMap" -> 1)
+      )
     }
     "answer PUT /email with the same body as GET /me" in new Fixture {
       import org.maproulette.provider.choice.claim._

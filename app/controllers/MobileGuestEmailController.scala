@@ -42,8 +42,10 @@ class MobileGuestEmailController @Inject() (
                   case Left(error) =>
                     Future.successful(Status(error.status)(Json.obj("error" -> error.code)))
                   case Right(updated) =>
-                    Future(pending.counts(updated.id))
-                      .map(counts => Ok(MobileGuestController.status(updated, counts)))
+                    Future((pending.counts(updated.id), pending.byChallenge(updated.id))).map {
+                      case (counts, byChallenge) =>
+                        Ok(MobileGuestController.status(updated, counts, byChallenge))
+                    }
                 }
                 .recover {
                   case NonFatal(e) =>

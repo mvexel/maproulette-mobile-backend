@@ -5,12 +5,17 @@ import java.sql.Connection
 import java.time.{Instant, ZoneOffset}
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.{Inject, Singleton}
 import org.maproulette.framework.model._
 import org.maproulette.models.dal.{ChallengeDAL, TaskDAL}
+import org.maproulette.auth.mobile.MobileOAuthSettings
 import play.api.db.Database
+import play.api.inject.{ApplicationLifecycle, SimpleModule, bind}
 import play.api.libs.json._
+import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future}
+import scala.util.control.NonFatal
 
 /**
   * The confirm queue (H1b, backend/h1/h1b-design.md): a campaign's guest tag answers that pass the
@@ -26,23 +31,36 @@ object ChoiceQueue {
       question: ChoiceQuestion,
       option: ChoiceOption,
       people: Int,
-      at: Instant
+      at: Instant,
+      first: Instant
   ) {
     def tags: Map[String, Option[String]] =
       option.setTags.map { case (k, v) => k -> Some(v) } ++ option.unsetTags.map(_ -> None)
 
     /** OSM already carries the answer. */
-    def applied(current: Map[String, String]): Boolean =
-      tags.forall { case (k, v) => current.get(k) == v }
+    def applied(current: Map[String, String]): Boolean = carries(option, current)
 
-    private val dayFormat = DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH)
-    def day: String       = at.atOffset(ZoneOffset.UTC).format(dayFormat)
+    /** `14 Oct`, or the range from the first to the latest answer: `13–14 Oct`, `30 Sep–2 Oct`. */
+    def days: String = {
+      def utc(i: Instant) = i.atOffset(ZoneOffset.UTC).toLocalDate
+      val (from, to)      = (utc(first), utc(at))
+      val month           = DateTimeFormatter.ofPattern("MMM", Locale.ENGLISH)
+      if (from == to) s"${to.getDayOfMonth} ${to.format(month)}"
+      else if (from.getMonth == to.getMonth && from.getYear == to.getYear)
+        s"${from.getDayOfMonth}–${to.getDayOfMonth} ${to.format(month)}"
+      else s"${from.getDayOfMonth} ${from.format(month)}–${to.getDayOfMonth} ${to.format(month)}"
+    }
 
-    /** handback-copy §2: `2 people surveyed this on 14 Oct and said …`. */
+    /** The answer's tag changes: `door=sliding`, and `no key` for a removed one. */
+    def tagText: String =
+      (option.setTags.toSeq.sorted.map { case (k, v) => s"$k=$v" } ++
+        option.unsetTags.sorted.map(k => s"no $k")).mkString(", ")
+
+    /** Iris (2026-10-16): the task instruction a mapper reads on maproulette.org. */
     def evidence: String = {
       val who = if (people == 1) "1 person" else s"$people people"
-      s"""$who surveyed this on $day and answered "${question.prompt}" with "${option.label}". """ +
-        "Add it if it looks right; skip if unsure."
+      s"""Surveyed on $days by $who. Question: "${question.prompt}" Answer: "${option.label}" """ +
+        s"($tagText). Add it if it looks right; skip if unsure."
     }
 
     def element: String = s"${place.elementType.getOrElse("node")}/${place.elementId.getOrElse(0L)}"
@@ -86,6 +104,14 @@ object ChoiceQueue {
     )
   }
 
+  /** The element's tags include the option's: its set tags, and none of the tags it removes. */
+  def carries(option: ChoiceOption, current: Map[String, String]): Boolean =
+    option.setTags.forall { case (k, v) => current.get(k).contains(v) } &&
+      option.unsetTags.forall(k => !current.contains(k))
+
+  /** One run of the "On the map" check (H1c), for the log. */
+  case class OnMapReport(checked: Int, onMap: Int, gone: Int, failures: Int)
+
   /** What one place's answers can give, before the OSM check. */
   case class PlaceCandidates(candidates: Seq[Candidate], disagree: Int)
 
@@ -105,7 +131,12 @@ object ChoiceQueue {
         found.collect {
           case (q, opts) if opts.size == 1 =>
             val (oid, (people, at)) = opts.head
-            q.options.find(_.id == oid).map(o => Candidate(place, q, o, people, at))
+            val first = place.answers
+              .filter(a => (a.body \ "answers" \ q.id).asOpt[String].contains(oid))
+              .map(_.at)
+              .minOption
+              .getOrElse(at)
+            q.options.find(_.id == oid).map(o => Candidate(place, q, o, people, at, first))
         }.flatten,
         found.count(_._2.size > 1)
       )
@@ -114,17 +145,17 @@ object ChoiceQueue {
 
   /** The stale check of one place's candidates against the element as OSM has it now. */
   sealed trait Verdict
-  case object PlaceGone                                                extends Verdict
-  case class Checked(queue: Seq[Candidate], done: Int, stale: Boolean) extends Verdict
+  case object PlaceGone                                                              extends Verdict
+  case class Checked(queue: Seq[Candidate], applied: Seq[Candidate], stale: Boolean) extends Verdict
 
   def check(work: ChoiceWork, candidates: Seq[Candidate], read: ElementRead): Verdict = read match {
     case ElementGone => PlaceGone
     case ElementFound(_, _, tags) if !work.matches(tags) =>
-      Checked(Nil, 0, stale = true)
+      Checked(Nil, Nil, stale = true)
     case ElementFound(_, _, tags) =>
-      val (done, rest)     = candidates.partition(_.applied(tags))
+      val (applied, rest)  = candidates.partition(_.applied(tags))
       val (holds, changed) = rest.partition(_.question.holds(tags))
-      Checked(holds, done.size, stale = changed.nonEmpty)
+      Checked(holds, applied, stale = changed.nonEmpty)
   }
 
   /** The generator's counts for the admin app. */
@@ -219,6 +250,67 @@ class ChoiceQueueRepository @Inject() (db: Database) {
             ON CONFLICT (task_id) DO UPDATE SET state = EXCLUDED.state, marked_at = NOW()
               WHERE choice_review_places.state <> ${ReviewPage.NeedsVisit}""".executeUpdate()
       ()
+  }
+
+  /**
+    * H1c: OSM carries this answer to this question. The place's held guest answers that gave it
+    * are on the map once none of their other queued answers is still waiting (Ada: the guest sees
+    * "On the map" only for the whole answer). Returns how many rows changed.
+    */
+  def markOnMap(taskId: Long, question: String, answer: String): Int = db.withConnection {
+    implicit c =>
+      SQL"""UPDATE choice_pending p SET state = 'on_map', updated_at = NOW()
+            WHERE p.task_id = $taskId AND p.state = 'pending'
+              AND p.body->'answers'->>$question = $answer
+              AND NOT EXISTS (SELECT 1 FROM choice_queue_items i
+                WHERE i.source_task_id = p.task_id AND i.on_map_at IS NULL
+                  AND p.body->'answers'->>i.question = i.answer)""".executeUpdate()
+  }
+
+  /**
+    * Queued edits not yet seen on the map, grouped by campaign task, least recently checked first:
+    * (campaign id, campaign task id, its payload, [(question, answer)]).
+    */
+  def unchecked(limit: Int): Seq[(Long, Long, Option[JsValue], Seq[(String, String)])] =
+    db.withConnection { implicit c =>
+      SQL"""SELECT t.parent_id, i.source_task_id, t.cooperative_work_json::text AS payload,
+              i.question, i.answer
+            FROM choice_queue_items i JOIN tasks t ON t.id = i.source_task_id
+            WHERE i.source_task_id IN (
+              SELECT source_task_id FROM choice_queue_items WHERE on_map_at IS NULL
+              GROUP BY source_task_id ORDER BY min(checked_at) NULLS FIRST, source_task_id
+              LIMIT $limit)
+              AND i.on_map_at IS NULL
+            ORDER BY i.source_task_id, i.question"""
+        .as(
+          (SqlParser.long("parent_id") ~ SqlParser.long("source_task_id") ~
+            SqlParser.get[Option[String]]("payload") ~ SqlParser.str("question") ~
+            SqlParser.str("answer")).*
+        )
+        .groupBy { case parent ~ task ~ payload ~ _ ~ _ => (parent, task, payload) }
+        .toSeq
+        .sortBy(_._1._2)
+        .map {
+          case ((parent, task, payload), rows) =>
+            (parent, task, payload.map(Json.parse), rows.map { case _ ~ _ ~ _ ~ q ~ a => q -> a })
+        }
+    }
+
+  /** Records a check of the campaign task's queued edits; `onMap` are the ones OSM now carries. */
+  def checked(taskId: Long, onMap: Seq[String]): Unit = db.withTransaction { implicit c =>
+    if (onMap.nonEmpty)
+      SQL"""UPDATE choice_queue_items SET on_map_at = NOW() WHERE source_task_id = $taskId
+            AND on_map_at IS NULL AND question IN ($onMap)""".executeUpdate()
+    SQL"""UPDATE choice_queue_items SET checked_at = NOW() WHERE source_task_id = $taskId"""
+      .executeUpdate()
+    ()
+  }
+
+  /** Every queued edit of the campaign task is on the map. */
+  def allOnMap(taskId: Long): Boolean = db.withConnection { implicit c =>
+    SQL"""SELECT NOT EXISTS (SELECT 1 FROM choice_queue_items
+            WHERE source_task_id = $taskId AND on_map_at IS NULL) AS done"""
+      .as(SqlParser.bool("done").single)
   }
 
   /** The queue's tasks in id order, rebuilt as export lines from their stored payloads. */
@@ -317,9 +409,9 @@ class ChoiceQueueService @Inject() (
               case (place, _, PlaceGone) =>
                 repository.setState(campaignId, place.id, ReviewPage.Gone)
                 counts = counts.copy(gone = counts.gone + 1)
-              case (place, found, Checked(toQueue, done, stale)) =>
+              case (place, found, Checked(toQueue, applied, stale)) =>
                 if (stale) repository.setState(campaignId, place.id, ReviewPage.Stale)
-                else if (done == found.size)
+                else if (applied.size == found.size)
                   repository.setState(campaignId, place.id, ReviewPage.Done)
                 else if (place.state == ReviewPage.Stale)
                   repository.setState(campaignId, place.id, ReviewPage.Open)
@@ -340,9 +432,12 @@ class ChoiceQueueService @Inject() (
                   )
                   repository.recordQueued(task.id, candidate)
                 }
+                // H1c: answers OSM already carries are on the map, after this run's queued ones are
+                // recorded, so a guest answer with a part still queued stays pending.
+                applied.foreach(c => repository.markOnMap(place.id, c.question.id, c.option.id))
                 counts = counts.copy(
                   queued = counts.queued + added,
-                  done = counts.done + done,
+                  done = counts.done + applied.size,
                   stale = counts.stale + (if (stale) 1 else 0)
                 )
             }
@@ -350,8 +445,88 @@ class ChoiceQueueService @Inject() (
           }
     }
 
+  /**
+    * H1c: re-reads OSM for queued edits not yet on the map, the least recently checked places
+    * first. An edit OSM now carries is on the map, and so are the guest answers that gave it; a
+    * place whose queued edits all are is `done`, one whose element was deleted is `gone`. A place
+    * OSM can't answer for is left for the next run.
+    */
+  def detect(limit: Int = 200): Future[OnMapReport] =
+    Future(repository.unchecked(limit)).flatMap { places =>
+      places.foldLeft(Future.successful(OnMapReport(0, 0, 0, 0))) {
+        case (acc, (campaignId, taskId, payload, edits)) =>
+          acc.flatMap { report =>
+            payload.flatMap(ChoiceWork.validate(_).toOption) match {
+              case None =>
+                repository.checked(taskId, Nil)
+                Future.successful(report.copy(failures = report.failures + 1))
+              case Some(work) =>
+                osm
+                  .element(work.elementType, work.elementId, None)
+                  .map {
+                    case ElementGone =>
+                      repository.setState(campaignId, taskId, ReviewPage.Gone)
+                      repository.checked(taskId, Nil)
+                      report.copy(checked = report.checked + 1, gone = report.gone + 1)
+                    case ElementFound(_, _, tags) =>
+                      val onMap = edits.filter {
+                        case (q, a) =>
+                          work.questions
+                            .find(_.id == q)
+                            .flatMap(_.options.find(_.id == a))
+                            .exists(carries(_, tags))
+                      }
+                      repository.checked(taskId, onMap.map(_._1))
+                      onMap.foreach { case (q, a) => repository.markOnMap(taskId, q, a) }
+                      if (onMap.nonEmpty && repository.allOnMap(taskId))
+                        repository.setState(campaignId, taskId, ReviewPage.Done)
+                      report.copy(checked = report.checked + 1, onMap = report.onMap + onMap.size)
+                  }
+                  .recover {
+                    case _: OsmCallException =>
+                      repository.checked(taskId, Nil)
+                      report.copy(failures = report.failures + 1)
+                  }
+            }
+          }
+      }
+    }
+
   /** None when the campaign has no queue yet. */
   def exportQueue(campaignId: Long): Future[Option[Seq[JsObject]]] = Future {
     repository.queueChallenge(campaignId).map(repository.exportLines)
   }
 }
+
+/** Runs the "On the map" check (H1c) hourly while guests are enabled. One run at a time. */
+@Singleton
+class ChoiceOnMapScheduler @Inject() (
+    settings: MobileOAuthSettings,
+    service: ChoiceQueueService,
+    actorSystem: akka.actor.ActorSystem,
+    lifecycle: ApplicationLifecycle
+) {
+  private val logger  = play.api.Logger(getClass)
+  private val running = new AtomicBoolean(false)
+  private implicit val ec: ExecutionContext =
+    actorSystem.dispatchers.lookup("mobile-oauth-dispatcher")
+
+  private def tick(): Unit =
+    if (running.compareAndSet(false, true))
+      service
+        .detect()
+        .map { report =>
+          if (report.checked + report.failures > 0) logger.info(s"On the map check: $report")
+        }
+        .recover {
+          case NonFatal(e) => logger.error(s"On the map check failed: ${e.getClass.getSimpleName}")
+        }
+        .onComplete(_ => running.set(false))
+
+  if (settings.guestsEnabled) {
+    val task = actorSystem.scheduler.scheduleWithFixedDelay(5.minutes, 1.hour)(() => tick())
+    lifecycle.addStopHook(() => Future.successful(task.cancel()))
+  }
+}
+
+class ChoiceOnMapModule extends SimpleModule(bind[ChoiceOnMapScheduler].toSelf.eagerly())
