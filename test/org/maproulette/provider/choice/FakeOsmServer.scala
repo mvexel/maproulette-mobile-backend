@@ -29,7 +29,9 @@ class FakeOsmServer {
   // Planned upload answers: "ok" (default), "409", "401", "412", "500" or "500-applied".
   val uploadPlan = mutable.Queue[String]()
   // Ids answered with an HTML 404, as a proxy or a wrong server would.
-  val htmlMissing                      = mutable.Set[Long]()
+  val htmlMissing = mutable.Set[Long]()
+  // Ids answered as OSM answers one that never existed: 404, text/html, no body.
+  val neverExisted                     = mutable.Set[Long]()
   var createStatus: Option[Int]        = None
   var beforeUpload: Option[() => Unit] = None
   private var nextChangeset            = 1000L
@@ -126,6 +128,8 @@ class FakeOsmServer {
             }
           case ("GET", List(_, id)) if htmlMissing.contains(id.toLong) =>
             respond(exchange, 404, "<html><body>Not Found</body></html>", "text/html")
+          case ("GET", List(_, id)) if neverExisted.contains(id.toLong) =>
+            respond(exchange, 404, "", "text/html; charset=utf-8")
           case ("GET", List(kind, id)) =>
             elements.get((kind, id.toLong)) match {
               case Some(element) if element.visible => respond(exchange, 200, xml(element))
