@@ -71,6 +71,36 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
   )
   private def bearer(method: String, path: String) =
     FakeRequest(method, path).withHeaders("Authorization" -> s"Bearer $token")
+  private def json(request: FakeRequest[_], body: String, extra: (String, String)*) =
+    request
+      .withHeaders(
+        Seq("Content-Type" -> "application/json", "Content-Length" -> body.length.toString) ++ extra: _*
+      )
+      .withBody(body)
+  private val editGrant = grant.copy(scope = "tasks:read tasks:write tasks:edit")
+  private def editorRequests = Seq(
+    bearer(PUT, "/api/v2/task/123/1?requestReview=true"),
+    bearer(PUT, "/api/v2/task/123/2?requestReview=true&tags=a,b"),
+    json(bearer(PUT, "/api/v2/task/123/5"), """{"answer":"yes"}"""),
+    json(bearer(PUT, "/api/v2/task/123/6?tags=x"), "x" * 16384),
+    json(bearer(POST, "/api/v2/task/123/comment"), """{"comment":"done"}"""),
+    json(bearer(POST, "/api/v2/task/123/comment?actionId=7"), """{"comment":"done"}"""),
+    bearer(GET, "/api/v2/task/123/refreshLock"),
+    bearer(PUT, "/api/v2/task/123/changeset"),
+    bearer(PUT, "/api/v2/task/123/changeset?changesetId=987654"),
+    json(bearer(POST, "/api/v2/taskBundle"), """{"name":"b","taskIds":[123,124]}"""),
+    bearer(POST, "/api/v2/taskBundle/9"),
+    bearer(DELETE, "/api/v2/taskBundle/9"),
+    bearer(POST, "/api/v2/taskBundle/9/update?taskIds=123&taskIds=124"),
+    bearer(POST, "/api/v2/taskBundle/9/unbundle?taskIds=124"),
+    bearer(PUT, "/api/v2/task/123/lockBundle"),
+    bearer(PUT, "/api/v2/task/123/lockBundle?taskIds=123&taskIds=124"),
+    bearer(POST, "/api/v2/task/bundle/unlock?taskIds=123&taskIds=124"),
+    bearer(PUT, "/api/v2/taskBundle/9/1?primaryId=123"),
+    bearer(PUT, "/api/v2/taskBundle/9/2?primaryId=123&requestReview=true&tags=a"),
+    json(bearer(PUT, "/api/v2/taskBundle/9/5?primaryId=123"), """{"answer":"yes"}"""),
+    json(bearer(POST, "/api/v2/taskBundle/9/comment?actionId=7"), """{"comment":"done"}""")
+  )
   private def writeFilter(scopedGrant: MobileGrant) = {
     val oauth = mock[MobileOAuthService]
     val users = mock[UserService]
@@ -268,7 +298,6 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
     "deny unaudited writes and status codes even with tasks:write, before authentication" in {
       val (filter, oauth) = writeFilter(writeGrant)
       Seq(
-        GET    -> "/api/v2/task/123/refreshLock",
         PUT    -> "/api/v2/task/123/0",
         PUT    -> "/api/v2/task/123/3",
         PUT    -> "/api/v2/task/123/4",
@@ -289,7 +318,6 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
         GET    -> "/api/v2/task/123/start/",
         GET    -> "/api/v2/task/abc/start",
         PUT    -> "/api/v2/task/123/unlock/request",
-        POST   -> "/api/v2/task/123/comment",
         GET    -> "/api/v2/task/123/tags/update",
         GET    -> "/api/v2/task/123/review/start",
         POST   -> "/api/v2/task/123/lockBundle",
@@ -297,7 +325,8 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
         DELETE -> "/api/v2/task/123",
         PUT    -> "/api/v2/task/123/review/1",
         PUT    -> "/api/v2/tasks/changeStatus",
-        POST   -> "/api/v2/taskBundle",
+        PUT    -> "/api/v2/taskBundle",
+        PUT    -> "/api/v2/taskBundle/1/review/1",
         GET    -> "/api/v2/challenge/1/start",
         POST   -> "/api/v2/task/123/changeset"
       ).foreach {
@@ -310,8 +339,8 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
     "reject a query string or body on write routes, including review and tag overrides" in {
       val (filter, oauth) = writeFilter(writeGrant)
       Seq(
-        bearer(PUT, "/api/v2/task/123/1?requestReview=false"),
-        bearer(PUT, "/api/v2/task/123/1?tags=a,b"),
+        bearer(PUT, "/api/v2/task/123/1?requestReview=maybe"),
+        bearer(PUT, "/api/v2/task/123/1?comment=hi"),
         bearer(GET, "/api/v2/task/123/start?x=1"),
         bearer(POST, "/api/v2/task/123/skip?x=1"),
         bearer(PUT, "/api/v2/task/123/1").withHeaders("Content-Length"     -> "8"),
@@ -326,6 +355,15 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
         filter.apply(next)(bearer(PUT, "/api/v2/task/123/1").withHeaders("Content-Length" -> "0"))
       ) mustBe "123"
       verify(oauth).authenticate(token)
+    }
+
+    "deny editor requests to a tasks:write grant with insufficient_scope" in {
+      val (filter, _) = writeFilter(writeGrant)
+      editorRequests.foreach { request =>
+        val result = filter.apply(next)(request)
+        status(result) mustBe FORBIDDEN
+        contentAsJson(result) mustBe play.api.libs.json.Json.obj("error" -> "insufficient_scope")
+      }
     }
 
     "keep query strings on read routes, reject invalid tokens and leave legacy writes unchanged" in {
@@ -346,6 +384,81 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
         FakeRequest(GET, "/api/v2/task/123/start").withHeaders("apiKey" -> "legacy-key")
       ).foreach(request => contentAsString(open.apply(next)(request)) mustBe "legacy")
       verify(legacy, never()).authenticate(anyString())
+    }
+  }
+
+  "Mobile editor routes" should {
+    "allow each editor request and the lifecycle routes for a tasks:edit grant" in {
+      val (filter, _) = writeFilter(editGrant)
+      (editorRequests ++ allowedWrites.map { case (method, path) => bearer(method, path) })
+        .foreach(request => contentAsString(filter.apply(next)(request)) mustBe "123")
+    }
+
+    "reject editor requests outside the allowed shapes before authentication" in {
+      val (filter, oauth) = writeFilter(editGrant)
+      Seq(
+        bearer(PUT, "/api/v2/task/123/1?requestReview=yes"),
+        bearer(PUT, "/api/v2/task/123/1?requestReview=false"),
+        bearer(PUT, "/api/v2/task/123/1?requestReview"),
+        bearer(PUT, "/api/v2/task/123/1?requestReview=true&requestReview=false"),
+        bearer(PUT, "/api/v2/task/123/1?tags=" + "a" * 1025),
+        bearer(PUT, "/api/v2/task/123/1?comment=dropped"),
+        bearer(PUT, "/api/v2/task/123/1").withHeaders("Content-Length" -> "2").withBody("{}"),
+        json(bearer(PUT, "/api/v2/task/123/1"), "x" * 16385),
+        json(bearer(PUT, "/api/v2/task/123/1"), "{}", "Transfer-Encoding" -> "chunked"),
+        bearer(POST, "/api/v2/task/123/comment"),
+        bearer(POST, "/api/v2/task/123/comment?actionId=abc"),
+        json(bearer(POST, "/api/v2/task/123/comment?actionId=1&tags=x"), "{}"),
+        bearer(GET, "/api/v2/task/123/refreshLock?x=1"),
+        bearer(GET, "/api/v2/task/123/refreshLock").withHeaders("Content-Length" -> "2"),
+        bearer(PUT, "/api/v2/task/123/changeset?changesetId=x"),
+        bearer(PUT, "/api/v2/task/123/changeset?id=1"),
+        json(bearer(PUT, "/api/v2/task/123/changeset"), "{}"),
+        bearer(POST, "/api/v2/taskBundle"),
+        json(bearer(POST, "/api/v2/taskBundle?name=b"), "{}"),
+        bearer(POST, "/api/v2/taskBundle/9?lockTasks=true"),
+        json(bearer(DELETE, "/api/v2/taskBundle/9"), "{}"),
+        bearer(POST, "/api/v2/taskBundle/9/update"),
+        bearer(POST, "/api/v2/taskBundle/9/update?taskIds=1,2"),
+        bearer(POST, "/api/v2/taskBundle/9/unbundle?" + Seq.fill(51)("taskIds=1").mkString("&")),
+        bearer(PUT, "/api/v2/task/123/lockBundle?taskIds=x"),
+        json(bearer(POST, "/api/v2/task/bundle/unlock?taskIds=1"), "[1]"),
+        bearer(PUT, "/api/v2/taskBundle/9/1"),
+        bearer(PUT, "/api/v2/taskBundle/9/1?primaryId=123&requestReview=false"),
+        bearer(PUT, "/api/v2/taskBundle/9/1?primaryId=123&primaryId=124"),
+        bearer(POST, "/api/v2/taskBundle/9/comment?actionId=7")
+      ).foreach { request =>
+        val result = filter.apply(next)(request)
+        status(result) mustBe BAD_REQUEST
+        contentAsJson(result) mustBe play.api.libs.json.Json.obj("error" -> "invalid_request")
+      }
+      Seq(
+        PUT    -> "/api/v2/task/123/3?requestReview=true",
+        POST   -> "/api/v2/task/123/changeset",
+        PUT    -> "/api/v2/task/123/comment",
+        GET    -> "/api/v2/task/123/comments/x",
+        PUT    -> "/api/v2/taskBundle/1/review/1",
+        PUT    -> "/api/v2/taskBundle/1/metareview/1",
+        PUT    -> "/api/v2/taskBundle/1/3?primaryId=1",
+        GET    -> "/api/v2/taskBundle/1",
+        DELETE -> "/api/v2/task/123/comment/1"
+      ).foreach {
+        case (method, path) => status(filter.apply(next)(bearer(method, path))) mustBe FORBIDDEN
+      }
+      verify(oauth, never()).authenticate(anyString())
+    }
+
+    "refuse editor writes when task writes are off" in {
+      val oauth = mock[MobileOAuthService]
+      val filter =
+        new MobileBearerFilter(settings(true, allowTaskWrites = false), oauth, mock[UserService])
+      editorRequests.foreach { request =>
+        val result = filter.apply(next)(request)
+        status(result) mustBe FORBIDDEN
+        contentAsJson(result) mustBe play.api.libs.json.Json
+          .obj("error" -> "mobile_writes_disabled")
+      }
+      verify(oauth, never()).authenticate(anyString())
     }
   }
 
@@ -405,13 +518,20 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
         status(result) mustBe BAD_REQUEST
         contentAsJson(result) mustBe play.api.libs.json.Json.obj("error" -> "invalid_request")
       }
-      // Every other write keeps the no-body rule, JSON or not.
-      Seq(
-        bearer(POST, "/api/v2/task/123/skip")
-          .withHeaders("Content-Type" -> "application/json", "Content-Length" -> "2"),
-        bearer(PUT, "/api/v2/task/123/1")
-          .withHeaders("Content-Type" -> "application/json", "Content-Length" -> "2")
-      ).foreach(request => status(filter.apply(next)(request)) mustBe BAD_REQUEST)
+      // Every other lifecycle write keeps the no-body rule, JSON or not.
+      status(
+        filter.apply(next)(
+          bearer(POST, "/api/v2/task/123/skip")
+            .withHeaders("Content-Type" -> "application/json", "Content-Length" -> "2")
+        )
+      ) mustBe BAD_REQUEST
+      // A status write with completion responses is an editor request, which tasks:write can't make.
+      status(
+        filter.apply(next)(
+          bearer(PUT, "/api/v2/task/123/1")
+            .withHeaders("Content-Type" -> "application/json", "Content-Length" -> "2")
+        )
+      ) mustBe FORBIDDEN
     }
 
     "require tasks:write for the submit and allow the check to tasks:read without query or body" in {
@@ -541,17 +661,20 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
   }
 
   "Mobile preview mode" should {
-    // Challenge 7 and task 70 are a draft; everything else is published.
+    // Challenge 7, task 70 and bundle 90 are a draft; everything else is published.
     val drafts = new MobileDrafts {
       def draft(target: MobileDraftRoutes.Target): Boolean = target match {
         case MobileDraftRoutes.Challenge(id) => id == 7
         case MobileDraftRoutes.Task(id)      => id == 70
+        case MobileDraftRoutes.Bundle(id)    => id == 90
       }
+      def choiceTask(taskId: Long): Boolean     = false
+      def choiceBundle(bundleId: Long): Boolean = false
     }
-    def draftFilter(superUser: Boolean) = {
+    def draftFilter(superUser: Boolean, scopedGrant: MobileGrant = writeGrant) = {
       val oauth = mock[MobileOAuthService]
       val users = mock[UserService]
-      when(oauth.authenticate(token)).thenReturn(Future.successful(Some(writeGrant)))
+      when(oauth.authenticate(token)).thenReturn(Future.successful(Some(scopedGrant)))
       when(users.retrieve(123)).thenReturn(Some(user))
       val admins = new MobileAdminCheck {
         def isAdmin(u: User): Boolean  = superUser
@@ -602,10 +725,97 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
       status(filter.apply(next)(submit)) mustBe FORBIDDEN
     }
 
+    "hide draft bundles and draft bundle members, and leave bundle release routes open" in {
+      val filter = draftFilter(superUser = false, editGrant)
+      Seq(
+        bearer(POST, "/api/v2/taskBundle/90"),
+        bearer(PUT, "/api/v2/taskBundle/90/1?primaryId=70"),
+        json(bearer(POST, "/api/v2/taskBundle/90/comment"), """{"comment":"x"}"""),
+        bearer(POST, "/api/v2/taskBundle/90/update?taskIds=71"),
+        bearer(POST, "/api/v2/taskBundle/91/update?taskIds=71&taskIds=70"),
+        bearer(PUT, "/api/v2/task/70/lockBundle"),
+        bearer(PUT, "/api/v2/task/71/lockBundle?taskIds=71&taskIds=70")
+      ).foreach(request => status(filter.apply(next)(request)) mustBe NOT_FOUND)
+      Seq(
+        bearer(DELETE, "/api/v2/taskBundle/90"),
+        bearer(POST, "/api/v2/taskBundle/90/unbundle?taskIds=70"),
+        bearer(POST, "/api/v2/task/bundle/unlock?taskIds=70"),
+        bearer(POST, "/api/v2/taskBundle/91"),
+        bearer(PUT, "/api/v2/task/71/lockBundle?taskIds=71&taskIds=72")
+      ).foreach(request => contentAsString(filter.apply(next)(request)) mustBe "123")
+    }
+
     "leave release open so a lock taken before the challenge was disabled can be dropped" in {
       contentAsString(
         draftFilter(superUser = false).apply(next)(bearer(GET, "/api/v2/task/70/release"))
       ) mustBe "123"
+    }
+  }
+
+  "Mobile choice tasks" should {
+    // Task 80 is a multiple-choice task; task 81 is not.
+    val choices = new MobileDrafts {
+      def draft(target: MobileDraftRoutes.Target): Boolean = false
+      def choiceTask(taskId: Long): Boolean                = taskId == 80
+      def choiceBundle(bundleId: Long): Boolean            = bundleId == 85
+    }
+    def choiceFilter(scopedGrant: MobileGrant) = {
+      val oauth = mock[MobileOAuthService]
+      val users = mock[UserService]
+      when(oauth.authenticate(token)).thenReturn(Future.successful(Some(scopedGrant)))
+      when(users.retrieve(123)).thenReturn(Some(user))
+      val admins = new MobileAdminCheck {
+        def isAdmin(u: User): Boolean  = false
+        def isAdmin(id: Long): Boolean = false
+      }
+      new MobileBearerFilter(settings(true), oauth, users, admins, null, null, choices)
+    }
+
+    "refuse direct status writes for tasks:write and tasks:edit grants with choice_task_status" in {
+      val bare = Seq("1", "2", "5", "6").map(code => bearer(PUT, s"/api/v2/task/80/$code"))
+      val extras = Seq(
+        bearer(PUT, "/api/v2/task/80/1?requestReview=true"),
+        json(bearer(PUT, "/api/v2/task/80/2"), """{"answer":"yes"}""")
+      )
+      Seq(writeGrant -> bare, editGrant -> (bare ++ extras)).foreach {
+        case (scopedGrant, requests) =>
+          val filter = choiceFilter(scopedGrant)
+          requests.foreach { request =>
+            val result = filter.apply(next)(request)
+            status(result) mustBe FORBIDDEN
+            contentAsJson(result) mustBe play.api.libs.json.Json
+              .obj("error" -> "choice_task_status")
+          }
+      }
+    }
+
+    "leave the choice flow, other task routes and other tasks' status writes open" in {
+      val filter = choiceFilter(editGrant)
+      Seq(
+        bearer(GET, "/api/v2/task/80/start"),
+        bearer(GET, "/api/v2/task/80/release"),
+        bearer(POST, "/api/v2/task/80/skip"),
+        json(bearer(POST, "/api/v2/task/80/choice"), "{}"),
+        json(bearer(POST, "/api/v2/task/80/comment"), """{"comment":"done"}"""),
+        bearer(GET, "/api/v2/task/80/refreshLock"),
+        bearer(PUT, "/api/v2/task/81/1"),
+        bearer(PUT, "/api/v2/task/81/1?requestReview=true"),
+        bearer(PUT, "/api/v2/taskBundle/86/1?primaryId=81"),
+        bearer(POST, "/api/v2/taskBundle/85"),
+        json(bearer(POST, "/api/v2/taskBundle/85/comment"), """{"comment":"x"}""")
+      ).foreach(request => contentAsString(filter.apply(next)(request)) mustBe "123")
+    }
+
+    "refuse bundle status writes on a bundle that holds a choice task" in {
+      val filter = choiceFilter(editGrant)
+      Seq(
+        bearer(PUT, "/api/v2/taskBundle/85/1?primaryId=80"),
+        bearer(PUT, "/api/v2/taskBundle/85/6?primaryId=80&requestReview=true")
+      ).foreach { request =>
+        val result = filter.apply(next)(request)
+        status(result) mustBe FORBIDDEN
+        contentAsJson(result) mustBe play.api.libs.json.Json.obj("error" -> "choice_task_status")
+      }
     }
   }
 }

@@ -4,8 +4,8 @@ This fork (`mvexel/maproulette-mobile-backend`, branch `feat/mobile-oauth`) is
 based on upstream
 [`maproulette/maproulette-backend`](https://github.com/maproulette/maproulette-backend)
 at commit
-[`bbdc2d64`](https://github.com/maproulette/maproulette-backend/commit/bbdc2d6478175911c92d639f139ba335326fa3fe)
-(2026-10-10, "Validate OAuth state in callback"). The fork was first imported
+[`d9989212`](https://github.com/maproulette/maproulette-backend/commit/d998921292e400c5ebd2473024be7f6276057f2a)
+(2026-10-10, "Restrict info about who mapped each task to challenge owners", v4.12.0). The fork was first imported
 from an archive of `b9b2e69b`; that commit is recorded as an ancestor, so later
 upstream syncs are ordinary merges of `upstream/main`.
 
@@ -31,7 +31,7 @@ existing routes behave as upstream, apart from the general fixes listed under
 base commit:
 
 ```sh
-git -C <upstream checkout> archive bbdc2d64 | tar -x -C /tmp/up
+git -C <upstream checkout> archive d9989212 | tar -x -C /tmp/up
 diff -r /tmp/up . --exclude=.git
 ```
 
@@ -60,11 +60,11 @@ scoped per grant.
 | Routes: `authorize`, `callback`, `consent`, `token`, `revoke`, `me`                                                                                                    | `conf/routes:5-10` → `app/controllers/MobileOAuthController.scala` (`authorize` :124, `callback` :170, `consent` :297, `token` :353, `revoke` :372, `me` :394) |
 | Grant, token and code lifecycle (hashing, rotation, replay revocation)                                                                                                 | `app/org/maproulette/auth/mobile/MobileOAuthService.scala:36`                                                                                                  |
 | Storage                                                                                                                                                                | `app/org/maproulette/auth/mobile/MobileOAuthRepository.scala`, models in `MobileOAuthModels.scala`                                                             |
-| Scopes `tasks:read`, `tasks:write`, `osm:tagfix` and `mobile:admin` (strict parsing; `osm:tagfix` requires `tasks:write`; `mobile:admin` stands alone), config clients | `app/org/maproulette/auth/mobile/MobileOAuthSettings.scala:21,30,86`                                                                                           |
+| Scopes `tasks:read`, `tasks:write`, `tasks:edit`, `osm:tagfix` and `mobile:admin` (strict parsing; `osm:tagfix` and `tasks:edit` require `tasks:write` and exclude each other; `mobile:admin` stands alone), config clients | `app/org/maproulette/auth/mobile/MobileOAuthSettings.scala:21,30,86`                                                                                           |
 | Clients read from `mobile_oauth_clients` with a 10 s cache, seeded from config (see [Mobile admin](#mobile-admin))                                                     | `app/org/maproulette/auth/mobile/MobileClientRegistry.scala:14,130`                                                                                            |
 | OSM identity lookup, and provisioning of a MapRoulette user on first sign-in                                                                                           | `MobileOSMIdentity.scala:11`, `MobileUserProvisioner.scala:13`                                                                                                 |
 | Configuration block (off by default) and its dispatcher                                                                                                                | `conf/application.conf` (`mobileOAuth { … }`, `mobile-oauth-dispatcher`)                                                                                       |
-| Staging client registrations (`maproulette-android-example`, `maproulette-ios-example`)                                                                                | `conf/mobile-staging.conf`                                                                                                                                     |
+| Staging client registrations (`maproulette-android-example`, `maproulette-ios-example`, `maproulette-josm`)                                                                                | `conf/mobile-staging.conf`                                                                                                                                     |
 | Tables `mobile_oauth_interactions`, `_families`, `_codes`, `_access_tokens`, `_refresh_tokens`                                                                         | `conf/evolutions/default/129.sql`                                                                                                                              |
 | Dependency `scala-oauth2-core` 1.6.0                                                                                                                                   | `build.sbt`                                                                                                                                                    |
 
@@ -82,9 +82,26 @@ without a bearer token pass through unchanged.
 | Filter registration                                                                                                                                                                                 | `app/org/maproulette/filters/Filters.scala`                                        |
 | Read allowlist (`tasks:read`): challenge search, challenge, tags, tasks, task, `choice/check`, task and marker boxes, `me`                                                                          | `app/org/maproulette/auth/mobile/MobileBearerFilter.scala:55` (`MobileReadRoutes`) |
 | Write allowlist (`tasks:write`): `GET` `start` and `release`; `POST` `skip` and `choice`; `PUT` status `1`, `2`, `5`, `6`. No query string and no body, except the choice JSON (at most 2048 bytes) | `MobileBearerFilter.scala:84` (`MobileWriteRoutes`)                                |
+| Editor allowlist (`tasks:edit`): status `1`, `2`, `5`, `6` with `requestReview=true`, `tags` and a JSON body; `POST` comment; `GET` `refreshLock`; `PUT` `changeset`; the task bundle routes except review. Listed query keys only, bodies at most 16 KiB. See [Desktop editor login](#desktop-editor-login-josm) | `MobileBearerFilter.scala` (`MobileEditorRoutes`) |
 | Admin allowlist (`mobile:admin` only): see [Mobile admin](#mobile-admin)                                                                                                                            | `MobileBearerFilter.scala:25` (`MobileAdminRoutes`)                                |
 | Filter logic and error responses (`insufficient_scope`, `invalid_request`, `admin_required`)                                                                                                        | `MobileBearerFilter.scala:115,162`                                                 |
 | The bearer user takes precedence in `userAwareRequest`                                                                                                                                              | `app/org/maproulette/session/SessionManager.scala:239`                             |
+
+### Desktop editor login (JOSM)
+
+Lets desktop editors such as the JOSM MapRoulette plugin use the mobile OAuth
+provider (epic mvexel/MapRoulette-JOSM#54, issue #55). Items 1 and 2 are
+upstream-bound, as part of the provider; items 3 and 4 are fork-only. Each item
+is its own commit.
+
+| What | Where | Kind |
+| ---- | ----- | ---- |
+| 1. Loopback callbacks: `http://127.0.0.1:<port>/…` or `http://[::1]:<port>/…`, exact match, `localhost` refused (RFC 8252 §7.3, §8.3). The consent page's `form-action` names the loopback origin | `MobileOAuthSettings.validRedirect`, `MobileOAuthController.consentPage`, `mobile-oauth.md` | upstream-bound |
+| 2. `tasks:edit` scope, `MobileEditorRoutes`, consent text, docs | `MobileOAuthSettings.scala` (`MobileScopes`), `MobileBearerFilter.scala`, `MobileOAuthController.scala`, `mobile-oauth.md` | upstream-bound |
+| 3. Admin API validation and docs for loopback callbacks and `tasks:edit`; preview mode treats the editor routes as task writes | `MobileAdminController.scala`, `mobile-admin-api.md`, `MobileDrafts.scala` | fork-only |
+| 4. `maproulette-josm` staging client (`tasks:read tasks:write tasks:edit`, callback `http://127.0.0.1:8111/oauth_authorization`) | `conf/mobile-staging.conf` | fork-only |
+| 5. Task bundle routes for `tasks:edit` (create, read, update, unbundle, delete, lockBundle, bundle unlock, bundle status, bundle comments; `taskIds` at most 50), consent text, docs | `MobileBearerFilter.scala` (`MobileEditorRoutes`), `MobileOAuthController.scala`, `mobile-oauth.md` | upstream-bound |
+| 6. Preview mode and the choice status guard for bundles: draft bundles and draft `taskIds` members read as unknown, bundle create of draft tasks answers 404 for app grants, bundle status on a bundle holding a choice task is `403 choice_task_status` | `MobileDrafts.scala`, `MobileBearerFilter.scala` (`draftGate`, `choiceGate`), `TaskBundleController.createTaskBundle` | fork-only |
 
 ### Mobile admin
 
@@ -106,7 +123,7 @@ Backend for the admin web app: approved clients in the database, the super-user-
 | Campaign results export `GET /api/v2/mobile-admin/challenges/:id/results?format=csv\|geojson`; choice submissions store their answers (`mobile_choice_submissions.answers`) | `conf/routes` → `app/controllers/MobileResultsController.scala`, `app/org/maproulette/provider/choice/ChoiceResults.scala`, `conf/evolutions/default/134.sql` |
 | Campaigns list, project list/create and project on/off for the admin app (`/api/v2/mobile-admin/campaigns`, `/projects`, `/projects/:id/enabled`); no evolution | `conf/routes` → `app/controllers/MobileCampaignController.scala`, `app/org/maproulette/auth/mobile/MobileCampaigns.scala` |
 | Built-in `not-here` and `moved` reports (status 6, no OSM edit); `moved` carries a spot within 500 m of the task; results export report columns and a `reported_position` point | `ChoiceWork.scala` (`BuiltIn`), `MobileChoiceService.scala` (`Report`, `measured`), `ChoiceResults.scala` |
-| Routes `GET`/`POST /api/v2/mobile-admin/clients`, `PATCH …/clients/:id[?revokeGrants=true]`, `GET …/audit`                                                                                         | `conf/routes:11-15` → `app/controllers/MobileAdminController.scala:49,53,67,97`                                                 |
+| Routes `GET`/`POST /api/v2/mobile-admin/clients`, `PATCH …/clients/:id[?revokeGrants=true]`, `GET …/audit`, `GET …/scope-sets` (allowed client scope sets, from `MobileScopes.clientScopeSets`)                                                                                         | `conf/routes:27-31` → `app/controllers/MobileAdminController.scala:103,107,112,126,156`                                               |
 | Client writes and audit entries in one transaction; revocation of a client's grant families                                                                                                        | `MobileAdmin.scala:73` (`MobileAdminRepository`)                                                                                |
 | Admin writes through stock routes are audited as `stock.<METHOD>`                                                                                                                                  | `MobileBearerFilter.scala:142`                                                                                                  |
 | CORS for `mobileOAuth.adminOrigin` (`MR_MOBILE_ADMIN_ORIGIN`)                                                                                                                                      | `app/org/maproulette/auth/mobile/MobileCorsFilter.scala:24,65`, `MobileOAuthSettings.scala:132`                                 |
@@ -133,6 +150,7 @@ repo:
 | A replaced payload clears its `choice_stale` row                                                                                  | `app/org/maproulette/models/dal/TaskDAL.scala:428`                                                                                                                                                           |
 | A challenge holds only choice tasks or none                                                                                       | `TaskDAL.checkChoiceConsistency` (:564), called from `extractCooperativeWork` (:482)                                                                                                                         |
 | The status write can run extra work inside its transaction (`inTransaction` hook)                                                 | `TaskDAL.setTaskStatus` (:670)                                                                                                                                                                               |
+| App grants can't write a choice task's status directly, alone or in a bundle (`403 choice_task_status`); only `POST choice` sets it | `MobileBearerFilter.scala` (`choiceGate`), `MobileDrafts.scala` (`choiceTask`) |
 
 ### Guests (deferred sign-up, in progress)
 
@@ -216,7 +234,7 @@ bearer grants are narrower than a web session in either configuration:
 | Every route outside the read and write allowlists returns 403 for an app bearer token, including the mobile admin API and all admin, challenge-editing, comment, review, bundle and user-settings routes                                                                                  | `MobileBearerFilter.scala:55,84,162`                                                              |
 | An admin (`mobile:admin`) token reaches only `MobileAdminRoutes`: not the app reads or writes, not `whoami`, project, delete or other challenge routes, and `addFileTasks` only with `lineByLine=true&report=true` (no `removeUnmatched`). It needs a current super-user on every request | `MobileBearerFilter.scala:25,162`                                                                 |
 | The mobile admin API accepts only admin bearer grants: web sessions and API keys of super-users get 403 `mobile_admin_only`                                                                                                                                                               | `MobileAdminController.scala`                                                                     |
-| The admin app can't disable its own client or remove `mobile:admin` from it (`409 self_lockout`)                                                                                                                                                                                          | `MobileAdminController.scala:67`                                                                  |
+| The admin app can't disable its own client or remove `mobile:admin` from it (`409 self_lockout`)                                                                                                                                                                                          | `MobileAdminController.scala:140`                                                                |
 | With mobile OAuth enabled, other origins get no CORS on `/api/v2/mobile-admin/*`, `/oauth/mobile/token` and `/oauth/mobile/revoke`                                                                                                                                                        | `MobileCorsFilter.scala:65`                                                                       |
 | Status writes are limited to Fixed (1), Not an issue (2), Already fixed (5) and Too hard (6). Deleted, Disabled, Skipped and the review statuses are refused                                                                                                                              | `MobileWriteRoutes.permits` (`PUT $task/[1256]`)                                                  |
 | Status writes and lifecycle `GET`s must have no query string and no body, so mobile can't send `requestReview`, tags or completion responses                                                                                                                                              | `MobileBearerFilter.scala` (bare-route check)                                                     |
@@ -226,7 +244,7 @@ bearer grants are narrower than a web session in either configuration:
 | In a field deployment, an off write policy blocks task writes and OSM choice submissions even for an existing bearer grant, and declines new `tasks:write` grants                                                                                                                         | `MobileBearerFilter.scala` (`MobileFieldRoutes`, `MobileWriteRoutes`), `MobileOAuthService.scala` |
 | The field gate allows anonymous challenge and task discovery reads. It excludes `GET /task/:id/choice/check`, which performs a fresh OSM read and may record staleness                                                                                                                    | `MobileFieldRoutes.permitsWhenDisabled`                                                           |
 | Each stage/prod admin site changes only its matching backend's policy. The switch starts off; a current super-user with a `mobile:admin` grant is required to change it                                                                                                                   | `MobileAdminController.scala`, `MobileWritePolicy.scala`, `conf/mobile-field.conf`                |
-| Preview mode: for an app bearer grant, a draft challenge (challenge or project disabled) and its tasks answer a bare 404, as an unknown id does, except to super-users (organizers once `mobile:organize` exists). Nobody may start, skip, submit a choice for or set the status of a draft's task (403 `challenge_draft`); release stays open. Web sessions and API keys are unchanged | `MobileDrafts.scala`, `MobileBearerFilter.scala` (`draftGate`) |
+| Preview mode: for an app bearer grant, a draft challenge (challenge or project disabled) and its tasks answer a bare 404, as an unknown id does, except to super-users (organizers once `mobile:organize` exists). Nobody may start, skip, submit a choice for or set the status of a draft's task (403 `challenge_draft`), or bundle, lock or comment on one; release, bundle delete, unbundle and bundle unlock stay open. Web sessions and API keys are unchanged | `MobileDrafts.scala`, `MobileBearerFilter.scala` (`draftGate`) |
 
 ## Proposed upstream
 
@@ -236,3 +254,15 @@ Disabled escalation, same-status takeover, status writes without a lock, the
 `requestReview=false` bypass, fix/apply trust and ordering, and Swagger gaps.
 Its §10 lists the parts of this fork proposed for upstream: `meta.type = 3`,
 the `cct` filter and `addFileTasks?report=true`. Nothing has been filed yet.
+
+These changes touch only upstream code. They were made on branches cut from the
+upstream base `d9989212`, so each series applies to upstream `main` without
+fork code:
+
+| Change | Commits | Where |
+| ------ | ------- | ----- |
+| Lock responses (`start`, `lockBundle`, `refreshLock`) include `expiresAt`; error bodies add a machine-readable `error` code next to `status`/`message` | `52dbe965` (#36) | `TaskController.scala`, `Locking.resolveLockExpiry`, `MPExceptions.scala` (`ErrorCodes`, `ErrorCoded`), `MPExceptionUtil.body` |
+| `PUT /task/:id/changeset?changesetId=` links a named changeset after ownership and timing checks, behind `maproulette.tasks.changesets.linkEnabled` (default `true`) | `7d04c452` (#36), `a2919099` (#37) | `TaskDAL.linkOSMChangeSet`, `TaskController.matchToOSMChangeSet`, `conf/v2_route/task.api` |
+
+`831ca67f` in #36 is a copy of the fork's CI fix `e2fe49d2`, which keeps the
+upstream-based branch's own CI green. It is not part of these upstream changes.

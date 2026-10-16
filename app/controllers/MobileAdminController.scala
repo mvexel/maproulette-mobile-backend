@@ -104,6 +104,11 @@ class MobileAdminController @Inject() (
     admin(request)(_ => db(Ok(Json.obj("clients" -> repository.listClients))))
   }
 
+  def scopeSets: Action[AnyContent] = Action.async { request =>
+    val body = Json.obj("scopeSets" -> MobileScopes.clientScopeSets)
+    admin(request)(_ => Future.successful(Ok(body)))
+  }
+
   def createClient: Action[JsValue] = Action.async(parse.tolerantJson(MaxBody)) { request =>
     admin(request) { user =>
       MobileAdminController.parseClient(request.body) match {
@@ -195,7 +200,7 @@ object MobileAdminController {
       Right(uris.toSet)
     case _ =>
       Left(
-        "redirectUris: 1 to 10 distinct URIs, each https://host/... or a reverse-domain custom scheme (com.example.app:/path), without query or fragment"
+        "redirectUris: 1 to 10 distinct URIs, each https://host/..., a reverse-domain custom scheme (com.example.app:/path) or http://127.0.0.1:port/path, without query or fragment"
       )
   }
 
@@ -204,7 +209,7 @@ object MobileAdminController {
       case Some(set) => Right(set)
       case None =>
         Left(
-          "scopes: [\"tasks:read\"], [\"tasks:read\",\"tasks:write\"], [\"tasks:read\",\"tasks:write\",\"osm:tagfix\"] or [\"mobile:admin\"]; app scopes may add \"guest\""
+          "scopes: [\"tasks:read\"], [\"tasks:read\",\"tasks:write\"], [\"tasks:read\",\"tasks:write\",\"osm:tagfix\"], [\"tasks:read\",\"tasks:write\",\"tasks:edit\"] or [\"mobile:admin\"]; app scopes may add \"guest\""
         )
     }
 

@@ -214,6 +214,43 @@ class MobileOAuthControllerSpec extends PlaySpec with MockitoSugar with BeforeAn
       }
     }
 
+    "allow a loopback editor callback in form-action and name the editor permissions" in {
+      val loopback = "http://127.0.0.1:8111/oauth_authorization"
+      val editorConfig = Configuration(
+        ConfigFactory.parseString(
+          s"""
+    mobileOAuth {
+      enabled=true
+      callbackUri="https://mr.example/oauth/mobile/callback"
+      clients=[{
+        id="app",name="Editor",redirectUris=["$loopback"],
+        scopes=["tasks:read","tasks:write","tasks:edit"]
+      }]
+    }
+  """
+        )
+      )
+      val f = new Fixture(config = Some(editorConfig))
+      when(f.store.claimLogin(anyString(), anyString(), any[Instant])).thenReturn(
+        Some(interaction.copy(redirectUri = loopback, scope = "tasks:read tasks:write tasks:edit"))
+      )
+      when(f.store.completeLogin(anyString(), anyString(), anyLong(), anyString(), any[Instant]))
+        .thenReturn(true)
+      val result = f.controller.callback.apply(
+        FakeRequest(GET, s"/oauth/mobile/callback?state=$state&code=example")
+          .withCookies(Cookie("mr_mobile_oauth", browser))
+      )
+      status(result) mustBe OK
+      header("Content-Security-Policy", result).get must include(
+        "form-action 'self' http://127.0.0.1:8111;"
+      )
+      val body = contentAsString(result)
+      body must include("request a review")
+      body must include("comment on tasks")
+      body must include("bundle tasks")
+      body must include("It cannot edit OpenStreetMap")
+    }
+
     "keep an osm:tagfix login's OSM token only sealed, and name OSM edits on consent" in {
       val f      = new Fixture(config = Some(tagFixConfig))
       val tagFix = interaction.copy(scope = "tasks:read tasks:write osm:tagfix")

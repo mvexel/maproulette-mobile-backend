@@ -154,7 +154,8 @@ object MobileClaimRoutes {
   * Task lifecycle writes for grants with `tasks:write`. Only the bare route is allowed: no query
   * string (which would carry requestReview or tags) and no body (completion responses). Status
   * codes are limited to Fixed, False positive, Already fixed and Too hard. Mobile clients lock late
-  * (start immediately before the status write), so refreshLock is deliberately not allowed.
+  * (start immediately before the status write), so refreshLock is not allowed here; desktop
+  * editors get it, and the extras above, through [[MobileEditorRoutes]] with `tasks:edit`.
   */
 object MobileWriteRoutes {
   private val task       = "/api/v2/task/[0-9]+"
@@ -184,6 +185,117 @@ object MobileWriteRoutes {
     contentType.exists(Set("application/json", "application/json;charset=utf-8").contains) &&
     length.exists(value => value > 0 && value <= MaxChoiceBodyBytes)
   }
+}
+
+/**
+  * Desktop editor writes for grants with `tasks:edit` (which implies `tasks:write`): the status
+  * write with its review request, tags and completion responses, task comments, refreshLock (an
+  * editing session outlasts the lock) and the changeset link, plus the task bundle routes: create,
+  * read, update, unbundle, delete, lock and unlock, bundle status and bundle comments (not bundle
+  * review). Each route takes only the listed query keys, each at most once except `taskIds` (at
+  * most [[MaxBundleTasks]] values), and only the status writes, the comments and bundle create take
+  * a JSON body of at most [[MaxBodyBytes]]. A bare status write stays a [[MobileWriteRoutes]]
+  * lifecycle write.
+  */
+object MobileEditorRoutes {
+  private val task   = "/api/v2/task/[0-9]+"
+  val MaxBodyBytes   = 16384
+  val MaxValueLength = 1024
+
+  private def status(method: String, path: String) =
+    method == "PUT" && path.matches(s"$task/[1256]")
+  private def comment(method: String, path: String) =
+    method == "POST" && path.matches(s"$task/comment")
+
+  private def changeset(method: String, path: String) =
+    method == "PUT" && path.matches(s"$task/changeset")
+  private val digits: String => Boolean = _.matches("[0-9]{1,18}")
+
+  private val bundle = "/api/v2/taskBundle/[0-9]+"
+  // Same cap as the web UI's bundle limit.
+  val MaxBundleTasks = 50
+
+  private def bundleCreate(method: String, path: String) =
+    method == "POST" && path == "/api/v2/taskBundle"
+  private def bundleStatus(method: String, path: String) =
+    method == "PUT" && path.matches(s"$bundle/[1256]")
+  private def bundleComment(method: String, path: String) =
+    method == "POST" && path.matches(s"$bundle/comment")
+  // Routes whose only query is the required `taskIds` list.
+  private def bundleMembers(method: String, path: String) =
+    method == "POST" && path.matches(s"$bundle/(update|unbundle)") ||
+      method == "POST" && path == "/api/v2/task/bundle/unlock"
+  private def lockBundle(method: String, path: String) =
+    method == "PUT" && path.matches(s"$task/lockBundle")
+  private def bundleBare(method: String, path: String) =
+    (method == "POST" || method == "DELETE") && path.matches(bundle)
+
+  private def bundleRoute(method: String, path: String) =
+    bundleCreate(method, path) || bundleStatus(method, path) || bundleComment(method, path) ||
+      bundleMembers(method, path) || lockBundle(method, path) || bundleBare(method, path)
+
+  def permits(method: String, path: String): Boolean =
+    status(method, path) || comment(method, path) || changeset(method, path) ||
+      method == "GET" && path.matches(s"$task/refreshLock") || bundleRoute(method, path)
+
+  /** True when the request needs `tasks:edit`: an editor-only route, or a status write with extras. */
+  def requires(request: RequestHeader): Boolean =
+    permits(request.method, request.path) &&
+      (!MobileWriteRoutes.permits(request.method, request.path) ||
+        request.rawQueryString.nonEmpty || request.hasBody)
+
+  private def query(request: RequestHeader): Boolean = {
+    val (method, path) = (request.method, request.path)
+    // Only "true": "false" would skip a review the user's settings make mandatory
+    // (docs/upstream-issues.md §5).
+    val review: (String, String => Boolean) = "requestReview" -> Set("true")
+    val allowed: Map[String, String => Boolean] =
+      if (status(method, path)) Map(review, "tags" -> (_ => true))
+      else if (bundleStatus(method, path))
+        Map("primaryId" -> digits, review, "tags" -> (_ => true))
+      else if (comment(method, path) || bundleComment(method, path)) Map("actionId" -> digits)
+      else if (changeset(method, path)) Map("changesetId" -> digits)
+      else if (bundleMembers(method, path) || lockBundle(method, path)) Map("taskIds" -> digits)
+      else Map.empty
+    val required =
+      if (bundleStatus(method, path)) Set("primaryId")
+      else if (bundleMembers(method, path)) Set("taskIds")
+      else Set.empty[String]
+    def values(key: String, given: Seq[String]) =
+      given.nonEmpty && given.size <= (if (key == "taskIds") MaxBundleTasks else 1)
+    required.subsetOf(request.queryString.keySet) && request.queryString.forall {
+      case (key, given) =>
+        values(key, given) && allowed.get(key).exists { valid =>
+          given.forall(value => value.length <= MaxValueLength && valid(value))
+        }
+    }
+  }
+
+  private def takesBody(method: String, path: String) =
+    status(method, path) || comment(method, path) || bundleStatus(method, path) ||
+      bundleComment(method, path) || bundleCreate(method, path)
+
+  // Comments and bundle create need their JSON; status writes may omit completion responses.
+  private def needsBody(method: String, path: String) =
+    comment(method, path) || bundleComment(method, path) || bundleCreate(method, path)
+
+  private def body(request: RequestHeader): Boolean =
+    if (!takesBody(request.method, request.path)) !request.hasBody
+    else if (!request.hasBody) !needsBody(request.method, request.path)
+    else {
+      val contentType = request.headers
+        .get("Content-Type")
+        .map(_.toLowerCase(java.util.Locale.ROOT).replace(" ", ""))
+      val length = request.headers.getAll("Content-Length") match {
+        case Seq(value) if value.matches("[0-9]{1,5}") => Some(value.toInt)
+        case _                                         => None
+      }
+      request.headers.get("Transfer-Encoding").isEmpty &&
+      contentType.exists(Set("application/json", "application/json;charset=utf-8").contains) &&
+      length.exists(value => value > 0 && value <= MaxBodyBytes)
+    }
+
+  def acceptable(request: RequestHeader): Boolean = query(request) && body(request)
 }
 
 /** The live progress page (BACKLOG #12): its public read and its admin settings routes. */
@@ -394,17 +506,40 @@ class MobileBearerFilter @Inject() (
       user: Option[User],
       write: Boolean,
       request: RequestHeader
-  ): Future[Option[Result]] =
+  ): Future[Option[Result]] = {
+    val members = MobileDraftRoutes.members(request.method, request.path, request.queryString)
     MobileDraftRoutes.target(request.method, request.path) match {
-      case None => Future.successful(None)
-      case Some(target) =>
-        Future(drafts.draft(target)).flatMap {
+      case target if target.isDefined || members.nonEmpty =>
+        Future(target.exists(drafts.draft) || drafts.draftTasks(members)).flatMap {
           case false => Future.successful(None)
           case true if !user.exists(u => admins.isAdmin(u)) =>
             Future.successful(Some(Results.NotFound.withHeaders("Cache-Control" -> "no-store")))
           case true if write => denied(403, "challenge_draft").map(Some(_))
           case true          => Future.successful(None)
         }
+      case _ => Future.successful(None)
+    }
+  }
+
+  private val statusWrite  = "/api/v2/task/([0-9]+)/[1256]".r
+  private val bundleStatus = "/api/v2/taskBundle/([0-9]+)/[1256]".r
+
+  /**
+    * A multiple-choice task's status is set by `POST /task/:id/choice`, which makes the OSM edit and
+    * dedupes submissions. A direct status write would skip both, so app grants can't make one,
+    * with `tasks:write` or `tasks:edit`, on the task or on a bundle that holds one.
+    */
+  private def choiceGate(request: RequestHeader): Future[Option[Result]] =
+    (request.method, request.path) match {
+      case ("PUT", statusWrite(id))  => choiceRefusal(drafts.choiceTask(id.toLong))
+      case ("PUT", bundleStatus(id)) => choiceRefusal(drafts.choiceBundle(id.toLong))
+      case _                         => Future.successful(None)
+    }
+
+  private def choiceRefusal(choice: => Boolean): Future[Option[Result]] =
+    Future(choice).flatMap {
+      case true  => denied(403, "choice_task_status").map(Some(_))
+      case false => Future.successful(None)
     }
 
   /**
@@ -468,7 +603,8 @@ class MobileBearerFilter @Inject() (
     val parts = authorizations.head.split(" ", -1)
     if (parts.length != 2 || !parts(0).equalsIgnoreCase("Bearer") ||
         !parts(1).matches("[A-Za-z0-9_-]{32,256}")) return denied(401, "invalid_token")
-    val write       = MobileWriteRoutes.permits(request.method, request.path)
+    val editor      = MobileEditorRoutes.requires(request)
+    val write       = MobileWriteRoutes.permits(request.method, request.path) || editor
     val read        = MobileReadRoutes.permits(request.method, request.path)
     val admin       = MobileAdminRoutes.permits(request.method, request.path, request.queryString)
     val guest       = guests.enabled && MobileGuestRoutes.permits(request.method, request.path)
@@ -478,7 +614,8 @@ class MobileBearerFilter @Inject() (
       return denied(403, "mobile_writes_disabled")
     if (!write && !read && !admin && !guest) return denied(403, "insufficient_scope")
     val badShape =
-      if (write && MobileWriteRoutes.takesBody(request.method, request.path))
+      if (editor) !MobileEditorRoutes.acceptable(request)
+      else if (write && MobileWriteRoutes.takesBody(request.method, request.path))
         !MobileWriteRoutes.acceptableBody(request)
       else if (guest && !write && !read) !MobileGuestRoutes.acceptable(request)
       else
@@ -495,7 +632,8 @@ class MobileBearerFilter @Inject() (
           else if (!adminGrant && settings.writeControlEnabled &&
                    MobileGuestRoutes.guestOnlyWhenDisabled(request.method, request.path) &&
                    !writePolicy.enabled) denied(403, "mobile_writes_disabled")
-          else if (write && !scopes.contains(MobileScopes.Write)) denied(403, "insufficient_scope")
+          else if (write && !scopes.contains(MobileScopes.Write) ||
+                   editor && !scopes.contains(MobileScopes.Edit)) denied(403, "insufficient_scope")
           // D13 (1): the claim page's grant writes only through the claim routes.
           else if (value.clientId == MobileClaimRoutes.ClientId && (write && !claimRoute ||
                    MobileGuestRoutes.guestOnlyWhenDisabled(request.method, request.path)))
@@ -510,7 +648,12 @@ class MobileBearerFilter @Inject() (
                 denied(403, "admin_required")
               case Some(user) =>
                 val gate =
-                  if (adminGrant) Future.successful(None) else draftGate(Some(user), write, request)
+                  if (adminGrant) Future.successful(None)
+                  else
+                    draftGate(Some(user), write, request).flatMap {
+                      case None => choiceGate(request)
+                      case some => Future.successful(some)
+                    }
                 gate.flatMap {
                   case Some(refusal) => Future.successful(refusal)
                   case None =>
