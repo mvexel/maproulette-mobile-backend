@@ -322,8 +322,9 @@ queued), then reads the element from OSM once, without a token:
 
 The first run creates the queue challenge in the campaign's project: `<campaign>: confirm survey
 answers`, disabled, cooperative tag fix (type 1), the campaign's changeset comment, instruction
-`{{evidence}}`. Each task's `evidence` property reads `2 people surveyed this on 14 Oct and answered
-"How does this door open?" with "Sliding". Add it if it looks right; skip if unsure.` Reruns add
+`{{evidence}}`. Each task's `evidence` property reads `Surveyed on 14 Oct by 2 people. Question: "How
+does this door open?" Answer: "Sliding" (door=sliding). Add it if it looks right; skip if unsure.`
+(`by 1 person` for one, `on 13–14 Oct` when the answers span several days). Reruns add
 only new place and question pairs; ones already queued count as `alreadyQueued`. A queued place's
 campaign task stays out of discovery until someone marks it "Needs a visit".
 
