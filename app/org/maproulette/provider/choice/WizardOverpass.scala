@@ -65,7 +65,13 @@ class WizardOverpass @Inject() (ws: WSClient, config: Config)(implicit ec: Execu
         .withRequestTimeout(5.seconds)
         .withHttpHeaders("User-Agent" -> userAgent)
         .post(Map("data" -> Seq(WizardOverpass.ProbeQuery)))
-        .map(response => s"Overpass answered: HTTP ${response.status} in $ms ms ($url, $addresses)")
+        .map { response =>
+          // The server's own error, for anything but 200: Overpass explains itself in the body.
+          val said =
+            if (response.status == 200) ""
+            else s": ${response.body.replaceAll("\\s+", " ").trim.take(300)}"
+          s"Overpass answered: HTTP ${response.status} in $ms ms ($url, $addresses)$said"
+        }
         .recover {
           case e: Exception =>
             s"Overpass not reachable: ${e.getClass.getSimpleName} after $ms ms ($url, $addresses)"
@@ -124,7 +130,8 @@ object WizardOverpass {
 
   val DefaultUrls: Seq[String] = Seq(
     "https://overpass-api.de/api/interpreter",
-    "https://overpass.private.coffee/api/interpreter"
+    "https://overpass.private.coffee/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter"
   )
 
   def parseUrls(value: Option[String]): Seq[String] =

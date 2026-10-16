@@ -12,6 +12,7 @@ import scala.collection.mutable
   */
 class FakeOverpass {
   val queries                                   = mutable.ListBuffer[String]()
+  val contentTypes                              = mutable.ListBuffer[String]()
   @volatile var answer: String => (Int, String) = _ => (200, FakeOverpass.elements())
 
   private val server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0)
@@ -25,7 +26,10 @@ class FakeOverpass {
         .split("&")
         .collectFirst { case p if p.startsWith("data=") => URLDecoder.decode(p.drop(5), "UTF-8") }
         .getOrElse("")
-      synchronized(queries += query)
+      synchronized {
+        queries += query
+        contentTypes += Option(exchange.getRequestHeaders.getFirst("Content-Type")).getOrElse("")
+      }
       val (status, text) = answer(query)
       val bytes          = text.getBytes(StandardCharsets.UTF_8)
       exchange.getResponseHeaders.set("Content-Type", "application/json")
