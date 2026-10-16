@@ -1,0 +1,666 @@
+{
+ "comment": "Street Tally question sets (D-wizard). Bump a set's version whenever its filter, questions or outcomes change. Words are Iris's (design/campaign-wizard.md §1).",
+ "sets": [
+  {
+   "id": "entrance-doors",
+   "version": 1,
+   "name": "Entrance doors",
+   "why": "Wheelchair, stroller and walker users know what to expect",
+   "audience": "wheelchair, stroller and walker users",
+   "noun": {
+    "one": "entrance",
+    "many": "entrances"
+   },
+   "example": "How does this door open?",
+   "pace": 30,
+   "description": "Help map the {nounMany} around {place}, so {audience} know what to expect.",
+   "instruction": "Survey the door at the mapped entrance. Sets door and automatic_door only when missing. No geometry changes.",
+   "filter": {
+    "elements": [
+     "node"
+    ],
+    "tags": {
+     "entrance": null
+    },
+    "exclude": {
+     "entrance": [
+      "emergency"
+     ],
+     "access": [
+      "private",
+      "no"
+     ]
+    }
+   },
+   "match": {},
+   "matchKeys": [
+    "entrance"
+   ],
+   "questions": [
+    {
+     "id": "door-type",
+     "prompt": "How does this door open?",
+     "description": "Look only at the door at this entrance.",
+     "expect": {
+      "door": null
+     },
+     "options": [
+      {
+       "id": "hinged",
+       "label": "Swings open",
+       "setTags": {
+        "door": "hinged"
+       }
+      },
+      {
+       "id": "sliding",
+       "label": "Slides sideways",
+       "setTags": {
+        "door": "sliding"
+       }
+      },
+      {
+       "id": "revolving",
+       "label": "Revolves",
+       "setTags": {
+        "door": "revolving"
+       }
+      },
+      {
+       "id": "folding",
+       "label": "Folds",
+       "setTags": {
+        "door": "folding"
+       }
+      }
+     ]
+    },
+    {
+     "id": "automatic-opening",
+     "prompt": "Does it open by itself?",
+     "description": "A door that's propped open doesn't count.",
+     "expect": {
+      "automatic_door": null
+     },
+     "options": [
+      {
+       "id": "no",
+       "label": "No, you push or pull it",
+       "setTags": {
+        "automatic_door": "no"
+       }
+      },
+      {
+       "id": "button",
+       "label": "Yes, with a button",
+       "setTags": {
+        "automatic_door": "button"
+       }
+      },
+      {
+       "id": "motion",
+       "label": "Yes, when you walk up",
+       "setTags": {
+        "automatic_door": "motion"
+       }
+      },
+      {
+       "id": "yes",
+       "label": "Yes, not sure how",
+       "setTags": {
+        "automatic_door": "yes"
+       }
+      }
+     ]
+    }
+   ],
+   "outcomes": [
+    {
+     "id": "no-door",
+     "label": "There's no door",
+     "description": "It's an open doorway or a gate.",
+     "status": 6
+    }
+   ]
+  },
+  {
+   "id": "crossings",
+   "version": 1,
+   "name": "Crossings",
+   "why": "Blind and low-vision people find safe crossings",
+   "audience": "blind and low-vision people",
+   "noun": {
+    "one": "crossing",
+    "many": "crossings"
+   },
+   "example": "Are there bumpy warning tiles at the curb?",
+   "pace": 25,
+   "description": "Help map the {nounMany} around {place}, so {audience} can find safe ones.",
+   "instruction": "Survey the crossing at the mapped point. Sets tactile_paving and crossing:markings only when missing. No geometry changes.",
+   "filter": {
+    "elements": [
+     "node"
+    ],
+    "tags": {
+     "highway": "crossing"
+    },
+    "exclude": {
+     "crossing": [
+      "no"
+     ],
+     "access": [
+      "private",
+      "no"
+     ]
+    }
+   },
+   "match": {
+    "highway": "crossing"
+   },
+   "questions": [
+    {
+     "id": "tactile-paving",
+     "prompt": "Are there bumpy warning tiles at the curb?",
+     "description": "The raised dots, usually yellow or red, at both ends of the crossing. Pick Yes only if both ends have them.",
+     "expect": {
+      "tactile_paving": null
+     },
+     "options": [
+      {
+       "id": "yes",
+       "label": "Yes, both ends",
+       "setTags": {
+        "tactile_paving": "yes"
+       }
+      },
+      {
+       "id": "partial",
+       "label": "Only one end",
+       "setTags": {
+        "tactile_paving": "partial"
+       }
+      },
+      {
+       "id": "no",
+       "label": "No",
+       "setTags": {
+        "tactile_paving": "no"
+       }
+      }
+     ]
+    },
+    {
+     "id": "crossing-markings",
+     "prompt": "How is the crossing painted?",
+     "description": "Look at the road surface where people cross.",
+     "expect": {
+      "crossing:markings": null
+     },
+     "options": [
+      {
+       "id": "zebra",
+       "label": "Wide stripes across",
+       "setTags": {
+        "crossing:markings": "zebra"
+       }
+      },
+      {
+       "id": "lines",
+       "label": "Two lines along the edges",
+       "setTags": {
+        "crossing:markings": "lines"
+       }
+      },
+      {
+       "id": "ladder",
+       "label": "Stripes and edge lines",
+       "setTags": {
+        "crossing:markings": "ladder"
+       }
+      },
+      {
+       "id": "no",
+       "label": "No paint",
+       "setTags": {
+        "crossing:markings": "no"
+       }
+      }
+     ]
+    }
+   ],
+   "outcomes": [
+    {
+     "id": "no-crossing",
+     "label": "There's no crossing here",
+     "description": "Nobody can cross the street at this spot.",
+     "status": 6
+    }
+   ]
+  },
+  {
+   "id": "bus-stops",
+   "version": 1,
+   "name": "Bus stops",
+   "why": "Riders know if there's a shelter, bench or trash can",
+   "audience": "riders",
+   "noun": {
+    "one": "stop",
+    "many": "stops"
+   },
+   "example": "Is there a shelter with a roof?",
+   "pace": 12,
+   "description": "Help map the bus {nounMany} around {place}, so {audience} know what's there.",
+   "instruction": "Survey the bus stop at the mapped point. Sets its amenity tags only when missing. No geometry changes.",
+   "filter": {
+    "elements": [
+     "node"
+    ],
+    "tags": {
+     "highway": "bus_stop"
+    },
+    "exclude": {}
+   },
+   "match": {
+    "highway": "bus_stop"
+   },
+   "questions": [
+    {
+     "id": "shelter",
+     "prompt": "Is there a shelter with a roof?",
+     "description": "A shelter built for waiting riders. A tree, awning or building overhang doesn't count.",
+     "expect": {
+      "shelter": null
+     },
+     "options": [
+      {
+       "id": "yes",
+       "label": "Yes",
+       "setTags": {
+        "shelter": "yes"
+       }
+      },
+      {
+       "id": "no",
+       "label": "No",
+       "setTags": {
+        "shelter": "no"
+       }
+      }
+     ]
+    },
+    {
+     "id": "bench",
+     "prompt": "Is there a bench or seat?",
+     "description": "Inside or outside the shelter.",
+     "expect": {
+      "bench": null
+     },
+     "options": [
+      {
+       "id": "yes",
+       "label": "Yes",
+       "setTags": {
+        "bench": "yes"
+       }
+      },
+      {
+       "id": "no",
+       "label": "No",
+       "setTags": {
+        "bench": "no"
+       }
+      }
+     ]
+    },
+    {
+     "id": "lit",
+     "prompt": "Is the waiting area lit at night?",
+     "description": "A streetlight or shelter light that shines on where people wait. If it's daytime and you can't tell, pick “I'm not sure”.",
+     "expect": {
+      "lit": null
+     },
+     "options": [
+      {
+       "id": "yes",
+       "label": "Yes",
+       "setTags": {
+        "lit": "yes"
+       }
+      },
+      {
+       "id": "no",
+       "label": "No",
+       "setTags": {
+        "lit": "no"
+       }
+      }
+     ]
+    },
+    {
+     "id": "bin",
+     "prompt": "Is there a trash can at the stop?",
+     "expect": {
+      "bin": null
+     },
+     "options": [
+      {
+       "id": "yes",
+       "label": "Yes",
+       "setTags": {
+        "bin": "yes"
+       }
+      },
+      {
+       "id": "no",
+       "label": "No",
+       "setTags": {
+        "bin": "no"
+       }
+      }
+     ]
+    },
+    {
+     "id": "schedule",
+     "prompt": "Is schedule information posted?",
+     "description": "A printed timetable or route map, or a screen with live arrival times.",
+     "expect": {
+      "departures_board": null,
+      "passenger_information_display": null
+     },
+     "options": [
+      {
+       "id": "printed",
+       "label": "Printed only",
+       "description": "Timetable or route map, no screen.",
+       "setTags": {
+        "departures_board": "timetable",
+        "passenger_information_display": "no"
+       }
+      },
+      {
+       "id": "screen",
+       "label": "Live screen only",
+       "description": "A screen with arrival times, nothing printed.",
+       "setTags": {
+        "departures_board": "realtime",
+        "passenger_information_display": "yes"
+       }
+      },
+      {
+       "id": "both",
+       "label": "Both",
+       "description": "Printed information and a live screen.",
+       "setTags": {
+        "departures_board": "timetable",
+        "passenger_information_display": "yes"
+       }
+      },
+      {
+       "id": "none",
+       "label": "None",
+       "setTags": {
+        "departures_board": "no",
+        "passenger_information_display": "no"
+       }
+      }
+     ]
+    },
+    {
+     "id": "wheelchair",
+     "prompt": "Could someone in a wheelchair wait and board here on their own?",
+     "description": "A paved, level spot connected to the sidewalk, with no curb, grass or gap in the way.",
+     "expect": {
+      "wheelchair": null
+     },
+     "options": [
+      {
+       "id": "yes",
+       "label": "Yes",
+       "setTags": {
+        "wheelchair": "yes"
+       }
+      },
+      {
+       "id": "with-help",
+       "label": "Only with help",
+       "description": "Possible, but some wheelchairs couldn't make it alone.",
+       "setTags": {
+        "wheelchair": "limited"
+       }
+      },
+      {
+       "id": "no",
+       "label": "No",
+       "setTags": {
+        "wheelchair": "no"
+       }
+      }
+     ]
+    },
+    {
+     "id": "tactile-paving",
+     "prompt": "Is there a bumpy warning strip at the curb?",
+     "description": "A panel of raised dots, usually yellow or dark, that helps people with low vision find the edge.",
+     "expect": {
+      "tactile_paving": null
+     },
+     "options": [
+      {
+       "id": "yes",
+       "label": "Yes",
+       "setTags": {
+        "tactile_paving": "yes"
+       }
+      },
+      {
+       "id": "no",
+       "label": "No",
+       "setTags": {
+        "tactile_paving": "no"
+       }
+      }
+     ]
+    }
+   ],
+   "outcomes": [
+    {
+     "id": "no-stop",
+     "label": "There's no bus stop here",
+     "status": 6
+    }
+   ]
+  },
+  {
+   "id": "benches",
+   "version": 1,
+   "name": "Benches",
+   "why": "People who need to rest know where they can",
+   "audience": "people who need to rest",
+   "noun": {
+    "one": "bench",
+    "many": "benches"
+   },
+   "example": "Does the bench have armrests?",
+   "pace": 40,
+   "description": "Help map the {nounMany} around {place}, so {audience} know where they can.",
+   "instruction": "Survey the bench at the mapped point. Sets backrest, armrest and material only when missing. No geometry changes.",
+   "filter": {
+    "elements": [
+     "node"
+    ],
+    "tags": {
+     "amenity": "bench"
+    },
+    "exclude": {
+     "access": [
+      "private",
+      "no"
+     ]
+    }
+   },
+   "match": {
+    "amenity": "bench"
+   },
+   "questions": [
+    {
+     "id": "backrest",
+     "prompt": "Does the bench have a backrest?",
+     "expect": {
+      "backrest": null
+     },
+     "options": [
+      {
+       "id": "yes",
+       "label": "Yes",
+       "setTags": {
+        "backrest": "yes"
+       }
+      },
+      {
+       "id": "no",
+       "label": "No",
+       "setTags": {
+        "backrest": "no"
+       }
+      }
+     ]
+    },
+    {
+     "id": "armrest",
+     "prompt": "Does the bench have armrests?",
+     "expect": {
+      "armrest": null
+     },
+     "options": [
+      {
+       "id": "yes",
+       "label": "Yes",
+       "setTags": {
+        "armrest": "yes"
+       }
+      },
+      {
+       "id": "no",
+       "label": "No",
+       "setTags": {
+        "armrest": "no"
+       }
+      }
+     ]
+    },
+    {
+     "id": "material",
+     "prompt": "What is the seat mainly made of?",
+     "expect": {
+      "material": null
+     },
+     "options": [
+      {
+       "id": "wood",
+       "label": "Wood",
+       "setTags": {
+        "material": "wood"
+       }
+      },
+      {
+       "id": "metal",
+       "label": "Metal",
+       "setTags": {
+        "material": "metal"
+       }
+      },
+      {
+       "id": "concrete",
+       "label": "Concrete",
+       "setTags": {
+        "material": "concrete"
+       }
+      },
+      {
+       "id": "stone",
+       "label": "Stone",
+       "setTags": {
+        "material": "stone"
+       }
+      },
+      {
+       "id": "plastic",
+       "label": "Plastic",
+       "setTags": {
+        "material": "plastic"
+       }
+      }
+     ]
+    }
+   ],
+   "outcomes": [
+    {
+     "id": "no-bench",
+     "label": "There's no bench here",
+     "status": 6
+    }
+   ]
+  },
+  {
+   "id": "trees",
+   "version": 1,
+   "name": "Trees",
+   "why": "Neighbors and planners see where the shade is",
+   "audience": "neighbors and planners",
+   "noun": {
+    "one": "tree",
+    "many": "trees"
+   },
+   "example": "Does this tree have leaves or needles?",
+   "pace": 60,
+   "description": "Help map the {nounMany} around {place}, so {audience} can see where the shade is.",
+   "instruction": "Survey the tree at the mapped point. Sets leaf_type only when missing. No geometry changes.",
+   "filter": {
+    "elements": [
+     "node"
+    ],
+    "tags": {
+     "natural": "tree"
+    },
+    "exclude": {}
+   },
+   "match": {
+    "natural": "tree"
+   },
+   "questions": [
+    {
+     "id": "leaf-type",
+     "prompt": "Does this tree have leaves or needles?",
+     "description": "The tree at the big pin. Palms count as leaves.",
+     "expect": {
+      "leaf_type": null
+     },
+     "options": [
+      {
+       "id": "broadleaved",
+       "label": "Leaves",
+       "setTags": {
+        "leaf_type": "broadleaved"
+       }
+      },
+      {
+       "id": "needleleaved",
+       "label": "Needles",
+       "setTags": {
+        "leaf_type": "needleleaved"
+       }
+      }
+     ]
+    }
+   ],
+   "outcomes": [
+    {
+     "id": "no-tree",
+     "label": "There's no tree here",
+     "description": "The tree is gone or was never there.",
+     "status": 6
+    }
+   ]
+  }
+ ]
+}

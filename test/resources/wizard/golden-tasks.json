@@ -1,0 +1,2169 @@
+{
+ "entrance-doors": {
+  "features": [
+   {
+    "type": "Feature",
+    "geometry": {
+     "type": "Point",
+     "coordinates": [
+      -111.9068,
+      40.7538
+     ]
+    },
+    "properties": {
+     "@id": "node/101",
+     "entrance": "main"
+    }
+   },
+   {
+    "type": "Feature",
+    "geometry": {
+     "type": "Point",
+     "coordinates": [
+      -111.9061,
+      40.7531
+     ]
+    },
+    "properties": {
+     "@id": "node/102",
+     "entrance": "main",
+     "door": "already"
+    }
+   },
+   {
+    "type": "Feature",
+    "geometry": {
+     "type": "Point",
+     "coordinates": [
+      -111.905,
+      40.752
+     ]
+    },
+    "properties": {
+     "@id": "way/103",
+     "entrance": "main",
+     "name": "Granary Live",
+     "addr:street": "900 South"
+    }
+   },
+   {
+    "type": "Feature",
+    "geometry": {
+     "type": "Point",
+     "coordinates": [
+      -111.904,
+      40.751
+     ]
+    },
+    "properties": {
+     "@id": "node/104",
+     "entrance": "main",
+     "door": "set",
+     "automatic_door": "set"
+    }
+   }
+  ],
+  "lines": [
+   {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -111.9068,
+        40.7538
+       ]
+      },
+      "properties": {
+       "@id": "node/101",
+       "entrance": "main"
+      }
+     }
+    ],
+    "cooperativeWork": {
+     "meta": {
+      "version": 2,
+      "type": 3,
+      "choiceVersion": 1
+     },
+     "element": "node/101",
+     "match": {
+      "entrance": "main"
+     },
+     "questions": [
+      {
+       "id": "door-type",
+       "prompt": "How does this door open?",
+       "description": "Look only at the door at this entrance.",
+       "expect": {
+        "door": null
+       },
+       "options": [
+        {
+         "id": "hinged",
+         "label": "Swings open",
+         "setTags": {
+          "door": "hinged"
+         }
+        },
+        {
+         "id": "sliding",
+         "label": "Slides sideways",
+         "setTags": {
+          "door": "sliding"
+         }
+        },
+        {
+         "id": "revolving",
+         "label": "Revolves",
+         "setTags": {
+          "door": "revolving"
+         }
+        },
+        {
+         "id": "folding",
+         "label": "Folds",
+         "setTags": {
+          "door": "folding"
+         }
+        }
+       ]
+      },
+      {
+       "id": "automatic-opening",
+       "prompt": "Does it open by itself?",
+       "description": "A door that's propped open doesn't count.",
+       "expect": {
+        "automatic_door": null
+       },
+       "options": [
+        {
+         "id": "no",
+         "label": "No, you push or pull it",
+         "setTags": {
+          "automatic_door": "no"
+         }
+        },
+        {
+         "id": "button",
+         "label": "Yes, with a button",
+         "setTags": {
+          "automatic_door": "button"
+         }
+        },
+        {
+         "id": "motion",
+         "label": "Yes, when you walk up",
+         "setTags": {
+          "automatic_door": "motion"
+         }
+        },
+        {
+         "id": "yes",
+         "label": "Yes, not sure how",
+         "setTags": {
+          "automatic_door": "yes"
+         }
+        }
+       ]
+      }
+     ],
+     "outcomes": [
+      {
+       "id": "no-door",
+       "label": "There's no door",
+       "description": "It's an open doorway or a gate.",
+       "status": 6
+      }
+     ],
+     "liveMissingQuestions": true
+    }
+   },
+   {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -111.9061,
+        40.7531
+       ]
+      },
+      "properties": {
+       "@id": "node/102",
+       "entrance": "main",
+       "door": "already"
+      }
+     }
+    ],
+    "cooperativeWork": {
+     "meta": {
+      "version": 2,
+      "type": 3,
+      "choiceVersion": 1
+     },
+     "element": "node/102",
+     "match": {
+      "entrance": "main"
+     },
+     "questions": [
+      {
+       "id": "automatic-opening",
+       "prompt": "Does it open by itself?",
+       "description": "A door that's propped open doesn't count.",
+       "expect": {
+        "automatic_door": null
+       },
+       "options": [
+        {
+         "id": "no",
+         "label": "No, you push or pull it",
+         "setTags": {
+          "automatic_door": "no"
+         }
+        },
+        {
+         "id": "button",
+         "label": "Yes, with a button",
+         "setTags": {
+          "automatic_door": "button"
+         }
+        },
+        {
+         "id": "motion",
+         "label": "Yes, when you walk up",
+         "setTags": {
+          "automatic_door": "motion"
+         }
+        },
+        {
+         "id": "yes",
+         "label": "Yes, not sure how",
+         "setTags": {
+          "automatic_door": "yes"
+         }
+        }
+       ]
+      }
+     ],
+     "outcomes": [
+      {
+       "id": "no-door",
+       "label": "There's no door",
+       "description": "It's an open doorway or a gate.",
+       "status": 6
+      }
+     ],
+     "liveMissingQuestions": true
+    }
+   },
+   {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -111.905,
+        40.752
+       ]
+      },
+      "properties": {
+       "@id": "way/103",
+       "entrance": "main",
+       "name": "Granary Live",
+       "addr:street": "900 South"
+      }
+     }
+    ],
+    "cooperativeWork": {
+     "meta": {
+      "version": 2,
+      "type": 3,
+      "choiceVersion": 1
+     },
+     "element": "way/103",
+     "match": {
+      "entrance": "main"
+     },
+     "questions": [
+      {
+       "id": "door-type",
+       "prompt": "How does this door open?",
+       "description": "Look only at the door at this entrance.",
+       "expect": {
+        "door": null
+       },
+       "options": [
+        {
+         "id": "hinged",
+         "label": "Swings open",
+         "setTags": {
+          "door": "hinged"
+         }
+        },
+        {
+         "id": "sliding",
+         "label": "Slides sideways",
+         "setTags": {
+          "door": "sliding"
+         }
+        },
+        {
+         "id": "revolving",
+         "label": "Revolves",
+         "setTags": {
+          "door": "revolving"
+         }
+        },
+        {
+         "id": "folding",
+         "label": "Folds",
+         "setTags": {
+          "door": "folding"
+         }
+        }
+       ]
+      },
+      {
+       "id": "automatic-opening",
+       "prompt": "Does it open by itself?",
+       "description": "A door that's propped open doesn't count.",
+       "expect": {
+        "automatic_door": null
+       },
+       "options": [
+        {
+         "id": "no",
+         "label": "No, you push or pull it",
+         "setTags": {
+          "automatic_door": "no"
+         }
+        },
+        {
+         "id": "button",
+         "label": "Yes, with a button",
+         "setTags": {
+          "automatic_door": "button"
+         }
+        },
+        {
+         "id": "motion",
+         "label": "Yes, when you walk up",
+         "setTags": {
+          "automatic_door": "motion"
+         }
+        },
+        {
+         "id": "yes",
+         "label": "Yes, not sure how",
+         "setTags": {
+          "automatic_door": "yes"
+         }
+        }
+       ]
+      }
+     ],
+     "outcomes": [
+      {
+       "id": "no-door",
+       "label": "There's no door",
+       "description": "It's an open doorway or a gate.",
+       "status": 6
+      }
+     ],
+     "liveMissingQuestions": true
+    }
+   }
+  ],
+  "skipped": [
+   "node/104: no applicable questions"
+  ]
+ },
+ "crossings": {
+  "features": [
+   {
+    "type": "Feature",
+    "geometry": {
+     "type": "Point",
+     "coordinates": [
+      -111.9068,
+      40.7538
+     ]
+    },
+    "properties": {
+     "@id": "node/101",
+     "highway": "crossing"
+    }
+   },
+   {
+    "type": "Feature",
+    "geometry": {
+     "type": "Point",
+     "coordinates": [
+      -111.9061,
+      40.7531
+     ]
+    },
+    "properties": {
+     "@id": "node/102",
+     "highway": "crossing",
+     "tactile_paving": "already"
+    }
+   },
+   {
+    "type": "Feature",
+    "geometry": {
+     "type": "Point",
+     "coordinates": [
+      -111.905,
+      40.752
+     ]
+    },
+    "properties": {
+     "@id": "way/103",
+     "highway": "crossing",
+     "name": "Granary Live",
+     "addr:street": "900 South"
+    }
+   },
+   {
+    "type": "Feature",
+    "geometry": {
+     "type": "Point",
+     "coordinates": [
+      -111.904,
+      40.751
+     ]
+    },
+    "properties": {
+     "@id": "node/104",
+     "highway": "crossing",
+     "tactile_paving": "set",
+     "crossing:markings": "set"
+    }
+   }
+  ],
+  "lines": [
+   {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -111.9068,
+        40.7538
+       ]
+      },
+      "properties": {
+       "@id": "node/101",
+       "highway": "crossing"
+      }
+     }
+    ],
+    "cooperativeWork": {
+     "meta": {
+      "version": 2,
+      "type": 3,
+      "choiceVersion": 1
+     },
+     "element": "node/101",
+     "match": {
+      "highway": "crossing"
+     },
+     "questions": [
+      {
+       "id": "tactile-paving",
+       "prompt": "Are there bumpy warning tiles at the curb?",
+       "description": "The raised dots, usually yellow or red, at both ends of the crossing. Pick Yes only if both ends have them.",
+       "expect": {
+        "tactile_paving": null
+       },
+       "options": [
+        {
+         "id": "yes",
+         "label": "Yes, both ends",
+         "setTags": {
+          "tactile_paving": "yes"
+         }
+        },
+        {
+         "id": "partial",
+         "label": "Only one end",
+         "setTags": {
+          "tactile_paving": "partial"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No",
+         "setTags": {
+          "tactile_paving": "no"
+         }
+        }
+       ]
+      },
+      {
+       "id": "crossing-markings",
+       "prompt": "How is the crossing painted?",
+       "description": "Look at the road surface where people cross.",
+       "expect": {
+        "crossing:markings": null
+       },
+       "options": [
+        {
+         "id": "zebra",
+         "label": "Wide stripes across",
+         "setTags": {
+          "crossing:markings": "zebra"
+         }
+        },
+        {
+         "id": "lines",
+         "label": "Two lines along the edges",
+         "setTags": {
+          "crossing:markings": "lines"
+         }
+        },
+        {
+         "id": "ladder",
+         "label": "Stripes and edge lines",
+         "setTags": {
+          "crossing:markings": "ladder"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No paint",
+         "setTags": {
+          "crossing:markings": "no"
+         }
+        }
+       ]
+      }
+     ],
+     "outcomes": [
+      {
+       "id": "no-crossing",
+       "label": "There's no crossing here",
+       "description": "Nobody can cross the street at this spot.",
+       "status": 6
+      }
+     ],
+     "liveMissingQuestions": true
+    }
+   },
+   {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -111.9061,
+        40.7531
+       ]
+      },
+      "properties": {
+       "@id": "node/102",
+       "highway": "crossing",
+       "tactile_paving": "already"
+      }
+     }
+    ],
+    "cooperativeWork": {
+     "meta": {
+      "version": 2,
+      "type": 3,
+      "choiceVersion": 1
+     },
+     "element": "node/102",
+     "match": {
+      "highway": "crossing"
+     },
+     "questions": [
+      {
+       "id": "crossing-markings",
+       "prompt": "How is the crossing painted?",
+       "description": "Look at the road surface where people cross.",
+       "expect": {
+        "crossing:markings": null
+       },
+       "options": [
+        {
+         "id": "zebra",
+         "label": "Wide stripes across",
+         "setTags": {
+          "crossing:markings": "zebra"
+         }
+        },
+        {
+         "id": "lines",
+         "label": "Two lines along the edges",
+         "setTags": {
+          "crossing:markings": "lines"
+         }
+        },
+        {
+         "id": "ladder",
+         "label": "Stripes and edge lines",
+         "setTags": {
+          "crossing:markings": "ladder"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No paint",
+         "setTags": {
+          "crossing:markings": "no"
+         }
+        }
+       ]
+      }
+     ],
+     "outcomes": [
+      {
+       "id": "no-crossing",
+       "label": "There's no crossing here",
+       "description": "Nobody can cross the street at this spot.",
+       "status": 6
+      }
+     ],
+     "liveMissingQuestions": true
+    }
+   },
+   {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -111.905,
+        40.752
+       ]
+      },
+      "properties": {
+       "@id": "way/103",
+       "highway": "crossing",
+       "name": "Granary Live",
+       "addr:street": "900 South"
+      }
+     }
+    ],
+    "cooperativeWork": {
+     "meta": {
+      "version": 2,
+      "type": 3,
+      "choiceVersion": 1
+     },
+     "element": "way/103",
+     "match": {
+      "highway": "crossing"
+     },
+     "questions": [
+      {
+       "id": "tactile-paving",
+       "prompt": "Are there bumpy warning tiles at the curb?",
+       "description": "The raised dots, usually yellow or red, at both ends of the crossing. Pick Yes only if both ends have them.",
+       "expect": {
+        "tactile_paving": null
+       },
+       "options": [
+        {
+         "id": "yes",
+         "label": "Yes, both ends",
+         "setTags": {
+          "tactile_paving": "yes"
+         }
+        },
+        {
+         "id": "partial",
+         "label": "Only one end",
+         "setTags": {
+          "tactile_paving": "partial"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No",
+         "setTags": {
+          "tactile_paving": "no"
+         }
+        }
+       ]
+      },
+      {
+       "id": "crossing-markings",
+       "prompt": "How is the crossing painted?",
+       "description": "Look at the road surface where people cross.",
+       "expect": {
+        "crossing:markings": null
+       },
+       "options": [
+        {
+         "id": "zebra",
+         "label": "Wide stripes across",
+         "setTags": {
+          "crossing:markings": "zebra"
+         }
+        },
+        {
+         "id": "lines",
+         "label": "Two lines along the edges",
+         "setTags": {
+          "crossing:markings": "lines"
+         }
+        },
+        {
+         "id": "ladder",
+         "label": "Stripes and edge lines",
+         "setTags": {
+          "crossing:markings": "ladder"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No paint",
+         "setTags": {
+          "crossing:markings": "no"
+         }
+        }
+       ]
+      }
+     ],
+     "outcomes": [
+      {
+       "id": "no-crossing",
+       "label": "There's no crossing here",
+       "description": "Nobody can cross the street at this spot.",
+       "status": 6
+      }
+     ],
+     "liveMissingQuestions": true
+    }
+   }
+  ],
+  "skipped": [
+   "node/104: no applicable questions"
+  ]
+ },
+ "bus-stops": {
+  "features": [
+   {
+    "type": "Feature",
+    "geometry": {
+     "type": "Point",
+     "coordinates": [
+      -111.9068,
+      40.7538
+     ]
+    },
+    "properties": {
+     "@id": "node/101",
+     "highway": "bus_stop"
+    }
+   },
+   {
+    "type": "Feature",
+    "geometry": {
+     "type": "Point",
+     "coordinates": [
+      -111.9061,
+      40.7531
+     ]
+    },
+    "properties": {
+     "@id": "node/102",
+     "highway": "bus_stop",
+     "shelter": "already"
+    }
+   },
+   {
+    "type": "Feature",
+    "geometry": {
+     "type": "Point",
+     "coordinates": [
+      -111.905,
+      40.752
+     ]
+    },
+    "properties": {
+     "@id": "way/103",
+     "highway": "bus_stop",
+     "name": "Granary Live",
+     "addr:street": "900 South"
+    }
+   },
+   {
+    "type": "Feature",
+    "geometry": {
+     "type": "Point",
+     "coordinates": [
+      -111.904,
+      40.751
+     ]
+    },
+    "properties": {
+     "@id": "node/104",
+     "highway": "bus_stop",
+     "shelter": "set",
+     "bench": "set",
+     "lit": "set",
+     "bin": "set",
+     "departures_board": "set",
+     "passenger_information_display": "set",
+     "wheelchair": "set",
+     "tactile_paving": "set"
+    }
+   }
+  ],
+  "lines": [
+   {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -111.9068,
+        40.7538
+       ]
+      },
+      "properties": {
+       "@id": "node/101",
+       "highway": "bus_stop"
+      }
+     }
+    ],
+    "cooperativeWork": {
+     "meta": {
+      "version": 2,
+      "type": 3,
+      "choiceVersion": 1
+     },
+     "element": "node/101",
+     "match": {
+      "highway": "bus_stop"
+     },
+     "questions": [
+      {
+       "id": "shelter",
+       "prompt": "Is there a shelter with a roof?",
+       "description": "A shelter built for waiting riders. A tree, awning or building overhang doesn't count.",
+       "expect": {
+        "shelter": null
+       },
+       "options": [
+        {
+         "id": "yes",
+         "label": "Yes",
+         "setTags": {
+          "shelter": "yes"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No",
+         "setTags": {
+          "shelter": "no"
+         }
+        }
+       ]
+      },
+      {
+       "id": "bench",
+       "prompt": "Is there a bench or seat?",
+       "description": "Inside or outside the shelter.",
+       "expect": {
+        "bench": null
+       },
+       "options": [
+        {
+         "id": "yes",
+         "label": "Yes",
+         "setTags": {
+          "bench": "yes"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No",
+         "setTags": {
+          "bench": "no"
+         }
+        }
+       ]
+      },
+      {
+       "id": "lit",
+       "prompt": "Is the waiting area lit at night?",
+       "description": "A streetlight or shelter light that shines on where people wait. If it's daytime and you can't tell, pick “I'm not sure”.",
+       "expect": {
+        "lit": null
+       },
+       "options": [
+        {
+         "id": "yes",
+         "label": "Yes",
+         "setTags": {
+          "lit": "yes"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No",
+         "setTags": {
+          "lit": "no"
+         }
+        }
+       ]
+      },
+      {
+       "id": "bin",
+       "prompt": "Is there a trash can at the stop?",
+       "expect": {
+        "bin": null
+       },
+       "options": [
+        {
+         "id": "yes",
+         "label": "Yes",
+         "setTags": {
+          "bin": "yes"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No",
+         "setTags": {
+          "bin": "no"
+         }
+        }
+       ]
+      },
+      {
+       "id": "schedule",
+       "prompt": "Is schedule information posted?",
+       "description": "A printed timetable or route map, or a screen with live arrival times.",
+       "expect": {
+        "departures_board": null,
+        "passenger_information_display": null
+       },
+       "options": [
+        {
+         "id": "printed",
+         "label": "Printed only",
+         "description": "Timetable or route map, no screen.",
+         "setTags": {
+          "departures_board": "timetable",
+          "passenger_information_display": "no"
+         }
+        },
+        {
+         "id": "screen",
+         "label": "Live screen only",
+         "description": "A screen with arrival times, nothing printed.",
+         "setTags": {
+          "departures_board": "realtime",
+          "passenger_information_display": "yes"
+         }
+        },
+        {
+         "id": "both",
+         "label": "Both",
+         "description": "Printed information and a live screen.",
+         "setTags": {
+          "departures_board": "timetable",
+          "passenger_information_display": "yes"
+         }
+        },
+        {
+         "id": "none",
+         "label": "None",
+         "setTags": {
+          "departures_board": "no",
+          "passenger_information_display": "no"
+         }
+        }
+       ]
+      },
+      {
+       "id": "wheelchair",
+       "prompt": "Could someone in a wheelchair wait and board here on their own?",
+       "description": "A paved, level spot connected to the sidewalk, with no curb, grass or gap in the way.",
+       "expect": {
+        "wheelchair": null
+       },
+       "options": [
+        {
+         "id": "yes",
+         "label": "Yes",
+         "setTags": {
+          "wheelchair": "yes"
+         }
+        },
+        {
+         "id": "with-help",
+         "label": "Only with help",
+         "description": "Possible, but some wheelchairs couldn't make it alone.",
+         "setTags": {
+          "wheelchair": "limited"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No",
+         "setTags": {
+          "wheelchair": "no"
+         }
+        }
+       ]
+      },
+      {
+       "id": "tactile-paving",
+       "prompt": "Is there a bumpy warning strip at the curb?",
+       "description": "A panel of raised dots, usually yellow or dark, that helps people with low vision find the edge.",
+       "expect": {
+        "tactile_paving": null
+       },
+       "options": [
+        {
+         "id": "yes",
+         "label": "Yes",
+         "setTags": {
+          "tactile_paving": "yes"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No",
+         "setTags": {
+          "tactile_paving": "no"
+         }
+        }
+       ]
+      }
+     ],
+     "outcomes": [
+      {
+       "id": "no-stop",
+       "label": "There's no bus stop here",
+       "status": 6
+      }
+     ],
+     "liveMissingQuestions": true
+    }
+   },
+   {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -111.9061,
+        40.7531
+       ]
+      },
+      "properties": {
+       "@id": "node/102",
+       "highway": "bus_stop",
+       "shelter": "already"
+      }
+     }
+    ],
+    "cooperativeWork": {
+     "meta": {
+      "version": 2,
+      "type": 3,
+      "choiceVersion": 1
+     },
+     "element": "node/102",
+     "match": {
+      "highway": "bus_stop"
+     },
+     "questions": [
+      {
+       "id": "bench",
+       "prompt": "Is there a bench or seat?",
+       "description": "Inside or outside the shelter.",
+       "expect": {
+        "bench": null
+       },
+       "options": [
+        {
+         "id": "yes",
+         "label": "Yes",
+         "setTags": {
+          "bench": "yes"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No",
+         "setTags": {
+          "bench": "no"
+         }
+        }
+       ]
+      },
+      {
+       "id": "lit",
+       "prompt": "Is the waiting area lit at night?",
+       "description": "A streetlight or shelter light that shines on where people wait. If it's daytime and you can't tell, pick “I'm not sure”.",
+       "expect": {
+        "lit": null
+       },
+       "options": [
+        {
+         "id": "yes",
+         "label": "Yes",
+         "setTags": {
+          "lit": "yes"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No",
+         "setTags": {
+          "lit": "no"
+         }
+        }
+       ]
+      },
+      {
+       "id": "bin",
+       "prompt": "Is there a trash can at the stop?",
+       "expect": {
+        "bin": null
+       },
+       "options": [
+        {
+         "id": "yes",
+         "label": "Yes",
+         "setTags": {
+          "bin": "yes"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No",
+         "setTags": {
+          "bin": "no"
+         }
+        }
+       ]
+      },
+      {
+       "id": "schedule",
+       "prompt": "Is schedule information posted?",
+       "description": "A printed timetable or route map, or a screen with live arrival times.",
+       "expect": {
+        "departures_board": null,
+        "passenger_information_display": null
+       },
+       "options": [
+        {
+         "id": "printed",
+         "label": "Printed only",
+         "description": "Timetable or route map, no screen.",
+         "setTags": {
+          "departures_board": "timetable",
+          "passenger_information_display": "no"
+         }
+        },
+        {
+         "id": "screen",
+         "label": "Live screen only",
+         "description": "A screen with arrival times, nothing printed.",
+         "setTags": {
+          "departures_board": "realtime",
+          "passenger_information_display": "yes"
+         }
+        },
+        {
+         "id": "both",
+         "label": "Both",
+         "description": "Printed information and a live screen.",
+         "setTags": {
+          "departures_board": "timetable",
+          "passenger_information_display": "yes"
+         }
+        },
+        {
+         "id": "none",
+         "label": "None",
+         "setTags": {
+          "departures_board": "no",
+          "passenger_information_display": "no"
+         }
+        }
+       ]
+      },
+      {
+       "id": "wheelchair",
+       "prompt": "Could someone in a wheelchair wait and board here on their own?",
+       "description": "A paved, level spot connected to the sidewalk, with no curb, grass or gap in the way.",
+       "expect": {
+        "wheelchair": null
+       },
+       "options": [
+        {
+         "id": "yes",
+         "label": "Yes",
+         "setTags": {
+          "wheelchair": "yes"
+         }
+        },
+        {
+         "id": "with-help",
+         "label": "Only with help",
+         "description": "Possible, but some wheelchairs couldn't make it alone.",
+         "setTags": {
+          "wheelchair": "limited"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No",
+         "setTags": {
+          "wheelchair": "no"
+         }
+        }
+       ]
+      },
+      {
+       "id": "tactile-paving",
+       "prompt": "Is there a bumpy warning strip at the curb?",
+       "description": "A panel of raised dots, usually yellow or dark, that helps people with low vision find the edge.",
+       "expect": {
+        "tactile_paving": null
+       },
+       "options": [
+        {
+         "id": "yes",
+         "label": "Yes",
+         "setTags": {
+          "tactile_paving": "yes"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No",
+         "setTags": {
+          "tactile_paving": "no"
+         }
+        }
+       ]
+      }
+     ],
+     "outcomes": [
+      {
+       "id": "no-stop",
+       "label": "There's no bus stop here",
+       "status": 6
+      }
+     ],
+     "liveMissingQuestions": true
+    }
+   },
+   {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -111.905,
+        40.752
+       ]
+      },
+      "properties": {
+       "@id": "way/103",
+       "highway": "bus_stop",
+       "name": "Granary Live",
+       "addr:street": "900 South"
+      }
+     }
+    ],
+    "cooperativeWork": {
+     "meta": {
+      "version": 2,
+      "type": 3,
+      "choiceVersion": 1
+     },
+     "element": "way/103",
+     "match": {
+      "highway": "bus_stop"
+     },
+     "questions": [
+      {
+       "id": "shelter",
+       "prompt": "Is there a shelter with a roof?",
+       "description": "A shelter built for waiting riders. A tree, awning or building overhang doesn't count.",
+       "expect": {
+        "shelter": null
+       },
+       "options": [
+        {
+         "id": "yes",
+         "label": "Yes",
+         "setTags": {
+          "shelter": "yes"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No",
+         "setTags": {
+          "shelter": "no"
+         }
+        }
+       ]
+      },
+      {
+       "id": "bench",
+       "prompt": "Is there a bench or seat?",
+       "description": "Inside or outside the shelter.",
+       "expect": {
+        "bench": null
+       },
+       "options": [
+        {
+         "id": "yes",
+         "label": "Yes",
+         "setTags": {
+          "bench": "yes"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No",
+         "setTags": {
+          "bench": "no"
+         }
+        }
+       ]
+      },
+      {
+       "id": "lit",
+       "prompt": "Is the waiting area lit at night?",
+       "description": "A streetlight or shelter light that shines on where people wait. If it's daytime and you can't tell, pick “I'm not sure”.",
+       "expect": {
+        "lit": null
+       },
+       "options": [
+        {
+         "id": "yes",
+         "label": "Yes",
+         "setTags": {
+          "lit": "yes"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No",
+         "setTags": {
+          "lit": "no"
+         }
+        }
+       ]
+      },
+      {
+       "id": "bin",
+       "prompt": "Is there a trash can at the stop?",
+       "expect": {
+        "bin": null
+       },
+       "options": [
+        {
+         "id": "yes",
+         "label": "Yes",
+         "setTags": {
+          "bin": "yes"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No",
+         "setTags": {
+          "bin": "no"
+         }
+        }
+       ]
+      },
+      {
+       "id": "schedule",
+       "prompt": "Is schedule information posted?",
+       "description": "A printed timetable or route map, or a screen with live arrival times.",
+       "expect": {
+        "departures_board": null,
+        "passenger_information_display": null
+       },
+       "options": [
+        {
+         "id": "printed",
+         "label": "Printed only",
+         "description": "Timetable or route map, no screen.",
+         "setTags": {
+          "departures_board": "timetable",
+          "passenger_information_display": "no"
+         }
+        },
+        {
+         "id": "screen",
+         "label": "Live screen only",
+         "description": "A screen with arrival times, nothing printed.",
+         "setTags": {
+          "departures_board": "realtime",
+          "passenger_information_display": "yes"
+         }
+        },
+        {
+         "id": "both",
+         "label": "Both",
+         "description": "Printed information and a live screen.",
+         "setTags": {
+          "departures_board": "timetable",
+          "passenger_information_display": "yes"
+         }
+        },
+        {
+         "id": "none",
+         "label": "None",
+         "setTags": {
+          "departures_board": "no",
+          "passenger_information_display": "no"
+         }
+        }
+       ]
+      },
+      {
+       "id": "wheelchair",
+       "prompt": "Could someone in a wheelchair wait and board here on their own?",
+       "description": "A paved, level spot connected to the sidewalk, with no curb, grass or gap in the way.",
+       "expect": {
+        "wheelchair": null
+       },
+       "options": [
+        {
+         "id": "yes",
+         "label": "Yes",
+         "setTags": {
+          "wheelchair": "yes"
+         }
+        },
+        {
+         "id": "with-help",
+         "label": "Only with help",
+         "description": "Possible, but some wheelchairs couldn't make it alone.",
+         "setTags": {
+          "wheelchair": "limited"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No",
+         "setTags": {
+          "wheelchair": "no"
+         }
+        }
+       ]
+      },
+      {
+       "id": "tactile-paving",
+       "prompt": "Is there a bumpy warning strip at the curb?",
+       "description": "A panel of raised dots, usually yellow or dark, that helps people with low vision find the edge.",
+       "expect": {
+        "tactile_paving": null
+       },
+       "options": [
+        {
+         "id": "yes",
+         "label": "Yes",
+         "setTags": {
+          "tactile_paving": "yes"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No",
+         "setTags": {
+          "tactile_paving": "no"
+         }
+        }
+       ]
+      }
+     ],
+     "outcomes": [
+      {
+       "id": "no-stop",
+       "label": "There's no bus stop here",
+       "status": 6
+      }
+     ],
+     "liveMissingQuestions": true
+    }
+   }
+  ],
+  "skipped": [
+   "node/104: no applicable questions"
+  ]
+ },
+ "benches": {
+  "features": [
+   {
+    "type": "Feature",
+    "geometry": {
+     "type": "Point",
+     "coordinates": [
+      -111.9068,
+      40.7538
+     ]
+    },
+    "properties": {
+     "@id": "node/101",
+     "amenity": "bench"
+    }
+   },
+   {
+    "type": "Feature",
+    "geometry": {
+     "type": "Point",
+     "coordinates": [
+      -111.9061,
+      40.7531
+     ]
+    },
+    "properties": {
+     "@id": "node/102",
+     "amenity": "bench",
+     "backrest": "already"
+    }
+   },
+   {
+    "type": "Feature",
+    "geometry": {
+     "type": "Point",
+     "coordinates": [
+      -111.905,
+      40.752
+     ]
+    },
+    "properties": {
+     "@id": "way/103",
+     "amenity": "bench",
+     "name": "Granary Live",
+     "addr:street": "900 South"
+    }
+   },
+   {
+    "type": "Feature",
+    "geometry": {
+     "type": "Point",
+     "coordinates": [
+      -111.904,
+      40.751
+     ]
+    },
+    "properties": {
+     "@id": "node/104",
+     "amenity": "bench",
+     "backrest": "set",
+     "armrest": "set",
+     "material": "set"
+    }
+   }
+  ],
+  "lines": [
+   {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -111.9068,
+        40.7538
+       ]
+      },
+      "properties": {
+       "@id": "node/101",
+       "amenity": "bench"
+      }
+     }
+    ],
+    "cooperativeWork": {
+     "meta": {
+      "version": 2,
+      "type": 3,
+      "choiceVersion": 1
+     },
+     "element": "node/101",
+     "match": {
+      "amenity": "bench"
+     },
+     "questions": [
+      {
+       "id": "backrest",
+       "prompt": "Does the bench have a backrest?",
+       "expect": {
+        "backrest": null
+       },
+       "options": [
+        {
+         "id": "yes",
+         "label": "Yes",
+         "setTags": {
+          "backrest": "yes"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No",
+         "setTags": {
+          "backrest": "no"
+         }
+        }
+       ]
+      },
+      {
+       "id": "armrest",
+       "prompt": "Does the bench have armrests?",
+       "expect": {
+        "armrest": null
+       },
+       "options": [
+        {
+         "id": "yes",
+         "label": "Yes",
+         "setTags": {
+          "armrest": "yes"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No",
+         "setTags": {
+          "armrest": "no"
+         }
+        }
+       ]
+      },
+      {
+       "id": "material",
+       "prompt": "What is the seat mainly made of?",
+       "expect": {
+        "material": null
+       },
+       "options": [
+        {
+         "id": "wood",
+         "label": "Wood",
+         "setTags": {
+          "material": "wood"
+         }
+        },
+        {
+         "id": "metal",
+         "label": "Metal",
+         "setTags": {
+          "material": "metal"
+         }
+        },
+        {
+         "id": "concrete",
+         "label": "Concrete",
+         "setTags": {
+          "material": "concrete"
+         }
+        },
+        {
+         "id": "stone",
+         "label": "Stone",
+         "setTags": {
+          "material": "stone"
+         }
+        },
+        {
+         "id": "plastic",
+         "label": "Plastic",
+         "setTags": {
+          "material": "plastic"
+         }
+        }
+       ]
+      }
+     ],
+     "outcomes": [
+      {
+       "id": "no-bench",
+       "label": "There's no bench here",
+       "status": 6
+      }
+     ],
+     "liveMissingQuestions": true
+    }
+   },
+   {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -111.9061,
+        40.7531
+       ]
+      },
+      "properties": {
+       "@id": "node/102",
+       "amenity": "bench",
+       "backrest": "already"
+      }
+     }
+    ],
+    "cooperativeWork": {
+     "meta": {
+      "version": 2,
+      "type": 3,
+      "choiceVersion": 1
+     },
+     "element": "node/102",
+     "match": {
+      "amenity": "bench"
+     },
+     "questions": [
+      {
+       "id": "armrest",
+       "prompt": "Does the bench have armrests?",
+       "expect": {
+        "armrest": null
+       },
+       "options": [
+        {
+         "id": "yes",
+         "label": "Yes",
+         "setTags": {
+          "armrest": "yes"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No",
+         "setTags": {
+          "armrest": "no"
+         }
+        }
+       ]
+      },
+      {
+       "id": "material",
+       "prompt": "What is the seat mainly made of?",
+       "expect": {
+        "material": null
+       },
+       "options": [
+        {
+         "id": "wood",
+         "label": "Wood",
+         "setTags": {
+          "material": "wood"
+         }
+        },
+        {
+         "id": "metal",
+         "label": "Metal",
+         "setTags": {
+          "material": "metal"
+         }
+        },
+        {
+         "id": "concrete",
+         "label": "Concrete",
+         "setTags": {
+          "material": "concrete"
+         }
+        },
+        {
+         "id": "stone",
+         "label": "Stone",
+         "setTags": {
+          "material": "stone"
+         }
+        },
+        {
+         "id": "plastic",
+         "label": "Plastic",
+         "setTags": {
+          "material": "plastic"
+         }
+        }
+       ]
+      }
+     ],
+     "outcomes": [
+      {
+       "id": "no-bench",
+       "label": "There's no bench here",
+       "status": 6
+      }
+     ],
+     "liveMissingQuestions": true
+    }
+   },
+   {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -111.905,
+        40.752
+       ]
+      },
+      "properties": {
+       "@id": "way/103",
+       "amenity": "bench",
+       "name": "Granary Live",
+       "addr:street": "900 South"
+      }
+     }
+    ],
+    "cooperativeWork": {
+     "meta": {
+      "version": 2,
+      "type": 3,
+      "choiceVersion": 1
+     },
+     "element": "way/103",
+     "match": {
+      "amenity": "bench"
+     },
+     "questions": [
+      {
+       "id": "backrest",
+       "prompt": "Does the bench have a backrest?",
+       "expect": {
+        "backrest": null
+       },
+       "options": [
+        {
+         "id": "yes",
+         "label": "Yes",
+         "setTags": {
+          "backrest": "yes"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No",
+         "setTags": {
+          "backrest": "no"
+         }
+        }
+       ]
+      },
+      {
+       "id": "armrest",
+       "prompt": "Does the bench have armrests?",
+       "expect": {
+        "armrest": null
+       },
+       "options": [
+        {
+         "id": "yes",
+         "label": "Yes",
+         "setTags": {
+          "armrest": "yes"
+         }
+        },
+        {
+         "id": "no",
+         "label": "No",
+         "setTags": {
+          "armrest": "no"
+         }
+        }
+       ]
+      },
+      {
+       "id": "material",
+       "prompt": "What is the seat mainly made of?",
+       "expect": {
+        "material": null
+       },
+       "options": [
+        {
+         "id": "wood",
+         "label": "Wood",
+         "setTags": {
+          "material": "wood"
+         }
+        },
+        {
+         "id": "metal",
+         "label": "Metal",
+         "setTags": {
+          "material": "metal"
+         }
+        },
+        {
+         "id": "concrete",
+         "label": "Concrete",
+         "setTags": {
+          "material": "concrete"
+         }
+        },
+        {
+         "id": "stone",
+         "label": "Stone",
+         "setTags": {
+          "material": "stone"
+         }
+        },
+        {
+         "id": "plastic",
+         "label": "Plastic",
+         "setTags": {
+          "material": "plastic"
+         }
+        }
+       ]
+      }
+     ],
+     "outcomes": [
+      {
+       "id": "no-bench",
+       "label": "There's no bench here",
+       "status": 6
+      }
+     ],
+     "liveMissingQuestions": true
+    }
+   }
+  ],
+  "skipped": [
+   "node/104: no applicable questions"
+  ]
+ },
+ "trees": {
+  "features": [
+   {
+    "type": "Feature",
+    "geometry": {
+     "type": "Point",
+     "coordinates": [
+      -111.9068,
+      40.7538
+     ]
+    },
+    "properties": {
+     "@id": "node/101",
+     "natural": "tree"
+    }
+   },
+   {
+    "type": "Feature",
+    "geometry": {
+     "type": "Point",
+     "coordinates": [
+      -111.9061,
+      40.7531
+     ]
+    },
+    "properties": {
+     "@id": "node/102",
+     "natural": "tree",
+     "leaf_type": "already"
+    }
+   },
+   {
+    "type": "Feature",
+    "geometry": {
+     "type": "Point",
+     "coordinates": [
+      -111.905,
+      40.752
+     ]
+    },
+    "properties": {
+     "@id": "way/103",
+     "natural": "tree",
+     "name": "Granary Live",
+     "addr:street": "900 South"
+    }
+   },
+   {
+    "type": "Feature",
+    "geometry": {
+     "type": "Point",
+     "coordinates": [
+      -111.904,
+      40.751
+     ]
+    },
+    "properties": {
+     "@id": "node/104",
+     "natural": "tree",
+     "leaf_type": "set"
+    }
+   }
+  ],
+  "lines": [
+   {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -111.9068,
+        40.7538
+       ]
+      },
+      "properties": {
+       "@id": "node/101",
+       "natural": "tree"
+      }
+     }
+    ],
+    "cooperativeWork": {
+     "meta": {
+      "version": 2,
+      "type": 3,
+      "choiceVersion": 1
+     },
+     "element": "node/101",
+     "match": {
+      "natural": "tree"
+     },
+     "questions": [
+      {
+       "id": "leaf-type",
+       "prompt": "Does this tree have leaves or needles?",
+       "description": "The tree at the big pin. Palms count as leaves.",
+       "expect": {
+        "leaf_type": null
+       },
+       "options": [
+        {
+         "id": "broadleaved",
+         "label": "Leaves",
+         "setTags": {
+          "leaf_type": "broadleaved"
+         }
+        },
+        {
+         "id": "needleleaved",
+         "label": "Needles",
+         "setTags": {
+          "leaf_type": "needleleaved"
+         }
+        }
+       ]
+      }
+     ],
+     "outcomes": [
+      {
+       "id": "no-tree",
+       "label": "There's no tree here",
+       "description": "The tree is gone or was never there.",
+       "status": 6
+      }
+     ],
+     "liveMissingQuestions": true
+    }
+   },
+   {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -111.905,
+        40.752
+       ]
+      },
+      "properties": {
+       "@id": "way/103",
+       "natural": "tree",
+       "name": "Granary Live",
+       "addr:street": "900 South"
+      }
+     }
+    ],
+    "cooperativeWork": {
+     "meta": {
+      "version": 2,
+      "type": 3,
+      "choiceVersion": 1
+     },
+     "element": "way/103",
+     "match": {
+      "natural": "tree"
+     },
+     "questions": [
+      {
+       "id": "leaf-type",
+       "prompt": "Does this tree have leaves or needles?",
+       "description": "The tree at the big pin. Palms count as leaves.",
+       "expect": {
+        "leaf_type": null
+       },
+       "options": [
+        {
+         "id": "broadleaved",
+         "label": "Leaves",
+         "setTags": {
+          "leaf_type": "broadleaved"
+         }
+        },
+        {
+         "id": "needleleaved",
+         "label": "Needles",
+         "setTags": {
+          "leaf_type": "needleleaved"
+         }
+        }
+       ]
+      }
+     ],
+     "outcomes": [
+      {
+       "id": "no-tree",
+       "label": "There's no tree here",
+       "description": "The tree is gone or was never there.",
+       "status": 6
+      }
+     ],
+     "liveMissingQuestions": true
+    }
+   }
+  ],
+  "skipped": [
+   "node/102: no applicable questions",
+   "node/104: no applicable questions"
+  ]
+ }
+}
