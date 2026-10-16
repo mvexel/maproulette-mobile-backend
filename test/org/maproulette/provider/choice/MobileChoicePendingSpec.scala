@@ -430,6 +430,49 @@ class MobileChoicePendingSpec(implicit val application: Application) extends Fra
           .as(SqlParser.scalar[Boolean].single)
       } mustBe true
       status(landed) mustBe Task.STATUS_CREATED
+
+      // Answers that went on the map before this change kept their old hold; evolution 148
+      // extends it, and running it again changes nothing.
+      val (earlier, _) = benchTask()
+      submit(guest(), earlier, """{"answers":{"backrest":"yes"}}""").status mustBe 200
+      db.withConnection { implicit c =>
+        SQL"""UPDATE choice_pending SET state = 'on_map', hold_until = NOW() - INTERVAL '1 day'
+              WHERE task_id = ${earlier.id}""".executeUpdate()
+      }
+      new ChoicePendingRepository(db).held(Seq(earlier.id)) mustBe empty
+      val ups = new String(
+        java.nio.file.Files.readAllBytes(
+          java.nio.file.Paths.get("conf/evolutions/default/148.sql")
+        ),
+        java.nio.charset.StandardCharsets.UTF_8
+      ).split("# --- !Ups")(1).split("# --- !Downs")(0).replace(";;", ";")
+      // Plain JDBC, as Play runs evolutions: Anorm would read the JSON braces as placeholders.
+      def runUps(): Unit = db.withConnection { c =>
+        c.createStatement().execute(ups)
+        ()
+      }
+      // A place found gone before #49 still has a waiting answer and no stale record.
+      val (gone, _) = benchTask()
+      submit(guest(), gone, """{"answers":{"backrest":"yes"}}""").status mustBe 200
+      db.withConnection { implicit c =>
+        SQL"""INSERT INTO choice_review_places (task_id, challenge_id, state, marked_by, marked_at)
+              VALUES (${gone.id}, ${challenge.id}, 'gone', NULL, NOW())""".executeUpdate()
+      }
+      def goneState = db.withConnection { implicit c =>
+        SQL"""SELECT p.state || ' ' || COALESCE(p.result->>'reason', '-') || ' ' ||
+                COALESCE((SELECT reason FROM choice_stale WHERE task_id = p.task_id), '-')
+              FROM choice_pending p WHERE p.task_id = ${gone.id}"""
+          .as(SqlParser.scalar[String].single)
+      }
+      goneState mustBe "pending - -"
+      runUps()
+      new ChoicePendingRepository(db).held(Seq(earlier.id)) mustBe Set(earlier.id)
+      flags("&excludePending=true").keySet must not contain earlier.id
+      goneState mustBe "skipped_stale element_gone element_gone"
+      // Running it again changes nothing.
+      runUps()
+      goneState mustBe "skipped_stale element_gone element_gone"
+      new ChoicePendingRepository(db).held(Seq(earlier.id)) mustBe Set(earlier.id)
     }
 
     "say whether a held task holds an answer or a status-6 report (T-002)" taggedAs ChoiceTag in {
