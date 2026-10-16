@@ -67,6 +67,7 @@ class FrameworkMasterSuite extends Suites with BeforeAndAfterAll with TestDataba
     new org.maproulette.provider.choice.MobileChoicePendingSpec,
     new org.maproulette.provider.choice.LivePageSpec,
     new org.maproulette.provider.choice.ReviewRepositorySpec,
+    new org.maproulette.provider.choice.ChoiceQueueServiceSpec,
     new org.maproulette.auth.mobile.MobileDraftLookupSpec,
     new org.maproulette.auth.mobile.MobileCampaignSpec
   )

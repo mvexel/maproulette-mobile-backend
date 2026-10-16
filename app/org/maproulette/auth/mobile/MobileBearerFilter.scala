@@ -370,6 +370,8 @@ object MobileFieldRoutes {
           "/api/v2/mobile-admin/projects"
         ).contains(request.path) || MobileGuestRoutes.own(request.method, request.path) ||
           MobileLiveRoutes.rotate(request.path) ||
+          // The confirm queue reads OSM and writes only our tables (H1b).
+          request.path.matches("/api/v2/mobile-admin/challenges/[0-9]+/queue") ||
           MobileGuestRoutes.claimToken(request.method, request.path) ||
           // D13: the bearer filter below lets only the claim page's grant through.
           (bearer && MobileClaimRoutes.permits(request.method, request.path))

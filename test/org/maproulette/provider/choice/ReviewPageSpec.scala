@@ -130,7 +130,14 @@ class ReviewPageSpec extends PlaySpec {
         "changesetComment" -> "Add bench details #StreetTally #Woodbine"
       )
       (all \ "counts")
-        .as[JsObject] mustBe Json.obj("toReview" -> 2, "added" -> 1, "needsVisit" -> 1)
+        .as[JsObject] mustBe Json.obj(
+        "toReview"   -> 2,
+        "added"      -> 1,
+        "needsVisit" -> 1,
+        "stale"      -> 0,
+        "gone"       -> 0,
+        "disagree"   -> 0
+      )
       ids(all) mustBe Seq(1, 2)
       (all \ "next").as[Long] mustBe 2
       ((all \ "places")(1) \ "skipped").as[Boolean] mustBe true
@@ -143,6 +150,34 @@ class ReviewPageSpec extends PlaySpec {
       ids(ReviewPage.json("B", None, places, Set.empty, "agree", None, 100)) mustBe Seq(1)
       ids(ReviewPage.json("B", None, places, Set.empty, "visit", None, 100)) mustBe Seq(3)
       ids(ReviewPage.json("B", None, places, Set.empty, "done", None, 100)) mustBe Seq(4)
+    }
+
+    "show stale, gone and split places in their own counts (H1b)" in {
+      val split = place(
+        5,
+        Seq(
+          Answer(answers("backrest" -> "yes"), day1),
+          Answer(answers("backrest" -> "yes"), day1),
+          Answer(answers("backrest" -> "no"), day2)
+        )
+      )
+      val more = places ++ Seq(
+        split,
+        place(6, Seq(Answer(answers("backrest" -> "no"), day1)), Stale),
+        place(7, Nil, Gone)
+      )
+      val json = ReviewPage.json("B", None, more, Set.empty, "all", None, 100)
+      (json \ "counts").as[JsObject] mustBe Json.obj(
+        "toReview"   -> 2,
+        "added"      -> 1,
+        "needsVisit" -> 1,
+        "stale"      -> 1,
+        "gone"       -> 1,
+        "disagree"   -> 1
+      )
+      ((json \ "places")(4) \ "state").as[String] mustBe Disagree
+      split.disagreeing mustBe Set("backrest")
+      ids(ReviewPage.json("B", None, more, Set.empty, "agree", None, 100)) mustBe Seq(1)
     }
 
     "take only filter, after and limit, each once and in range" in {

@@ -241,7 +241,8 @@ are open while field writes are off, and CORS answers the claim origin and the a
 without credentials.
 
 Guest answers of a campaign with a live page stay `pending` after their guest expires or is
-purged (then without a guest), so they can be reviewed.
+purged (then without a guest), so they can be reviewed, until a mapper has checked the place: once
+it is `done`, `gone` or `needs_visit`, its answers expire and are purged as usual (D23).
 
 ### `GET /api/v2/review/:token[?filter=all|agree|visit|done&after=<placeId>&limit=1..200]`
 
@@ -253,7 +254,7 @@ is `400 invalid_request`.
 {
   "campaign": {"name": "Woodbine entrance doors", "hashtags": ["#StreetTally"],
                "changesetComment": "Add entrance details #StreetTally"},
-  "counts": {"toReview": 47, "added": 12, "needsVisit": 3},
+  "counts": {"toReview": 47, "added": 12, "needsVisit": 3, "stale": 1, "gone": 0, "disagree": 2},
   "places": [
     {"id": 1234, "osm": {"type": "node", "id": 14178183367}, "lon": -111.906812, "lat": 40.7538166,
      "name": null, "ref": null, "state": "open", "skipped": false,
@@ -269,8 +270,11 @@ is `400 invalid_request`.
 }
 ```
 
-- `state`: `open`, `needs_visit` or `done` (OSM carries the suggested tags; set by H1c).
-  `counts.toReview`, `added` and `needsVisit` count the campaign's places in each state.
+- `state`: `open`, `needs_visit`, `done` (OSM carries the suggested tags), `stale` (OSM changed
+  since the survey), `gone` (the element was deleted) or `disagree` (an open place where guests
+  gave different answers to one question; derived on each read, never stored). The confirm queue's
+  stale check sets `done`, `stale` and `gone`. `counts` has one key per state; `toReview` counts
+  `open`, `added` counts `done`.
 - `filter`: `agree` is open places where two or more guests gave the same answer; `visit` is
   `needs_visit`; `done` is `done`.
 - `suggestions`: one per question and answer, merged across guests, in question order. `tags` are
@@ -287,13 +291,55 @@ Hides or unhides the place for this mapper only. Returns the updated place.
 ### `PUT` / `DELETE /api/v2/review/:token/places/:id/needs-visit`
 
 Sets or clears the shared "Needs a visit" mark, audited as `review.needs_visit` or
-`review.needs_visit_cleared` with the mapper's user id. Returns the updated place. `409 done` when
+`review.needs_visit_cleared` with the mapper's user id. Returns the updated place. Setting it ends
+the place's guest answer holds, so the campaign task shows in the app again. `409 done` when
 setting it on a place OSM already carries.
 
 Marks need a bearer from an app grant with `tasks:read` (the review page's client is
 `street-tally-review`, public, PKCE, scope `tasks:read`); without one they return
 `401 sign_in_required`. They write only the review tables, never a task or OSM. `404 not_found` for
 an id that isn't a place of the campaign. Guest and admin grants get `403 insufficient_scope`.
+
+## Confirm queue
+
+H1b. Turns a campaign's clear guest tag answers into a tag-fix challenge that mappers work on
+maproulette.org. Both routes need a `mobile:admin` grant of a super-user, answer
+`Cache-Control: no-store`, and are open while field writes are off. Nothing here writes to OSM.
+
+### `POST /api/v2/mobile-admin/challenges/:id/queue`
+
+Runs the generator for choice campaign `:id`, audited as `queue.generate` with the counts. For each
+open or stale place it takes the questions every guest answered alike (questions answered
+differently count as `disagree` and stay on the review page; reports and "I'm not sure" are never
+queued), then reads the element from OSM once, without a token:
+
+| OSM now | Result |
+|---|---|
+| Gone | counted as `gone`, place `gone` |
+| No longer matches, or a question's tags changed since the survey | counted as `stale`, place `stale` |
+| Already carries the answer | counted as `done`; place `done` when all its answers are |
+| Unchanged | one task per place and question, counted as `queued` |
+
+The first run creates the queue challenge in the campaign's project: `<campaign>: confirm survey
+answers`, disabled, cooperative tag fix (type 1), the campaign's changeset comment, instruction
+`{{evidence}}`. Each task's `evidence` property reads `2 people surveyed this on 14 Oct and answered
+"How does this door open?" with "Sliding". Add it if it looks right; skip if unsure.` Reruns add
+only new place and question pairs; ones already queued count as `alreadyQueued`. A queued place's
+campaign task stays out of discovery until someone marks it "Needs a visit".
+
+```json
+{"queueChallengeId": 77, "queued": 12, "alreadyQueued": 3, "done": 2, "stale": 1, "gone": 1, "disagree": 0}
+```
+
+`queueChallengeId` is 0 while the campaign has no queue. `404 not_found` for an id that isn't a
+choice campaign; `502 osm_unavailable` when OSM can't be read; then nothing is changed or queued.
+
+### `GET /api/v2/mobile-admin/challenges/:id/queue/export`
+
+The queue as line-by-line GeoJSON (`application/geo+json-seq`, attachment
+`confirm-queue-<id>.geojson`): one FeatureCollection per task with its point (`@id`, `evidence`)
+and `cooperativeWork`, as maproulette.org's "Upload GeoJSON" takes it with "line-by-line" on.
+`404 no_queue` before the first run.
 
 ## Field write policy
 

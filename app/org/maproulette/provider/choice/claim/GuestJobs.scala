@@ -212,12 +212,15 @@ object GuestJobs {
   val PurgeAfter: Duration = Duration.ofDays(30)
 
   /**
-    * SQL on a `choice_pending p` row: its campaign has a live page, so its mappers review the answer
-    * (H1a). It stays pending after its guest expires or is purged, without a guest, until the
-    * campaign's tag-fix challenge takes it (H1b).
+    * SQL on a `choice_pending p` row: its campaign has a live page, so mappers review the answer
+    * (H1a), and no mapper has checked its place yet: it isn't on the map, gone or marked "Needs a
+    * visit" (H1b, D23). Until then it stays pending after its guest expires or is purged, without
+    * a guest; after that it expires and is purged like any other answer.
     */
   val KeptForReview: String =
-    "EXISTS (SELECT 1 FROM mobile_live_pages l WHERE l.challenge_id = p.challenge_id)"
+    """(EXISTS (SELECT 1 FROM mobile_live_pages l WHERE l.challenge_id = p.challenge_id)
+      AND NOT EXISTS (SELECT 1 FROM choice_review_places rp WHERE rp.task_id = p.task_id
+        AND rp.state IN ('done', 'gone', 'needs_visit')))"""
 
   val BatchSize = 500
 
