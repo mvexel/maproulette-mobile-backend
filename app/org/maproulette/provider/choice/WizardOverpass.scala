@@ -10,17 +10,20 @@ import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.Try
 
-/** Why a wizard query has no answer: `rate_limited` (429) or `osm_unavailable` (503). */
+/** Why a wizard query has no answer: `rate_limited` (429), `osm_timeout` (504) or `osm_unavailable` (502). */
 case class WizardQueryFailure(code: String)
 
 /**
   * Overpass for the campaign wizard (organizers-feasibility-scala.md §c): at most two queries in
   * flight server-wide, 20 per minute per user, a 10 s timeout, and answers cached for an hour by
-  * query text. The create step skips the cache, so it reads OSM as it is now.
+  * query text. The create step skips the cache, so it reads OSM as it is now. Endpoints come from
+  * `mobileWizard.overpassUrls` (`OVERPASS_URLS`, comma-separated) and are tried in order, the next
+  * one only when connecting fails; a timeout is the answer (504), never retried elsewhere.
   */
 @Singleton
 class WizardOverpass @Inject() (ws: WSClient, config: Config)(implicit ec: ExecutionContext) {
-  protected def url: String                    = config.getOSMQLProvider.providerURL
+  protected def urls: Seq[String] =
+    WizardOverpass.parseUrls(config.config.getOptional[String]("mobileWizard.overpassUrls"))
   protected def requestTimeout: FiniteDuration = (OverpassQuery.Timeout + 2).seconds
   private val userAgent =
     "Street Tally campaign wizard (+https://github.com/mvexel/maproulette-mobile-backend)"
@@ -47,22 +50,29 @@ class WizardOverpass @Inject() (ws: WSClient, config: Config)(implicit ec: Execu
   }
 
   /**
-    * One line saying whether Overpass answers from this server, for the deploy log (Rex reads it
-    * after each deploy; no container shell needed). Its status endpoint, 5 s, no retry.
+    * One line per endpoint saying whether Overpass answers from this server, with the addresses its
+    * host resolves to, for the deploy log (Rex reads it after each deploy; no container shell
+    * needed). Each endpoint's status page, 5 s, no retry.
     */
-  def probe(): Future[String] = {
-    val status  = url.replaceFirst("/interpreter$", "/status")
-    val started = System.nanoTime()
-    def ms      = (System.nanoTime() - started) / 1000000
-    ws.url(status)
-      .withRequestTimeout(5.seconds)
-      .withHttpHeaders("User-Agent" -> userAgent)
-      .get()
-      .map(response => s"Overpass answered: HTTP ${response.status} in $ms ms ($status)")
-      .recover {
-        case e: Exception =>
-          s"Overpass not reachable: ${e.getClass.getSimpleName} after $ms ms ($status)"
-      }
+  def probe(): Future[Seq[String]] = Future.sequence(urls.map(probe))
+
+  private def probe(url: String): Future[String] = {
+    val status = url.replaceFirst("/interpreter$", "/status")
+    Future(WizardOverpass.resolved(status)).flatMap { addresses =>
+      val started = System.nanoTime()
+      def ms      = (System.nanoTime() - started) / 1000000
+      ws.url(status)
+        .withRequestTimeout(5.seconds)
+        .withHttpHeaders("User-Agent" -> userAgent)
+        .get()
+        .map(response =>
+          s"Overpass answered: HTTP ${response.status} in $ms ms ($status, $addresses)"
+        )
+        .recover {
+          case e: Exception =>
+            s"Overpass not reachable: ${e.getClass.getSimpleName} after $ms ms ($status, $addresses)"
+        }
+    }
   }
 
   /** The query's `elements`, from the cache when `cached` and present. */
@@ -76,10 +86,7 @@ class WizardOverpass @Inject() (ws: WSClient, config: Config)(implicit ec: Execu
       case None if !allowed(userId) || !inFlight.tryAcquire() =>
         Future.successful(Left(WizardQueryFailure("rate_limited")))
       case None =>
-        ws.url(url)
-          .withRequestTimeout(requestTimeout)
-          .withHttpHeaders("User-Agent" -> userAgent)
-          .post(Map("data" -> Seq(query)))
+        post(urls, query)
           .map { response =>
             val parsed =
               if (response.status != 200) None
@@ -100,13 +107,58 @@ class WizardOverpass @Inject() (ws: WSClient, config: Config)(implicit ec: Execu
           }
           .andThen { case _ => inFlight.release() }
     }
+
+  /** Posts to the first endpoint that accepts the connection. */
+  private def post(endpoints: Seq[String], query: String): Future[play.api.libs.ws.WSResponse] =
+    ws.url(endpoints.head)
+      .withRequestTimeout(requestTimeout)
+      .withHttpHeaders("User-Agent" -> userAgent)
+      .post(Map("data" -> Seq(query)))
+      .recoverWith {
+        case e if endpoints.size > 1 && WizardOverpass.connectFailure(e) =>
+          post(endpoints.tail, query)
+      }
+}
+
+object WizardOverpass {
+  val DefaultUrls: Seq[String] = Seq(
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter"
+  )
+
+  def parseUrls(value: Option[String]): Seq[String] =
+    value.toSeq.flatMap(_.split(",")).map(_.trim).filter(_.nonEmpty) match {
+      case Nil  => DefaultUrls
+      case some => some
+    }
+
+  /** Connecting failed (refused, unreachable, unknown host): nothing was asked, so try the next. */
+  def connectFailure(e: Throwable): Boolean = e match {
+    case _: java.net.ConnectException                    => true
+    case _: java.net.UnknownHostException                => true
+    case _: java.nio.channels.UnresolvedAddressException => true
+    case _                                               => false
+  }
+
+  /** `resolves to 1.2.3.4 (IPv4), 2a01:4f8::1 (IPv6)`, or why not. */
+  def resolved(url: String): String =
+    Try(new java.net.URI(url).getHost)
+      .flatMap(host => Try(java.net.InetAddress.getAllByName(host).toSeq))
+      .map(_.map {
+        case a: java.net.Inet6Address => s"${a.getHostAddress} (IPv6)"
+        case a                        => s"${a.getHostAddress} (IPv4)"
+      })
+      .fold(
+        e => s"unresolved: ${e.getClass.getSimpleName}",
+        a => s"resolves to ${a.mkString(", ")}"
+      )
 }
 
 /** Logs [[WizardOverpass.probe]] once at startup. */
 @Singleton
 class WizardOverpassProbe @Inject() (overpass: WizardOverpass)(implicit ec: ExecutionContext) {
   private val logger = play.api.Logger(getClass)
-  overpass.probe().foreach(line => logger.info(line))
+  overpass.probe().foreach(_.foreach(line => logger.info(line)))
 }
 
 class WizardOverpassModule
