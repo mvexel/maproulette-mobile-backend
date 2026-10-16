@@ -127,12 +127,14 @@ class MobileGuestSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll 
       )                                         = ???
       def withdraw(guestId: UUID, taskId: Long) = ???
       def counts(guestId: UUID) =
-        Map("pending" -> 2, "published" -> 1, "expired" -> 4, "on_map" -> 1)
+        Map("pending" -> 2, "published" -> 1, "expired" -> 4, "on_map" -> 1, "skipped_stale" -> 3)
       def byChallenge(guestId: UUID) =
         Map(
-          7L -> Map("pending"   -> 2, "on_map" -> 1),
+          7L -> Map("pending"   -> 2, "on_map" -> 1, "skipped_stale" -> 2),
           8L -> Map("published" -> 1),
-          9L -> Map("expired"   -> 4)
+          9L -> Map("expired"   -> 4),
+          // H1d: answers skipped as stale or gone are neither pending nor on the map.
+          10L -> Map("skipped_stale" -> 1)
         )
       def list(guestId: UUID, limit: Int, before: Option[Long]) = ???
       def held(taskIds: Seq[Long])                              = ???
