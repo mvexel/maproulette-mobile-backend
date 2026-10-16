@@ -62,19 +62,25 @@ object MobileAdminRoutes {
   */
 object MobileOrganizeRoutes {
   private val challenge = "/api/v2/mobile-admin/challenges/[0-9]+"
+  private val wizard    = "/api/v2/mobile-admin/wizard"
 
   def adminApi(method: String, path: String): Boolean = method match {
     case "GET" =>
       Set(
         "/api/v2/mobile-admin/campaigns",
         "/api/v2/mobile-admin/projects",
-        "/api/v2/mobile-admin/write-policy"
-      ).contains(path) || path.matches(s"$challenge/(live|results|queue/export)")
+        "/api/v2/mobile-admin/write-policy",
+        s"$wizard/question-sets",
+        s"$wizard/counts"
+      ).contains(path) || path.matches(s"$challenge/(live|results|queue/export)") ||
+        path.matches(s"$wizard/question-sets/[a-z0-9-]{1,32}/features")
     case "PUT" =>
       path.matches("/api/v2/mobile-admin/projects/[0-9]+/enabled") ||
         path.matches(s"$challenge/live")
-    case "POST" => path.matches(s"$challenge/(live/rotate|queue)")
-    case _      => false
+    case "POST" =>
+      path.matches(s"$challenge/(live/rotate|queue)") || path == s"$wizard/campaigns" ||
+        path.matches(s"$wizard/campaigns/[0-9]+/publish")
+    case _ => false
   }
 
   def permits(method: String, path: String, query: Map[String, Seq[String]]): Boolean =

@@ -218,6 +218,68 @@ turning it on lists those that are enabled and published. Records `project.enabl
 `project.disable` with the project after the change. Repeating the current value is a no-op.
 `200` with the project, or `404 not_found`.
 
+## Campaign wizard
+
+A new campaign from a question set and an area, in one call (campaign-wizard.md, Juno's
+wizard-api-draft.md). Super-users, and organizers for their own projects. The library is
+`conf/mobile/question-sets.json`: each set's words for the admin, its OSM filter, questions and
+outcomes. A set's `version` goes up whenever its filter, questions or outcomes change. The client
+never sees filters or tags.
+
+Counts and features come from Overpass (`osm.ql.provider`), with a 10 s timeout, answers cached
+for an hour, at most two queries in flight per server and 20 per minute per user (`429
+rate_limited`). Centres snap to about 50 m, so the counts, the list and the create step see the same
+area. A feature is **open** when the set's filter picks it and at least one question still applies
+(every question is fill-missing); **complete** is the rest of what the filter picks.
+
+### `GET /api/v2/mobile-admin/wizard/question-sets`
+
+`{"sets": [{"id", "version", "name", "why", "audience", "noun": {"one", "many"}, "example",
+"pace", "description"}]}`. `pace` is places per participant per hour; `description` is a template
+with `{place}`, `{nounMany}` and `{audience}`.
+
+### `GET /api/v2/mobile-admin/wizard/counts?lat=&lon=&radius=`
+
+`radius` 200 to 3000 metres; anything else is `400 invalid_request` with `detail`. One Overpass
+query: `{"counts": [{"set", "version", "open", "complete"}]}`, or every set `{"set", "version",
+"unavailable": true}` when Overpass didn't answer.
+
+### `GET /api/v2/mobile-admin/wizard/question-sets/:id/features?lat=&lon=&radius=`
+
+`{"set", "version", "complete", "truncated", "open": [{"id": "node/<n>"|"way/<n>", "lon", "lat",
+"name"}]}`, at most 2000 open places (`truncated: true` past that). `502 osm_unavailable` when
+Overpass failed, `504 osm_timeout` when it timed out (no retry), `429 rate_limited` past 20 calls
+a minute.
+
+### `POST /api/v2/mobile-admin/wizard/campaigns`
+
+`{"set", "version", "area": {"lat", "lon", "radius", "place"}, "leaveOut": ["node/<n>"],
+"name", "description", "eventDate"?, "projectId"}`. Reads Overpass again (no cache), drops
+`leaveOut`, and creates a disabled, local-only choice challenge in the project with one task per
+place left, as the admin's survey builder would (`src/survey.ts`; a shared golden file keeps them
+equal). The changeset comment is the admin's (Iris, admin #30): `From a Street Tally survey for <name>[, <10 November 2026>]. Checked by me. #StreetTally #StreetTally<Place>`, the place in CamelCase, at most 40 characters; source `survey`. A startup log line says whether Overpass answers (`Overpass answered: HTTP 200 in 312 ms (…/status)`; anything but 200, or `Overpass not reachable`, means counts will be unavailable). The set,
+version, area and event date go in `mobile_campaign_sources` (evolution 146); the audit log gets
+`campaign.create`.
+
+- `201 {"id", "tasks"}`.
+- `400 invalid_request` with `detail` (radius outside 200 to 3000 metres among them);
+  `404 project_not_found`; `403 organizer_forbidden` for a project that isn't theirs, their Home
+  project included.
+- `409 set_changed` when `version` isn't current.
+- `400 area_too_big` past 2000 open places; `422 nothing_to_check` when no place is left.
+- `502 osm_unavailable`, `504 osm_timeout`, `429 rate_limited`; Overpass is asked once, never
+  retried.
+
+### `POST /api/v2/mobile-admin/wizard/campaigns/:id/publish`
+
+Lists the campaign in the app as the admin's Publish does: enabled and tagged
+`mobile-survey-v1`. `200 {"id", "published": true, "listed"}`; `listed` is false while the project
+is off. `404 not_found` for anything but a choice campaign, `422 nothing_to_check` without tasks.
+Audited as `campaign.publish`.
+
+While the write switch is off, create and publish are `403 mobile_writes_disabled` for everyone,
+super-users included (Ada, #48: no draft exemption until Martijn decides).
+
 ## Live progress page
 
 BACKLOG #12 (the project's design/live-progress.md). One link-only page per campaign (evolution
