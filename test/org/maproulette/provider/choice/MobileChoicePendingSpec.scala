@@ -388,6 +388,50 @@ class MobileChoicePendingSpec(implicit val application: Application) extends Fra
       new ChoicePendingRepository(db).held(Seq(held.id, free.id, held.id)) mustBe Set(held.id)
     }
 
+    "keep a task held once its answer is on the map, and offer it again once only skipped" taggedAs ChoiceTag in {
+      import play.api.test.FakeRequest
+      import play.api.test.Helpers.{contentAsJson, defaultAwaitTimeout, GET, OK}
+      val controller =
+        application.injector.instanceOf[org.maproulette.framework.controller.TaskController]
+      def flags(query: String): Map[Long, Option[Boolean]] = {
+        val result = controller
+          .getTasksInBoundingBox(-180, -85, 180, 85, 5000, 0, false)
+          .apply(FakeRequest(GET, s"/api/v2/tasks/box/-180/-85/180/85?cid=${challenge.id}$query"))
+        play.api.test.Helpers.status(result) mustBe OK
+        contentAsJson(result)
+          .as[JsArray]
+          .value
+          .map { t =>
+            (t \ "id").as[Long] -> (t \ "pending").asOpt[Boolean]
+          }
+          .toMap
+      }
+      val queue        = new ChoiceQueueRepository(db)
+      val (landed, _)  = benchTask()
+      val (repaint, _) = benchTask()
+      submit(guest(), landed, """{"answers":{"backrest":"yes"}}""").status mustBe 200
+      submit(guest(), repaint, """{"answers":{"backrest":"yes"}}""").status mustBe 200
+      // The hourly check sees the first answer on the map and the second one's key changed.
+      queue.markOnMap(landed.id, "backrest", "yes") mustBe 1
+      queue.skipChanged(repaint.id, "backrest", "yes") mustBe 1
+      // Nearest (excludePending) leaves the place on the map out; the tally (includePending)
+      // counts it as checked; the skipped place is offered again.
+      val box = flags("&includePending=true")
+      box(landed.id) mustBe Some(true)
+      box(repaint.id) mustBe Some(false)
+      flags("&excludePending=true").keySet must not contain landed.id
+      flags("&excludePending=true").keySet must contain(repaint.id)
+      new ChoicePendingRepository(db).held(Seq(landed.id, repaint.id)) mustBe Set(landed.id)
+      new ChoicePendingRepository(db).heldKinds(Seq(landed.id, repaint.id)) mustBe
+        Map(landed.id -> "answer")
+      // Held for good, past the answer's own hold.
+      db.withConnection { implicit c =>
+        SQL"SELECT hold_until > NOW() + INTERVAL '1000 years' FROM choice_pending WHERE task_id = ${landed.id}"
+          .as(SqlParser.scalar[Boolean].single)
+      } mustBe true
+      status(landed) mustBe Task.STATUS_CREATED
+    }
+
     "say whether a held task holds an answer or a status-6 report (T-002)" taggedAs ChoiceTag in {
       import play.api.test.FakeRequest
       import play.api.test.Helpers.{contentAsJson, defaultAwaitTimeout, GET, OK}

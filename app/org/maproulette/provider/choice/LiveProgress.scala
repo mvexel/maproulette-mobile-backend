@@ -213,9 +213,9 @@ class LivePageRepository @Inject() (db: Database) {
             ORDER BY updated_at DESC LIMIT 1
           ) s ON true
           LEFT JOIN LATERAL (
-            SELECT answered_at, body FROM choice_pending
-            WHERE task_id = t.id AND state = 'pending' AND hold_until > NOW()
-            ORDER BY answered_at DESC LIMIT 1
+            SELECT cp.answered_at, cp.body FROM choice_pending cp
+            WHERE cp.task_id = t.id AND #${ChoicePendingStore.holds("cp")}
+            ORDER BY cp.answered_at DESC LIMIT 1
           ) p ON true
           WHERE t.parent_id = $challengeId AND t.location IS NOT NULL
           ORDER BY t.id""".as(stop.*)

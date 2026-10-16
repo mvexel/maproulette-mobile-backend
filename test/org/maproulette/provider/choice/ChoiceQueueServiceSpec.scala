@@ -118,6 +118,33 @@ class ChoiceQueueServiceSpec(implicit val application: Application) extends Fram
       .as(SqlParser.get[Option[String]]("reason").*)
   }
 
+  private def staleReason(t: Task): Option[String] = db.withConnection { implicit c =>
+    SQL"SELECT reason FROM choice_stale WHERE task_id = ${t.id}"
+      .as(SqlParser.str("reason").singleOpt)
+  }
+
+  /** The campaign's tasks the apps get: Nearest (stale and held left out) or the tally. */
+  private def offered(campaign: Challenge, excludeStale: Boolean = true): Set[Long] =
+    application.injector
+      .instanceOf[org.maproulette.framework.service.TaskClusterService]
+      .getTasksInBoundingBox(
+        User.superUser,
+        org.maproulette.session.SearchParameters(
+          location = Some(org.maproulette.session.SearchLocation(-180, -85, 180, 85)),
+          challengeParams = org.maproulette.session
+            .SearchChallengeParameters(challengeIds = Some(List(campaign.id))),
+          taskParams = org.maproulette.session.SearchTaskParameters(
+            excludeStale = Some(excludeStale),
+            excludePending = Some(true)
+          )
+        ),
+        paging = org.maproulette.framework.psql.Paging(5000, 0),
+        ignoreLocked = true
+      )
+      ._2
+      .map(_.id)
+      .toSet
+
   private def detect(): ChoiceQueue.OnMapReport = Await.result(service.detect(1000), 30.seconds)
 
   private def generate(id: Long): Option[ChoiceQueue.Report] =
@@ -164,6 +191,8 @@ class ChoiceQueueServiceSpec(implicit val application: Application) extends Fram
       // KI-1: the answer on the deleted element is skipped, not left waiting.
       rows(gone) mustBe Seq("skipped_stale")
       reasons(gone) mustBe Seq(Some("element_gone"))
+      // Discovery (excludeStale) stops offering it.
+      staleReason(gone) mustBe Some("element_gone")
 
       val queue = challengeDAL.retrieveById(first.queueChallengeId).get
       queue.name mustBe "Benches: confirm survey answers"
@@ -250,6 +279,11 @@ class ChoiceQueueServiceSpec(implicit val application: Application) extends Fram
       state(deleted) mustBe Some("gone")
       rows(deleted) mustBe Seq("skipped_stale")
       reasons(deleted) mustBe Seq(Some("element_gone"))
+      staleReason(deleted) mustBe Some("element_gone")
+      // The gone place's answers no longer hold it, but its stale record keeps it out of Nearest
+      // and the tally, which ask with excludeStale.
+      offered(campaign) must not contain deleted.id
+      offered(campaign, excludeStale = false) must contain(deleted.id)
       def lastChecked = db.withConnection { implicit c =>
         SQL"SELECT max(checked_at)::text AS at FROM choice_queue_items WHERE source_task_id = ${deleted.id}"
           .as(SqlParser.str("at").single)
@@ -262,6 +296,8 @@ class ChoiceQueueServiceSpec(implicit val application: Application) extends Fram
       lastChecked mustBe goneAt
       rows(door) mustBe Seq("on_map", "on_map")
       state(door) mustBe Some("done")
+      // The done place stays checked: its answers on the map still hold it.
+      offered(campaign) must not contain door.id
       db.withConnection { implicit c =>
         SQL"""SELECT count(*) FROM choice_queue_items
               WHERE source_task_id = ${door.id} AND on_map_at IS NOT NULL"""

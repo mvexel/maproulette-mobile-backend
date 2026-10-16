@@ -363,7 +363,11 @@ holds ends `skipped_stale` with its reason, and the campaign results count it. S
 publish without this re-check.
 
 Discovery: `excludePending=true` on `tasks/box`, `markers/box` and the cluster routes leaves out
-tasks with a pending answer whose hold has not ended (next to `excludeStale`). `challenge/:id/tasks`
+held tasks (next to `excludeStale`): a pending answer whose hold has not ended, or an answer OSM now
+carries (`on_map`, H1c), which holds for good since guests never change the task's status. Marking
+a place "Needs a visit" ends both holds; `skipped_stale` answers hold nothing. A place whose element
+the hourly check finds deleted is recorded in `choice_stale` (`element_gone`), so `excludeStale`
+leaves it out. `challenge/:id/tasks`
 is not filtered.
 
 `includePending=true` on `tasks/box` keeps held tasks and adds `"pending": true|false` to each task,

@@ -333,8 +333,8 @@ participant site.
 }
 ```
 
-- `state`: `checked` is status 1, 2 or 5, or a live pending guest answer (the excludePending
-  rule) whose outcome isn't a status-6 one. `look` ("Needs another look") is status 6, or a live
+- `state`: `checked` is status 1, 2 or 5, or a guest answer that holds the task (the excludePending
+  rule: live pending, or on the map) whose outcome isn't a status-6 one. `look` ("Needs another look") is status 6, or a live
   pending answer with a status-6 outcome: `too-hard`, `not-here`, `moved`, or a campaign outcome
   declared with status 6. `todo` is status 0 or 3. Other tasks, and stale tasks still open, are
   left out. `tally.total` counts the stops listed.
