@@ -216,9 +216,9 @@ class ReviewRepository @Inject() (db: Database) {
   ): Seq[Place] = {
     val one = only.getOrElse(-1L)
     val rows = SQL(s"""SELECT t.id, ST_X(t.location) AS lon, ST_Y(t.location) AS lat,
-              t.geojson #>> '{features,0,properties,name}' AS feature_name,
-              t.geojson #>> '{features,0,properties,ref}' AS feature_ref,
-              (t.geojson #> '{features,0,properties}')::text AS props,
+              t.geojson->'features'->0->'properties'->>'name' AS feature_name,
+              t.geojson->'features'->0->'properties'->>'ref' AS feature_ref,
+              (t.geojson->'features'->0->'properties')::text AS props,
               COALESCE(rp.state, 'open') AS state,
               t.cooperative_work_json::text AS payload
         FROM tasks t

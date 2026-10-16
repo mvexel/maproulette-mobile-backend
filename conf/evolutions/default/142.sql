@@ -3,7 +3,7 @@
 # --- !Ups
 
 -- Review page (fork only, H1a): mappers read a campaign's guest answers by its live page token and
--- mark places. Skips are per mapper; "needs a visit" is shared. Additive: two new tables and an
+-- mark places. Skips are per mapper, and "needs a visit" is shared. Additive: two new tables and an
 -- index on the fork's choice_pending.
 CREATE TABLE choice_review_marks (
   task_id    bigint NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
