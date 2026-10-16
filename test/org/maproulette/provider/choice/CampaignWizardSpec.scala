@@ -218,10 +218,12 @@ class CampaignWizardSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
       val lines = result(both.probe())
       lines.size mustBe 2
       lines.head must startWith("Overpass not reachable: ")
-      lines.head must endWith("(http://127.0.0.1:9/api/status, resolves to 127.0.0.1 (IPv4))")
+      lines.head must endWith("(http://127.0.0.1:9/api/interpreter, resolves to 127.0.0.1 (IPv4))")
       lines(1) must fullyMatch regex
         s"Overpass answered: HTTP 200 in [0-9]+ ms \\(${java.util.regex.Pattern
-          .quote(fake.url.replace("interpreter", "status"))}, resolves to 127\\.0\\.0\\.1 \\(IPv4\\)\\)"
+          .quote(fake.url)}, resolves to 127\\.0\\.0\\.1 \\(IPv4\\)\\)"
+      // A real query to the interpreter, not a status page some instances don't serve.
+      fake.queries.last mustBe WizardOverpass.ProbeQuery
       WizardOverpass.resolved("https://[::1]/api/status") mustBe "resolves to 0:0:0:0:0:0:0:1 (IPv6)"
     }
 
