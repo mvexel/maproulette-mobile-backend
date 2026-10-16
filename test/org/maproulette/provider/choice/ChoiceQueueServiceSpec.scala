@@ -222,7 +222,12 @@ class ChoiceQueueServiceSpec(implicit val application: Application) extends Fram
       answer(deleted, "material" -> "wood")
       osm.put("node", 8821, Map("amenity" -> "bench"))
       osm.put("node", 8822, Map("amenity" -> "bench"))
-      generate(campaign.id).get.queued mustBe 3
+      val partial = task(campaign, 8823)
+      answer(partial, "backrest" -> "yes", "material" -> "wood")
+      osm.put("node", 8823, Map("amenity" -> "bench", "backrest" -> "yes"))
+      generate(campaign.id).get.queued mustBe 4
+      // OSM already carries the backrest, but the material is still queued.
+      rows(partial) mustBe Seq("pending")
 
       detect().failures mustBe 0
       rows(door) mustBe Seq("pending", "pending")
@@ -232,12 +237,14 @@ class ChoiceQueueServiceSpec(implicit val application: Application) extends Fram
       osm.edit("node", 8821)(_ + ("backrest" -> "no"))
       osm.elements(("node", 8822L)).visible = false
       detect().failures mustBe 0
-      rows(door) mustBe Seq("on_map", "on_map")
+      // The first guest's material answer is still queued, so only the second guest's is on the map.
+      rows(door) mustBe Seq("pending", "on_map")
       state(door) mustBe None
       state(deleted) mustBe Some("gone")
 
       osm.edit("node", 8821)(_ + ("material" -> "metal"))
       detect()
+      rows(door) mustBe Seq("on_map", "on_map")
       state(door) mustBe Some("done")
       db.withConnection { implicit c =>
         SQL"""SELECT count(*) FROM choice_queue_items

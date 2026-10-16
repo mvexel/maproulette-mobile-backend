@@ -234,14 +234,18 @@ class ChoiceQueueRepository @Inject() (db: Database) {
   }
 
   /**
-    * H1c: the place's held guest answers that gave this answer to this question are on the map.
-    * Returns how many rows changed.
+    * H1c: OSM carries this answer to this question. The place's held guest answers that gave it
+    * are on the map once none of their other queued answers is still waiting (Ada: the guest sees
+    * "On the map" only for the whole answer). Returns how many rows changed.
     */
   def markOnMap(taskId: Long, question: String, answer: String): Int = db.withConnection {
     implicit c =>
-      SQL"""UPDATE choice_pending SET state = 'on_map', updated_at = NOW()
-            WHERE task_id = $taskId AND state = 'pending'
-              AND body->'answers'->>$question = $answer""".executeUpdate()
+      SQL"""UPDATE choice_pending p SET state = 'on_map', updated_at = NOW()
+            WHERE p.task_id = $taskId AND p.state = 'pending'
+              AND p.body->'answers'->>$question = $answer
+              AND NOT EXISTS (SELECT 1 FROM choice_queue_items i
+                WHERE i.source_task_id = p.task_id AND i.on_map_at IS NULL
+                  AND p.body->'answers'->>i.question = i.answer)""".executeUpdate()
   }
 
   /**
@@ -387,8 +391,6 @@ class ChoiceQueueService @Inject() (
                 repository.setState(campaignId, place.id, ReviewPage.Gone)
                 counts = counts.copy(gone = counts.gone + 1)
               case (place, found, Checked(toQueue, applied, stale)) =>
-                // H1c: the guests' answers OSM already carries are on the map.
-                applied.foreach(c => repository.markOnMap(place.id, c.question.id, c.option.id))
                 if (stale) repository.setState(campaignId, place.id, ReviewPage.Stale)
                 else if (applied.size == found.size)
                   repository.setState(campaignId, place.id, ReviewPage.Done)
@@ -411,6 +413,9 @@ class ChoiceQueueService @Inject() (
                   )
                   repository.recordQueued(task.id, candidate)
                 }
+                // H1c: answers OSM already carries are on the map, after this run's queued ones are
+                // recorded, so a guest answer with a part still queued stays pending.
+                applied.foreach(c => repository.markOnMap(place.id, c.question.id, c.option.id))
                 counts = counts.copy(
                   queued = counts.queued + added,
                   done = counts.done + applied.size,
@@ -452,8 +457,8 @@ class ChoiceQueueService @Inject() (
                             .flatMap(_.options.find(_.id == a))
                             .exists(carries(_, tags))
                       }
-                      onMap.foreach { case (q, a) => repository.markOnMap(taskId, q, a) }
                       repository.checked(taskId, onMap.map(_._1))
+                      onMap.foreach { case (q, a) => repository.markOnMap(taskId, q, a) }
                       if (onMap.nonEmpty && repository.allOnMap(taskId))
                         repository.setState(campaignId, taskId, ReviewPage.Done)
                       report.copy(checked = report.checked + 1, onMap = report.onMap + onMap.size)

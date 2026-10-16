@@ -345,7 +345,8 @@ and `cooperativeWork`, as maproulette.org's "Upload GeoJSON" takes it with "line
 
 An hourly job (while guests are enabled) re-reads OSM, read-only, for queued edits not yet seen on
 the map, the least recently checked first, up to 200 places a run. When OSM carries a queued edit,
-the held guest answers that gave it become `on_map` (the guest's `published` and
+the held guest answers that gave it become `on_map` once none of their other queued answers is
+still waiting (the guest's `published` and
 `byChallenge.onMap` in `GET /api/v2/mobile-guest/me`). A place whose queued edits are all on the map
 becomes `done`, one whose element was deleted `gone`. The generator does the same for answers OSM
 already carries when it runs.
