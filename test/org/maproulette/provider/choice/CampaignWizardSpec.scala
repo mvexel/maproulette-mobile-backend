@@ -224,6 +224,15 @@ class CampaignWizardSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
           .quote(fake.url)}, resolves to 127\\.0\\.0\\.1 \\(IPv4\\)\\)"
       // A real query to the interpreter, not a status page some instances don't serve.
       fake.queries.last mustBe WizardOverpass.ProbeQuery
+      fake.contentTypes.last must startWith("application/x-www-form-urlencoded")
+      // Anything but 200 carries the start of the server's own answer.
+      val answer = fake.answer
+      fake.answer = _ => (500, "<p>runtime error:\n  " + "x" * 400 + "</p>")
+      try {
+        val failed = result(both.probe())(1)
+        failed must startWith("Overpass answered: HTTP 500 in ")
+        failed must endWith(": " + ("<p>runtime error: " + "x" * 400).take(300))
+      } finally fake.answer = answer
       WizardOverpass.resolved("https://[::1]/api/status") mustBe "resolves to 0:0:0:0:0:0:0:1 (IPv6)"
     }
 
