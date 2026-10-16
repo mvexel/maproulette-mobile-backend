@@ -110,7 +110,7 @@ object ChoiceQueue {
       option.unsetTags.forall(k => !current.contains(k))
 
   /** One run of the "On the map" check (H1c), for the log. */
-  case class OnMapReport(checked: Int, onMap: Int, gone: Int, failures: Int)
+  case class OnMapReport(checked: Int, onMap: Int, gone: Int, failures: Int, stale: Int = 0)
 
   /** What one place's answers can give, before the OSM check. */
   case class PlaceCandidates(candidates: Seq[Candidate], disagree: Int)
@@ -264,7 +264,27 @@ class ChoiceQueueRepository @Inject() (db: Database) {
               AND p.body->'answers'->>$question = $answer
               AND NOT EXISTS (SELECT 1 FROM choice_queue_items i
                 WHERE i.source_task_id = p.task_id AND i.on_map_at IS NULL
-                  AND p.body->'answers'->>i.question = i.answer)""".executeUpdate()
+                  AND i.stale_at IS NULL AND p.body->'answers'->>i.question = i.answer)"""
+        .executeUpdate()
+  }
+
+  /**
+    * H1d: OSM no longer matches the question of this queued edit. The held guest answers that gave
+    * it are skipped as `key_changed`. Returns how many rows changed.
+    */
+  def skipChanged(taskId: Long, question: String, answer: String): Int = db.withConnection {
+    implicit c =>
+      SQL"""UPDATE choice_pending SET state = 'skipped_stale',
+              result = '{"reason": "key_changed"}'::jsonb, updated_at = NOW()
+            WHERE task_id = $taskId AND state = 'pending'
+              AND body->'answers'->>$question = $answer""".executeUpdate()
+  }
+
+  /** The place's element is deleted: its guest answers still waiting are skipped (Ada, KI-1). */
+  def skipGone(taskId: Long): Int = db.withConnection { implicit c =>
+    SQL"""UPDATE choice_pending SET state = 'skipped_stale',
+            result = '{"reason": "element_gone"}'::jsonb, updated_at = NOW()
+          WHERE task_id = $taskId AND state = 'pending'""".executeUpdate()
   }
 
   /**
@@ -278,13 +298,14 @@ class ChoiceQueueRepository @Inject() (db: Database) {
               i.question, i.answer
             FROM choice_queue_items i JOIN tasks t ON t.id = i.source_task_id
             WHERE i.source_task_id IN (
-              SELECT source_task_id FROM choice_queue_items WHERE on_map_at IS NULL
+              SELECT source_task_id FROM choice_queue_items
+                WHERE on_map_at IS NULL AND stale_at IS NULL
                 -- A deleted element is not read again (Ada).
                 AND NOT EXISTS (SELECT 1 FROM choice_review_places rp
                   WHERE rp.task_id = source_task_id AND rp.state = 'gone')
               GROUP BY source_task_id ORDER BY min(checked_at) NULLS FIRST, source_task_id
               LIMIT $limit)
-              AND i.on_map_at IS NULL
+              AND i.on_map_at IS NULL AND i.stale_at IS NULL
             ORDER BY i.source_task_id, i.question"""
         .as(
           (SqlParser.long("parent_id") ~ SqlParser.long("source_task_id") ~
@@ -300,15 +321,22 @@ class ChoiceQueueRepository @Inject() (db: Database) {
         }
     }
 
-  /** Records a check of the campaign task's queued edits; `onMap` are the ones OSM now carries. */
-  def checked(taskId: Long, onMap: Seq[String]): Unit = db.withTransaction { implicit c =>
-    if (onMap.nonEmpty)
-      SQL"""UPDATE choice_queue_items SET on_map_at = NOW() WHERE source_task_id = $taskId
-            AND on_map_at IS NULL AND question IN ($onMap)""".executeUpdate()
-    SQL"""UPDATE choice_queue_items SET checked_at = NOW() WHERE source_task_id = $taskId"""
-      .executeUpdate()
-    ()
-  }
+  /**
+    * Records a check of the campaign task's queued edits; `onMap` are the ones OSM now carries,
+    * `stale` the ones whose question OSM no longer matches.
+    */
+  def checked(taskId: Long, onMap: Seq[String], stale: Seq[String] = Nil): Unit =
+    db.withTransaction { implicit c =>
+      if (onMap.nonEmpty)
+        SQL"""UPDATE choice_queue_items SET on_map_at = NOW() WHERE source_task_id = $taskId
+              AND on_map_at IS NULL AND stale_at IS NULL AND question IN ($onMap)""".executeUpdate()
+      if (stale.nonEmpty)
+        SQL"""UPDATE choice_queue_items SET stale_at = NOW() WHERE source_task_id = $taskId
+              AND on_map_at IS NULL AND stale_at IS NULL AND question IN ($stale)""".executeUpdate()
+      SQL"""UPDATE choice_queue_items SET checked_at = NOW() WHERE source_task_id = $taskId"""
+        .executeUpdate()
+      ()
+    }
 
   /** Every queued edit of the campaign task is on the map. */
   def allOnMap(taskId: Long): Boolean = db.withConnection { implicit c =>
@@ -317,10 +345,16 @@ class ChoiceQueueRepository @Inject() (db: Database) {
       .as(SqlParser.bool("done").single)
   }
 
-  /** The queue's tasks in id order, rebuilt as export lines from their stored payloads. */
+  /**
+    * The queue's tasks in id order, rebuilt as export lines from their stored payloads. Stale edits
+    * are left out (H1d).
+    */
   def exportLines(queueChallengeId: Long): Seq[JsObject] = db.withConnection { implicit c =>
     SQL"""SELECT t.geojson::text AS geojson, t.cooperative_work_json::text AS work FROM tasks t
-          WHERE t.parent_id = $queueChallengeId ORDER BY t.id"""
+          WHERE t.parent_id = $queueChallengeId
+            AND NOT EXISTS (SELECT 1 FROM choice_queue_items i
+              WHERE i.queue_task_id = t.id AND i.stale_at IS NOT NULL)
+          ORDER BY t.id"""
       .as((SqlParser.str("geojson") ~ SqlParser.get[Option[String]]("work")).map {
         case geojson ~ work =>
           Json.obj(
@@ -412,6 +446,7 @@ class ChoiceQueueService @Inject() (
             verdicts.reverse.foreach {
               case (place, _, PlaceGone) =>
                 repository.setState(campaignId, place.id, ReviewPage.Gone)
+                repository.skipGone(place.id)
                 counts = counts.copy(gone = counts.gone + 1)
               case (place, found, Checked(toQueue, applied, stale)) =>
                 if (stale) repository.setState(campaignId, place.id, ReviewPage.Stale)
@@ -452,8 +487,10 @@ class ChoiceQueueService @Inject() (
   /**
     * H1c: re-reads OSM for queued edits not yet on the map, the least recently checked places
     * first. An edit OSM now carries is on the map, and so are the guest answers that gave it; a
-    * place whose queued edits all are is `done`, one whose element was deleted is `gone`. A place
-    * OSM can't answer for is left for the next run.
+    * place whose queued edits all are is `done`, one whose element was deleted is `gone` and its
+    * waiting guest answers skipped. H1d: an edit whose question OSM no longer matches (the key
+    * changed after queueing) is stale: not read again, left out of exports, its guest answers
+    * skipped and the place `stale`. A place OSM can't answer for is left for the next run.
     */
   def detect(limit: Int = 200): Future[OnMapReport] =
     Future(repository.unchecked(limit)).flatMap { places =>
@@ -471,20 +508,33 @@ class ChoiceQueueService @Inject() (
                     case ElementGone =>
                       repository.setState(campaignId, taskId, ReviewPage.Gone)
                       repository.checked(taskId, Nil)
+                      repository.skipGone(taskId)
                       report.copy(checked = report.checked + 1, gone = report.gone + 1)
                     case ElementFound(_, _, tags) =>
+                      val question = work.questions.map(q => q.id -> q).toMap
                       val onMap = edits.filter {
                         case (q, a) =>
-                          work.questions
-                            .find(_.id == q)
+                          question
+                            .get(q)
                             .flatMap(_.options.find(_.id == a))
                             .exists(carries(_, tags))
                       }
-                      repository.checked(taskId, onMap.map(_._1))
+                      // The element left the campaign's filter, or the question's key changed.
+                      val stale = edits.filterNot(onMap.contains).filter {
+                        case (q, _) =>
+                          !work.matches(tags) || !question.get(q).exists(_.holds(tags))
+                      }
+                      repository.checked(taskId, onMap.map(_._1), stale.map(_._1))
+                      stale.foreach { case (q, a) => repository.skipChanged(taskId, q, a) }
                       onMap.foreach { case (q, a) => repository.markOnMap(taskId, q, a) }
-                      if (onMap.nonEmpty && repository.allOnMap(taskId))
+                      if (stale.nonEmpty) repository.setState(campaignId, taskId, ReviewPage.Stale)
+                      else if (onMap.nonEmpty && repository.allOnMap(taskId))
                         repository.setState(campaignId, taskId, ReviewPage.Done)
-                      report.copy(checked = report.checked + 1, onMap = report.onMap + onMap.size)
+                      report.copy(
+                        checked = report.checked + 1,
+                        onMap = report.onMap + onMap.size,
+                        stale = report.stale + stale.size
+                      )
                   }
                   .recover {
                     case _: OsmCallException =>

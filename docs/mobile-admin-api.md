@@ -457,7 +457,7 @@ choice campaign; `502 osm_unavailable` when OSM can't be read; then nothing is c
 The queue as line-by-line GeoJSON (`application/geo+json-seq`, attachment
 `confirm-queue-<id>.geojson`): one FeatureCollection per task with its point (`@id`, `evidence`)
 and `cooperativeWork`, as maproulette.org's "Upload GeoJSON" takes it with "line-by-line" on.
-`404 no_queue` before the first run.
+Stale edits (H1d) are left out. `404 no_queue` before the first run.
 
 ### "On the map" (H1c)
 
@@ -466,8 +466,15 @@ the map, the least recently checked first, up to 200 places a run. When OSM carr
 the held guest answers that gave it become `on_map` once none of their other queued answers is
 still waiting (the guest's `published` and
 `byChallenge.onMap` in `GET /api/v2/mobile-guest/me`). A place whose queued edits are all on the map
-becomes `done`, one whose element was deleted `gone`. The generator does the same for answers OSM
-already carries when it runs.
+becomes `done`, one whose element was deleted `gone`; the place's guest answers still waiting then
+end `skipped_stale` (`result.reason` `element_gone`). The generator does the same for answers OSM
+already carries, and for deleted elements, when it runs.
+
+H1d: a queued edit whose question OSM no longer matches (its key changed after queueing, say
+`material=stone` where `wood` was queued, or the element left the campaign's tags) is stale. It is
+not read again and is left out of later exports; the held guest answers that gave it end
+`skipped_stale` (`result.reason` `key_changed`), and the place becomes `stale`, unless someone marked
+it "Needs a visit".
 
 ## Field write policy
 
