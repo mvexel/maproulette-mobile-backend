@@ -40,7 +40,7 @@ MR_MOBILE_OSM_TOKEN_KEY=<base64-key>
 MR_SUPER_ACCOUNTS=<osm-user-id>
 # Optional: comma-separated Overpass endpoints for the campaign wizard, tried in
 # order when one can't be connected to. Empty or unset uses this default:
-OVERPASS_URLS=https://overpass-api.de/api/interpreter,https://overpass.private.coffee/api/interpreter,https://overpass.kumi.systems/api/interpreter
+OVERPASS_URLS=https://overpass-api.de/api/interpreter,https://maps.mail.ru/osm/tools/overpass/api/interpreter,https://overpass.private.coffee/api/interpreter
 ```
 
 Use only a hostname in `PUBLIC_HOST`, without `https://` or a path. Compose

@@ -25,11 +25,10 @@ class WizardOverpass @Inject() (ws: WSClient, config: Config)(implicit ec: Execu
   protected def urls: Seq[String] =
     WizardOverpass.parseUrls(config.config.getOptional[String]("mobileWizard.overpassUrls"))
   protected def requestTimeout: FiniteDuration = (OverpassQuery.Timeout + 2).seconds
-  private val userAgent =
-    "Street Tally campaign wizard (+https://github.com/mvexel/maproulette-mobile-backend)"
-  private val PerMinute = 20
-  private val inFlight  = new Semaphore(2)
-  private val calls     = new ConcurrentHashMap[Long, List[Long]]()
+  private val userAgent                        = WizardOverpass.UserAgent
+  private val PerMinute                        = 20
+  private val inFlight                         = new Semaphore(2)
+  private val calls                            = new ConcurrentHashMap[Long, List[Long]]()
   private val cache: Cache[String, JsArray] =
     Scaffeine().expireAfterWrite(1.hour).maximumSize(2000).build[String, JsArray]()
 
@@ -125,13 +124,23 @@ class WizardOverpass @Inject() (ws: WSClient, config: Config)(implicit ec: Execu
 
 object WizardOverpass {
 
+  /** Named with a contact on every request: public instances refuse generic clients. */
+  val UserAgent: String = {
+    val build = org.maproulette.models.service.info
+      .BuildInfo()
+      .gitHeadCommit
+      .map(_.take(7))
+      .getOrElse("dev")
+    s"StreetTally/$build (+https://streettally.osm.lol; martijn@osm.lol)"
+  }
+
   /** The startup probe's query: one node's id, a few bytes back. */
   val ProbeQuery = "[out:json][timeout:5];node(1);out ids;"
 
   val DefaultUrls: Seq[String] = Seq(
     "https://overpass-api.de/api/interpreter",
-    "https://overpass.private.coffee/api/interpreter",
-    "https://overpass.kumi.systems/api/interpreter"
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter"
   )
 
   def parseUrls(value: Option[String]): Seq[String] =
