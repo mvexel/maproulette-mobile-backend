@@ -241,9 +241,16 @@ class ChoiceQueueServiceSpec(implicit val application: Application) extends Fram
       rows(door) mustBe Seq("pending", "on_map")
       state(door) mustBe None
       state(deleted) mustBe Some("gone")
+      def lastChecked = db.withConnection { implicit c =>
+        SQL"SELECT max(checked_at)::text AS at FROM choice_queue_items WHERE source_task_id = ${deleted.id}"
+          .as(SqlParser.str("at").single)
+      }
+      val goneAt = lastChecked
 
       osm.edit("node", 8821)(_ + ("material" -> "metal"))
       detect()
+      // The deleted element isn't read again.
+      lastChecked mustBe goneAt
       rows(door) mustBe Seq("on_map", "on_map")
       state(door) mustBe Some("done")
       db.withConnection { implicit c =>

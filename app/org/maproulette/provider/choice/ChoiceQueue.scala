@@ -268,7 +268,8 @@ class ChoiceQueueRepository @Inject() (db: Database) {
   }
 
   /**
-    * Queued edits not yet seen on the map, grouped by campaign task, least recently checked first:
+    * Queued edits not yet seen on the map, grouped by campaign task, least recently checked first,
+    * leaving out places whose element is gone:
     * (campaign id, campaign task id, its payload, [(question, answer)]).
     */
   def unchecked(limit: Int): Seq[(Long, Long, Option[JsValue], Seq[(String, String)])] =
@@ -278,6 +279,9 @@ class ChoiceQueueRepository @Inject() (db: Database) {
             FROM choice_queue_items i JOIN tasks t ON t.id = i.source_task_id
             WHERE i.source_task_id IN (
               SELECT source_task_id FROM choice_queue_items WHERE on_map_at IS NULL
+                -- A deleted element is not read again (Ada).
+                AND NOT EXISTS (SELECT 1 FROM choice_review_places rp
+                  WHERE rp.task_id = source_task_id AND rp.state = 'gone')
               GROUP BY source_task_id ORDER BY min(checked_at) NULLS FIRST, source_task_id
               LIMIT $limit)
               AND i.on_map_at IS NULL
