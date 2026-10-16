@@ -17,6 +17,13 @@ object ReviewPage {
   val NeedsVisit = "needs_visit"
   val Done       = "done"
 
+  /** Set by the confirm queue's stale check (H1b): OSM changed since the survey, or the element is gone. */
+  val Stale = "stale"
+  val Gone  = "gone"
+
+  /** Shown, never stored: an open place where guests gave different answers to one question. */
+  val Disagree = "disagree"
+
   val Filters      = Set("all", "agree", "visit", "done")
   val DefaultLimit = 100
   val MaxLimit     = 200
@@ -116,6 +123,30 @@ object ReviewPage {
     /** Two or more guests gave the same answer to a question. */
     def agreed: Boolean = suggestions.exists(s => (s \ "people").as[Int] >= 2)
 
+    /** Each question's answers given by guests, as option id -> how many and the latest time. */
+    lazy val byQuestion: Map[String, Map[String, (Int, Instant)]] =
+      answers
+        .flatMap(a =>
+          (a.body \ "answers")
+            .asOpt[Map[String, String]]
+            .toSeq
+            .flatMap(_.toSeq.map {
+              case (q, o) => (q, o, a.at)
+            })
+        )
+        .groupBy(_._1)
+        .map {
+          case (q, rows) =>
+            q -> rows.groupBy(_._2).map { case (o, same) => o -> (same.size -> same.map(_._3).max) }
+        }
+
+    /** Questions guests answered differently. */
+    lazy val disagreeing
+        : Set[String] = byQuestion.collect { case (q, opts) if opts.size > 1 => q }.toSet
+
+    /** The state the page shows: the stored one, or `disagree` for an open place with a split. */
+    def shown: String = if (state == Open && disagreeing.nonEmpty) Disagree else state
+
     def json(skipped: Boolean): JsObject = Json.obj(
       "id"          -> id,
       "osm"         -> elementType.zip(elementId).map { case (t, i) => Json.obj("type" -> t, "id" -> i) },
@@ -123,7 +154,7 @@ object ReviewPage {
       "lat"         -> lat,
       "name"        -> name,
       "ref"         -> ref,
-      "state"       -> state,
+      "state"       -> shown,
       "skipped"     -> skipped,
       "suggestions" -> suggestions,
       "reports"     -> reports
@@ -131,7 +162,7 @@ object ReviewPage {
   }
 
   def matches(filter: String, place: Place): Boolean = filter match {
-    case "agree" => place.state == Open && place.agreed
+    case "agree" => place.shown == Open && place.agreed
     case "visit" => place.state == NeedsVisit
     case "done"  => place.state == Done
     case _       => true
@@ -156,9 +187,12 @@ object ReviewPage {
         "changesetComment" -> comment
       ),
       "counts" -> Json.obj(
-        "toReview"   -> places.count(_.state == Open),
+        "toReview"   -> places.count(_.shown == Open),
         "added"      -> places.count(_.state == Done),
-        "needsVisit" -> places.count(_.state == NeedsVisit)
+        "needsVisit" -> places.count(_.state == NeedsVisit),
+        "stale"      -> places.count(_.state == Stale),
+        "gone"       -> places.count(_.state == Gone),
+        "disagree"   -> places.count(_.shown == Disagree)
       ),
       "places" -> page.map(p => p.json(skipped(p.id)))
     )
@@ -315,6 +349,11 @@ class ReviewRepository @Inject() (db: Database) {
                 VALUES ($taskId, $challengeId, $state, $userId, NOW())
                 ON CONFLICT (task_id) DO UPDATE SET state = EXCLUDED.state,
                   marked_by = EXCLUDED.marked_by, marked_at = EXCLUDED.marked_at""".executeUpdate()
+          // Q-4: the campaign's own task opens again for the next visit.
+          if (on)
+            SQL"""UPDATE choice_pending SET hold_until = NOW(), updated_at = NOW()
+                  WHERE task_id = $taskId AND state = 'pending' AND hold_until > NOW()"""
+              .executeUpdate()
           val action = if (on) "review.needs_visit" else "review.needs_visit_cleared"
           SQL("""INSERT INTO mobile_admin_audit(actor_user_id, action, target, before, after)
                 VALUES ({actor}, {action}, {target}, NULL, CAST({after} AS jsonb))""")

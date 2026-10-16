@@ -35,6 +35,8 @@ GET     /api/v2/mobile-admin/challenges/:id/results                     @control
 GET     /api/v2/mobile-admin/challenges/:id/live                        @controllers.MobileLiveController.get(id:Long)
 PUT     /api/v2/mobile-admin/challenges/:id/live                        @controllers.MobileLiveController.update(id:Long)
 POST    /api/v2/mobile-admin/challenges/:id/live/rotate                 @controllers.MobileLiveController.rotate(id:Long)
+POST    /api/v2/mobile-admin/challenges/:id/queue                       @controllers.MobileQueueController.generate(id:Long)
+GET     /api/v2/mobile-admin/challenges/:id/queue/export                @controllers.MobileQueueController.exportQueue(id:Long)
 GET     /api/v2/mobile-admin/campaigns                                  @controllers.MobileCampaignController.listCampaigns
 GET     /api/v2/mobile-admin/projects                                   @controllers.MobileCampaignController.listProjects
 POST    /api/v2/mobile-admin/projects                                   @controllers.MobileCampaignController.createProject

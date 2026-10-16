@@ -43,7 +43,7 @@ class GuestJobRepositorySpec extends PlaySpec {
         SQL("INSERT INTO tasks VALUES(1),(2)").executeUpdate()
         SQL("CREATE TABLE challenges(id bigint PRIMARY KEY)").execute()
         SQL("INSERT INTO challenges VALUES(7),(8)").executeUpdate()
-        Seq("129", "130", "131", "135", "137", "140", "141").foreach { version =>
+        Seq("129", "130", "131", "135", "137", "140", "141", "142").foreach { version =>
           val evolution = new String(
             Files.readAllBytes(Paths.get(s"conf/evolutions/default/$version.sql")),
             "UTF-8"
@@ -220,6 +220,15 @@ class GuestJobRepositorySpec extends PlaySpec {
         pendingStates(db) mustBe Seq(None -> "pending", None -> "expired")
         store.purge(now) mustBe 0
         pendingStates(db) mustBe Seq(None -> "pending", None -> "expired")
+
+        // Once a mapper has checked the place, the answer goes the normal way.
+        db.withConnection { implicit c =>
+          SQL(
+            "INSERT INTO choice_review_places (task_id, challenge_id, state) VALUES (1, 8, 'done')"
+          ).execute()
+        }
+        store.purge(now) mustBe 0
+        pendingStates(db) mustBe Seq(None -> "expired", None -> "expired")
     }
 
     "accept only a guest's three newest claim tokens" in withStore { (store, db) =>
