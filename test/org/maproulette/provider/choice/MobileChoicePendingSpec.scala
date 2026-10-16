@@ -421,6 +421,15 @@ class MobileChoicePendingSpec(implicit val application: Application) extends Fra
       box(repaint.id) mustBe Some(false)
       flags("&excludePending=true").keySet must not contain landed.id
       flags("&excludePending=true").keySet must contain(repaint.id)
+      // Opening the place now finds its tag already set and records it stale: the tally
+      // (excludeStale and includePending) still counts it, and Nearest still leaves it out.
+      db.withConnection { implicit c =>
+        SQL"""INSERT INTO choice_stale (task_id, reason, detail, element_version, payload_md5)
+              SELECT id, 'already_tagged', '[]'::jsonb, 2, md5(cooperative_work_json::text)
+              FROM tasks WHERE id = ${landed.id}""".executeUpdate()
+      }
+      flags("&excludeStale=true&includePending=true").get(landed.id) mustBe Some(Some(true))
+      flags("&excludeStale=true&excludePending=true").keySet must not contain landed.id
       new ChoicePendingRepository(db).held(Seq(landed.id, repaint.id)) mustBe Set(landed.id)
       new ChoicePendingRepository(db).heldKinds(Seq(landed.id, repaint.id)) mustBe
         Map(landed.id -> "answer")

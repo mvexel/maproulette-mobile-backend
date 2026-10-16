@@ -245,7 +245,8 @@ OSM edit and with submission dedupe. The bundle status write `PUT
 
 **Discovery.** `cct` (comma-separated `challenges.cooperative_type` values) filters `tasks/box`,
 `markers/box`, `taskCluster` and `tasksInCluster`; a non-integer gives 400. The separate,
-fork-only `excludeStale=true` leaves out tasks recorded in `choice_stale`. Mobile sends
+fork-only `excludeStale=true` leaves out tasks recorded in `choice_stale`, except ones already
+checked (status 1, 2 or 5, or a held answer), so the tally keeps counting them. Mobile sends
 `cct=3&excludeStale=true`.
 
 **Eligibility** is all-or-nothing: the element exists and is visible, `match` holds and **every**

@@ -190,7 +190,7 @@ Off by default (`mobileOAuth.guests.enabled`). See [mobile-oauth.md](mobile-oaut
 | What                                                                                                                       | Where                                                                                                                                                                               |
 | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `cct=<list>`: filter by `challenges.cooperative_type` on task, marker and cluster searches. Generic, and proposed upstream | `app/org/maproulette/session/SearchParameters.scala` (`challengeCooperativeTypes`, `parseCooperativeTypes`), `app/org/maproulette/framework/mixins/SearchParametersMixin.scala:602` |
-| `excludeStale=true`: leave out tasks in `choice_stale`. Fork-only                                                          | `SearchParameters.scala` (`excludeStale`), `app/org/maproulette/framework/service/TaskClusterService.scala:289`                                                                     |
+| `excludeStale=true`: leave out tasks in `choice_stale`, unless already checked (done or held). Fork-only                  | `SearchParameters.scala` (`excludeStale`), `app/org/maproulette/framework/service/TaskClusterService.scala:289`                                                                     |
 
 ### Ingest reporting
 
