@@ -176,7 +176,7 @@ Off by default (`mobileOAuth.guests.enabled`). See [mobile-oauth.md](mobile-oaut
 | Table `choice_pending` | `conf/evolutions/default/137.sql` |
 | Pending answers: submit (validated like a choice submission, any choice task since G1), withdraw, list; published-challenge rule while writes are off | `app/org/maproulette/provider/choice/MobileChoicePendingService.scala`, `ChoicePendingRepository.scala`, `app/org/maproulette/controllers/api/MobileChoicePendingController.scala` |
 | `MobileChoiceService.validateSubmission`: parsing and payload checks shared by submit and pending answers | `app/org/maproulette/provider/choice/MobileChoiceService.scala` |
-| `excludePending=true`: leave out tasks held by a pending answer | `SearchParameters.scala` (`excludePending`), `TaskClusterService.scala` (`excludeStaleChoiceTasks`) |
+| `excludePending=true`: leave out tasks held by a pending answer or one on the map (`ChoicePendingStore.holds`, used by every held count) | `SearchParameters.scala` (`excludePending`), `TaskClusterService.scala` (`excludeStaleChoiceTasks`), `ChoicePendingRepository.scala` (`holds`) |
 | Campaign results count guest answers the publish guard skipped (`skipped_count`, `skipped_reasons`) | `app/org/maproulette/provider/choice/ChoiceResults.scala` |
 | `includePending=true` on `tasks/box`: `pending` and `heldKind` (`answer`/`report`/null) per task | `TaskController.scala` (`withPending`), `ChoicePendingRepository.scala` (`held`, `heldKinds`) |
 | `choice/check` accepts guest tokens | `app/org/maproulette/controllers/api/MobileChoiceController.scala` |

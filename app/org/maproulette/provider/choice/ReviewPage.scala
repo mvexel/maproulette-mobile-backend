@@ -351,8 +351,8 @@ class ReviewRepository @Inject() (db: Database) {
                   marked_by = EXCLUDED.marked_by, marked_at = EXCLUDED.marked_at""".executeUpdate()
           // Q-4: the campaign's own task opens again for the next visit.
           if (on)
-            SQL"""UPDATE choice_pending SET hold_until = NOW(), updated_at = NOW()
-                  WHERE task_id = $taskId AND state = 'pending' AND hold_until > NOW()"""
+            SQL"""UPDATE choice_pending p SET hold_until = NOW(), updated_at = NOW()
+                  WHERE p.task_id = $taskId AND #${ChoicePendingStore.holds("p")}"""
               .executeUpdate()
           val action = if (on) "review.needs_visit" else "review.needs_visit_cleared"
           SQL("""INSERT INTO mobile_admin_audit(actor_user_id, action, target, before, after)

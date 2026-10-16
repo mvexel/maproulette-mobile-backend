@@ -154,11 +154,19 @@ class MobileCampaignSpec(implicit val application: Application) extends Framewor
       task(challenge, 3, Task.STATUS_CREATED)
       val held = task(challenge, 4, Task.STATUS_CREATED)
       task(challenge, 5, Task.STATUS_DELETED)
+      val onMap   = task(challenge, 6, Task.STATUS_CREATED)
+      val skipped = task(challenge, 7, Task.STATUS_CREATED)
       db.withConnection { implicit c =>
         // Set by importing choice tasks in practice; inserting plain tasks resets it.
         SQL"UPDATE challenges SET cooperative_type = 3 WHERE id = ${challenge.id}".executeUpdate()
         SQL"""INSERT INTO choice_pending(task_id, challenge_id, body, payload_digest, element_version, hold_until)
               VALUES ($held, ${challenge.id}, '{}'::jsonb, ${"0" * 64}, 1, NOW() + interval '1 day')"""
+          .executeUpdate()
+        // An answer OSM now carries keeps its place checked; a skipped one doesn't (H1c, H1d).
+        SQL"""INSERT INTO choice_pending(task_id, challenge_id, body, payload_digest, element_version,
+                hold_until, state)
+              VALUES ($onMap, ${challenge.id}, '{}'::jsonb, ${"0" * 64}, 1, '9999-12-31', 'on_map'),
+                ($skipped, ${challenge.id}, '{}'::jsonb, ${"0" * 64}, 1, '9999-12-31', 'skipped_stale')"""
           .executeUpdate()
       }
 
@@ -167,7 +175,7 @@ class MobileCampaignSpec(implicit val application: Application) extends Framewor
       (listed \ "published").as[Boolean] mustBe true
       (listed \ "project" \ "enabled").as[Boolean] mustBe true
       (listed \ "tasks")
-        .as[JsObject] mustBe Json.obj("total" -> 4, "checked" -> 2, "needsLook" -> 1)
+        .as[JsObject] mustBe Json.obj("total" -> 6, "checked" -> 3, "needsLook" -> 1)
       val listedProject = (contentAsJson(controller.listProjects(as())) \ "projects")
         .as[JsArray]
         .value

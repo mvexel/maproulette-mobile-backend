@@ -296,8 +296,8 @@ class TaskClusterService @Inject() (repository: TaskClusterRepository)
         FilterGroup(
           List(
             CustomParameter(
-              """NOT EXISTS (SELECT 1 FROM choice_pending cp WHERE cp.task_id = tasks.id
-                 AND cp.state = 'pending' AND cp.hold_until > NOW())"""
+              s"""NOT EXISTS (SELECT 1 FROM choice_pending cp WHERE cp.task_id = tasks.id
+                 AND ${org.maproulette.provider.choice.ChoicePendingStore.holds("cp")})"""
             )
           )
         )
