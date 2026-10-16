@@ -119,8 +119,14 @@ Desktop editors such as the JOSM MapRoulette plugin hold a task for a whole edit
 | `POST /api/v2/task/:id/comment` | `actionId` (digits) | required JSON `{"comment": "..."}` |
 | `GET /api/v2/task/:id/refreshLock` | none | none |
 | `PUT /api/v2/task/:id/changeset` | `changesetId` (digits) | none |
+| `POST /api/v2/taskBundle` (create) | none | required JSON `{"name", "primaryId", "taskIds"}` |
+| `POST /api/v2/taskBundle/:id` (read), `DELETE /api/v2/taskBundle/:id` | none | none |
+| `POST /api/v2/taskBundle/:id/update`, `POST /api/v2/taskBundle/:id/unbundle`, `POST /api/v2/task/bundle/unlock` | `taskIds` (digits, required) | none |
+| `PUT /api/v2/task/:id/lockBundle` | `taskIds` (digits, optional) | none |
+| `PUT /api/v2/taskBundle/:id/(1\|2\|5\|6)` | `primaryId` (digits, required), `requestReview` (`true` only), `tags` | optional JSON `completionResponses` |
+| `POST /api/v2/taskBundle/:id/comment` | `actionId` (digits) | required JSON `{"comment": "..."}` |
 
-Each query key may appear once, with a value of at most 1024 characters. A body needs `Content-Type: application/json`, a `Content-Length` of 1 to 16384 bytes and no `Transfer-Encoding`. A request outside these shapes is `400 invalid_request`, before the token is checked. A request in these shapes from a grant without `tasks:edit` is `403 insufficient_scope`; a bare status write is still a `tasks:write` lifecycle write. The write switches (`allowTaskWrites`, the field write policy) and preview mode apply as for other writes. The consent page lists the extra permissions.
+Each query key may appear once, except `taskIds`, which repeats once per task (`taskIds=1&taskIds=2`, at most 50, the web UI's bundle limit); each value is at most 1024 characters. Bundle review and meta-review stay closed. A body needs `Content-Type: application/json`, a `Content-Length` of 1 to 16384 bytes and no `Transfer-Encoding`. A request outside these shapes is `400 invalid_request`, before the token is checked. A request in these shapes from a grant without `tasks:edit` is `403 insufficient_scope`; a bare status write is still a `tasks:write` lifecycle write. The write switches (`allowTaskWrites`, the field write policy) and preview mode apply as for other writes. The consent page lists the extra permissions.
 
 Existing `tasks:read` grants keep working unchanged for reads. They are never upgraded: the user signs in again and approves the write permission, which creates a new grant. The consent page names the write permission only when it is requested. If an operator removes `tasks:write` from a client's configuration, that client's existing write grants stop authenticating (`401 invalid_token`) until the user signs in again.
 
@@ -209,7 +215,8 @@ instead of 204, and a rejected line does not mark the challenge FAILED. `report=
 **Status only through `choice`.** App grants (`tasks:write` and `tasks:edit`) can't set a choice
 task's status directly: `PUT /api/v2/task/:id/{1,2,5,6}` answers `403 {"error":
 "choice_task_status"}`, with or without editor extras. `POST /task/:id/choice` sets it, after the
-OSM edit and with submission dedupe. Start, release, skip, comments and `refreshLock` stay open.
+OSM edit and with submission dedupe. The bundle status write `PUT
+/api/v2/taskBundle/:id/{1,2,5,6}` is refused the same way when the bundle holds a choice task. Start, release, skip, comments and `refreshLock` stay open.
 
 **Discovery.** `cct` (comma-separated `challenges.cooperative_type` values) filters `tasks/box`,
 `markers/box`, `taskCluster` and `tasksInCluster`; a non-integer gives 400. The separate,
@@ -415,6 +422,11 @@ grants and guest tokens:
   everyone: 404 for other users, 403 `challenge_draft` for super-users.
   `release` stays open, so a lock taken before the challenge was disabled can be
   dropped.
+- Bundles (`tasks:edit`): a bundle is a draft when any of its tasks is. Reading,
+  updating, commenting on or setting the status of a draft bundle, `lockBundle` on
+  a draft task, and any `taskIds` member that is a draft answer as above. Creating
+  a bundle that holds a draft task answers a bare 404 for every app grant,
+  super-users included. Bundle delete, unbundle and `task/bundle/unlock` stay open.
 
 Discovery (`tasks/box`, `markers/box`, `extendedFind`) already lists enabled
 challenges in enabled projects only. Admin grants and web sessions are unchanged.
