@@ -26,6 +26,9 @@ CREATE TABLE choice_queue_items (
 );;
 
 # --- !Downs
+-- Queued answers end their far-future hold, so their tasks show in discovery again.
+UPDATE choice_pending SET hold_until = now(), updated_at = now()
+  WHERE state = 'pending' AND hold_until = '9999-12-31T00:00:00Z';;
 DROP TABLE IF EXISTS choice_queue_items;;
 DROP TABLE IF EXISTS choice_queues;;
 UPDATE choice_review_places SET state = 'open' WHERE state IN ('stale', 'gone');;
