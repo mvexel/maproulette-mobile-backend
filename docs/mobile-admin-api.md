@@ -273,7 +273,7 @@ is `400 invalid_request`.
 - `state`: `open`, `needs_visit`, `done` (OSM carries the suggested tags), `stale` (OSM changed
   since the survey), `gone` (the element was deleted) or `disagree` (an open place where guests
   gave different answers to one question; derived on each read, never stored). The confirm queue's
-  stale check sets `done`, `stale` and `gone`. `counts` has one key per state; `toReview` counts
+  stale check sets `done`, `stale` and `gone`; so does the hourly "On the map" check below. `counts` has one key per state; `toReview` counts
   `open`, `added` counts `done`.
 - `filter`: `agree` is open places where two or more guests gave the same answer; `visit` is
   `needs_visit`; `done` is `done`.
@@ -340,6 +340,15 @@ The queue as line-by-line GeoJSON (`application/geo+json-seq`, attachment
 `confirm-queue-<id>.geojson`): one FeatureCollection per task with its point (`@id`, `evidence`)
 and `cooperativeWork`, as maproulette.org's "Upload GeoJSON" takes it with "line-by-line" on.
 `404 no_queue` before the first run.
+
+### "On the map" (H1c)
+
+An hourly job (while guests are enabled) re-reads OSM, read-only, for queued edits not yet seen on
+the map, the least recently checked first, up to 200 places a run. When OSM carries a queued edit,
+the held guest answers that gave it become `on_map` (the guest's `published` and
+`byChallenge.onMap` in `GET /api/v2/mobile-guest/me`). A place whose queued edits are all on the map
+becomes `done`, one whose element was deleted `gone`. The generator does the same for answers OSM
+already carries when it runs.
 
 ## Field write policy
 

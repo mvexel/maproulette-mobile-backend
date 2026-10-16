@@ -312,7 +312,7 @@ Step B2, guest registration and guest tokens:
 | --- | --- |
 | `POST /oauth/mobile/guest` | Form `client_id` (a client with `guest`), no credential. `201 {"guestId", "guestSecret", "expiresAt"}`. The secret (43 characters) is returned once; the app keeps it in secure storage. `401 invalid_client`, `429 rate_limited` (100 per client IP per hour, `Retry-After`). |
 | `POST /oauth/mobile/token` | `grant_type=urn:maproulette:grant-type:guest`, `client_id`, `guest_id`, `guest_secret`. A token response with `scope: "guest"`, `expires_in` as for app tokens, and **no** refresh token: the secret mints the next one. `invalid_grant` (wrong secret, deleted or expired guest), `invalid_client`, or `guest_claimed` once the guest has been claimed. While guests are off the grant is `unsupported_grant_type`. |
-| `GET /api/v2/mobile-guest/me` | Guest bearer. `{"guestId", "state", "email": "none\|pending\|verified", "pending", "published", "expiresAt", "claimedAs"}`: `pending` and `published` count the guest's answers in those states (B3); `claimedAs` is `null` until claiming exists. Never the address. |
+| `GET /api/v2/mobile-guest/me` | Guest bearer. `{"guestId", "state", "email": "none\|pending\|verified", "pending", "published", "expiresAt", "claimedAs", "byChallenge"}`: `pending` counts the guest's pending answers (B3), `published` those on the map (`published` or `on_map`); `byChallenge` is `{"<challengeId>": {"pending", "onMap"}}` with the same counts per campaign, for campaigns where either is above 0 (H1c); `claimedAs` is `null` until claiming exists. Never the address. |
 | `DELETE /api/v2/mobile-guest` | Guest bearer. "Delete my data": `204`. |
 
 Step B3, pending answers. A pending answer is held on the backend and changes nothing in OSM or in
@@ -322,7 +322,7 @@ the task's status; claiming publishes it later.
 | --- | --- |
 | `POST /api/v2/task/:id/choice/pending` | Guest bearer, body as for `POST /task/:id/choice` (JSON, 1–2048 bytes). Any choice challenge (G1). Runs the choice check (same 60 s cache), then stores the answer and replaces the guest's earlier answer for the task. `200 {"taskId", "state": "pending", "answeredAt", "holdUntil", "expiresAt"}`: the hold is 7 days and the guest's expiry moves to at least 30 days after this answer. |
 | `DELETE /api/v2/task/:id/choice/pending` | Guest bearer. Withdraws the guest's pending answer: `204`, or `404 not_found`. |
-| `GET /api/v2/mobile-guest/pending?limit=&after=` | Guest bearer. Every answer of the guest, newest first: `{"items": [{"taskId", "challengeId", "state", "answeredAt", "holdUntil", "result"}], "next"}`. `limit` 1–100 (default 50); `after` is the previous page's `next`. |
+| `GET /api/v2/mobile-guest/pending?limit=&after=` | Guest bearer. Every answer of the guest, newest first: `{"items": [{"taskId", "challengeId", "state", "answeredAt", "holdUntil", "result"}], "next"}`. `state` is `pending`, `published`, `skipped_stale`, `superseded`, `expired`, `failed`, or `on_map` (H1c: a mapper added the answer's tags from the confirm queue, or OSM already carried them). `limit` 1–100 (default 50); `after` is the previous page's `next`. |
 
 Submit errors: `400 invalid_request`; `403 challenge_not_published` (field writes are off and the
 challenge is not enabled with tag `mobile-survey-v1`); `404 not_found` (unknown task, or its challenge or project is disabled: preview mode); `409 task_completed` (status

@@ -65,6 +65,9 @@ trait ChoicePendingStore {
   /** How many of the guest's answers are in each state. */
   def counts(guestId: UUID): Map[String, Int]
 
+  /** The same, per campaign (challenge id). */
+  def byChallenge(guestId: UUID): Map[Long, Map[String, Int]]
+
   /** The guest's answers in every state, newest first, starting below `before` (a row id). */
   def list(guestId: UUID, limit: Int, before: Option[Long]): List[PendingAnswer]
 
@@ -190,6 +193,19 @@ class ChoicePendingRepository @Inject() (db: Database) extends ChoicePendingStor
       ).on("guest" -> guestId.toString)
         .as((SqlParser.str("state") ~ SqlParser.int("n")).map { case state ~ n => state -> n }.*)
         .toMap
+    }
+
+  override def byChallenge(guestId: UUID): Map[Long, Map[String, Int]] =
+    db.withConnection { implicit c =>
+      SQL(
+        """SELECT challenge_id, state, count(*)::int AS n FROM choice_pending
+           WHERE guest_id={guest}::uuid GROUP BY challenge_id, state"""
+      ).on("guest" -> guestId.toString)
+        .as((SqlParser.long("challenge_id") ~ SqlParser.str("state") ~ SqlParser.int("n")).map {
+          case challenge ~ state ~ n => (challenge, state, n)
+        }.*)
+        .groupBy(_._1)
+        .map { case (challenge, rows) => challenge -> rows.map(r => r._2 -> r._3).toMap }
     }
 
   override def list(guestId: UUID, limit: Int, before: Option[Long]): List[PendingAnswer] =

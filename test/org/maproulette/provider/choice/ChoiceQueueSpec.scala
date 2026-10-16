@@ -115,18 +115,19 @@ class ChoiceQueueSpec extends PlaySpec {
       ElementFound(<node/>, 4, (Map("amenity" -> "bench") ++ tags).toMap)
 
     "queue answers whose question still holds" in {
-      check(work, found, read()) mustBe Checked(found, 0, stale = false)
+      check(work, found, read()) mustBe Checked(found, Nil, stale = false)
     }
     "count answers already on the map as done" in {
-      check(work, found, read("backrest" -> "yes")) mustBe Checked(found.drop(1), 1, stale = false)
+      check(work, found, read("backrest" -> "yes")) mustBe
+        Checked(found.drop(1), found.take(1), stale = false)
     }
     "flag a place whose question changed since the survey" in {
       check(work, found, read("material" -> "stone")) mustBe
-        Checked(found.take(1), 0, stale = true)
+        Checked(found.take(1), Nil, stale = true)
     }
     "flag a place that no longer matches, and spot one that is gone" in {
       check(work, found, ElementFound(<node/>, 4, Map("leisure" -> "picnic_table"))) mustBe
-        Checked(Nil, 0, stale = true)
+        Checked(Nil, Nil, stale = true)
       check(work, found, ElementGone) mustBe PlaceGone
     }
   }
