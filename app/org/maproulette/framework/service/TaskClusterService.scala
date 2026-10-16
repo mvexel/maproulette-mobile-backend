@@ -285,6 +285,8 @@ class TaskClusterService @Inject() (repository: TaskClusterRepository)
   /**
     * Fork only: `excludeStale=true` leaves out choice tasks whose OSM element was observed to no
     * longer match the stored payload (table choice_stale). Kept apart from the generic `cct`.
+    * A stale task someone already checked (done, or a held answer, often the very edit that made
+    * it stale) stays in, so the tally still counts it; Nearest leaves it out by its status or hold.
     * `excludePending=true` also leaves out tasks a guest holds with a pending answer.
     */
   private[service] def excludeStaleChoiceTasks(params: SearchParameters, query: Query): Query =
@@ -310,7 +312,10 @@ class TaskClusterService @Inject() (repository: TaskClusterRepository)
         FilterGroup(
           List(
             CustomParameter(
-              "NOT EXISTS (SELECT 1 FROM choice_stale cs WHERE cs.task_id = tasks.id)"
+              s"""(NOT EXISTS (SELECT 1 FROM choice_stale cs WHERE cs.task_id = tasks.id)
+                 OR tasks.status IN (1, 2, 5)
+                 OR EXISTS (SELECT 1 FROM choice_pending cp WHERE cp.task_id = tasks.id
+                   AND ${org.maproulette.provider.choice.ChoicePendingStore.holds("cp")}))"""
             )
           )
         )

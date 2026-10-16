@@ -38,6 +38,9 @@ MR_MOBILE_OSM_TOKEN_KEY=<base64-key>
 # Optional: comma-separated OSM user ids made MapRoulette super-users at startup.
 # Each must have signed in once. Super-users can use the mobile admin app.
 MR_SUPER_ACCOUNTS=<osm-user-id>
+# Optional: comma-separated Overpass endpoints for the campaign wizard, tried in
+# order when one can't be connected to. Empty or unset uses this default:
+OVERPASS_URLS=https://overpass-api.de/api/interpreter,https://overpass.private.coffee/api/interpreter
 ```
 
 Use only a hostname in `PUBLIC_HOST`, without `https://` or a path. Compose

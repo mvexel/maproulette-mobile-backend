@@ -74,6 +74,10 @@ class MobileCampaignRepository @Inject() (db: Database) {
             WHERE cp.task_id = t.id AND ${org.maproulette.provider.choice.ChoicePendingStore
       .holds("cp")}) AS held) h
           WHERE t.parent_id = c.id AND t.status NOT IN (4, 9)
+            -- As on the live page: an open place found stale (gone, retagged) and not held is
+            -- no longer offered, so it counts neither way.
+            AND NOT (t.status IN (0, 3) AND NOT h.held
+              AND EXISTS(SELECT 1 FROM choice_stale st WHERE st.task_id = t.id))
         ) s ON true
         WHERE c.cooperative_type = 3 AND NOT c.deleted AND NOT p.deleted
         ORDER BY c.modified DESC, c.id DESC LIMIT {limit}""")
