@@ -349,6 +349,14 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
       check(proxied) mustBe ChoiceResponse(502, Json.obj("error" -> "osm_unavailable"))
       stale(proxied) mustBe None
     }
+
+    "treat OSM's empty text/html 404 as an element that never existed" taggedAs ChoiceTag in {
+      val (task, node) = benchTask()
+      osm.elements.remove(("node", node))
+      osm.neverExisted += node
+      check(task).status must not be 502
+      stale(task) mustBe Some("element_gone")
+    }
   }
 
   "Campaign results" should {
