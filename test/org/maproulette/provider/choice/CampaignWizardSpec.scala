@@ -205,6 +205,7 @@ class CampaignWizardSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
       result(client.elements("query-a", 1)).map(_.value.size) mustBe Right(1)
       fake.count mustBe before + 1
       fake.queries.last mustBe "query-a"
+      fake.userAgents.last mustBe WizardOverpass.UserAgent
       // The create step reads OSM as it is now.
       result(client.elements("query-a", 1, cached = false)).isRight mustBe true
       fake.count mustBe before + 2
@@ -225,6 +226,9 @@ class CampaignWizardSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
       // A real query to the interpreter, not a status page some instances don't serve.
       fake.queries.last mustBe WizardOverpass.ProbeQuery
       fake.contentTypes.last must startWith("application/x-www-form-urlencoded")
+      fake.userAgents.last mustBe WizardOverpass.UserAgent
+      WizardOverpass.UserAgent must fullyMatch regex
+        """StreetTally/\S+ \(\+https://streettally\.osm\.lol; martijn@osm\.lol\)"""
       // Anything but 200 carries the start of the server's own answer.
       val answer = fake.answer
       fake.answer = _ => (500, "<p>runtime error:\n  " + "x" * 400 + "</p>")
