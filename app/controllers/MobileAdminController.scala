@@ -8,9 +8,9 @@ import play.api.mvc._
 import scala.concurrent.{ExecutionContext, Future}
 
 /**
-  * `/api/v2/mobile-admin/...`: mobile client management and the audit log, for `mobile:admin`
-  * bearer grants of current super-users only (see docs/mobile-admin-api.md). Web sessions and
-  * API keys get 403 `mobile_admin_only`.
+  * `/api/v2/mobile-admin/...`: mobile client management, the audit log and the write switch, for
+  * `mobile:admin` bearer grants of current super-users only (see docs/mobile-admin-api.md).
+  * Organizers may read the write switch. Gate: [[MobileAdminAccess]].
   */
 class MobileAdminController @Inject() (
     components: ControllerComponents,
@@ -36,27 +36,16 @@ class MobileAdminController @Inject() (
       else Json.obj("error"                -> code, "detail" -> detail)
     )
 
-  private def admin[A](request: Request[A])(work: User => Future[Result]): Future[Result] = {
-    val result =
-      if (!settings.enabled) Future.successful(NotFound)
-      else
-        (
-          request.attrs.get(MobileBearerIdentity.UserKey),
-          request.attrs.get(MobileBearerIdentity.ScopesKey)
-        ) match {
-          // The bearer filter checked this already; checked again so no route can skip it.
-          case (Some(user), Some(scopes))
-              if MobileScopes.isAdmin(scopes) && service.admins.isAdmin(user) =>
-            work(user)
-          case _ => Future.successful(problem(Forbidden, "mobile_admin_only"))
-        }
-    result.map(_.withHeaders(CACHE_CONTROL -> "no-store"))
-  }
+  private def admin[A](
+      request: Request[A],
+      capability: MobileCapability = MobileCapability.Operate
+  )(work: User => Future[Result]): Future[Result] =
+    MobileAdminAccess.capability(request, settings, service, capability)(work)
 
   private def db[A](operation: => A): Future[A] = service.storage(operation)
 
   def getWritePolicy: Action[AnyContent] = Action.async { request =>
-    admin(request)(_ =>
+    admin(request, MobileCapability.SeeWritePolicy)(_ =>
       db(
         Ok(
           Json.obj(

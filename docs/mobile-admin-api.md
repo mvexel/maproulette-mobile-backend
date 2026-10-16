@@ -9,7 +9,8 @@ the approved mobile OAuth clients and show an audit log. They exist only while
 ## Access
 
 Every request needs `Authorization: Bearer <access token>` from a `mobile:admin` grant, and the
-signed-in user must be a MapRoulette super-user **at the time of the request**. A web session or
+signed-in user must be a MapRoulette super-user **at the time of the request**. Organizers use a
+`mobile:organize` grant instead, for part of the API (see [Organizers](#organizers)). A web session or
 API key gets `403 mobile_admin_only`. A demoted user gets `403 admin_required`. Any other bearer
 grant gets `403 insufficient_scope`. Responses carry `Cache-Control: no-store`.
 
@@ -33,6 +34,54 @@ Choice payloads may opt into `liveMissingQuestions: true`. The choice check then
 `questionIds` for template questions whose guarded tags are still absent in live OSM. When none
 remain, the task becomes ineligible. A selected answer is checked again against fresh OSM before
 upload; a changed selected tag returns `409 task_ineligible` without an edit or task status change.
+
+### Organizers
+
+A `mobile:organize` grant ([mobile-oauth.md](mobile-oauth.md#organizer-scope-mobileorganize))
+reaches the same stock routes as an admin grant, where upstream's project checks apply, and these
+admin routes, for the projects the organizer runs (Write or better, not their Home project):
+
+| Method | Route | Organizer |
+| --- | --- | --- |
+| GET | `/api/v2/mobile-admin/campaigns`, `/projects` | Their projects' only |
+| PUT | `/api/v2/mobile-admin/projects/:id/enabled` | Their projects |
+| GET, PUT | `/api/v2/mobile-admin/challenges/:id/live`; POST `.../live/rotate` | Their projects' campaigns |
+| GET | `/api/v2/mobile-admin/challenges/:id/results` | Their projects' campaigns |
+| POST | `/api/v2/mobile-admin/challenges/:id/queue`; GET `.../queue/export` | Their projects' campaigns |
+| GET | `/api/v2/mobile-admin/write-policy` | Read only |
+
+Anything else of the admin API (clients, scope sets, audit, setting the write switch, creating
+projects, organizers) is `403 insufficient_scope` at the bearer filter. A route for a project or
+campaign that isn't theirs is `403 organizer_forbidden`, and an organizer no longer on the list
+gets `403 organizer_required`. Their stock writes are audited as for admins.
+
+Super-users keep the list:
+
+#### `GET /api/v2/mobile-admin/organizers`
+
+`{"organizers": [{"userId", "osmId", "name", "grantedBy", "createdAt", "projects": [{"id",
+"name", "displayName", "role": "admin"|"write"}]}]}`, by name. `projects` are the person's own
+project grants of Write or better, without their Home project.
+
+#### `POST /api/v2/mobile-admin/organizers`
+
+`{"osmUsername", "projectId", "role": "write"|"admin"}`. Gives the person that upstream role on
+the project (replacing any other role they held there, as upstream's
+`PUT /api/v2/user/:osmId/project/:pid/:role`) and puts them on the list, audited as
+`organizer.add`. Returns the organizer as listed. The username matches without regard to case;
+the person must have signed in to MapRoulette once (`404 user_not_found`). An unknown or deleted
+project is `404 project_not_found`. Adding someone to another project is the same call.
+
+#### `DELETE /api/v2/mobile-admin/organizers/:userId`
+
+Takes them off the list (`204`, audited as `organizer.remove`; `404` if they weren't on it).
+Their project roles stay, as upstream roles.
+
+#### `DELETE /api/v2/mobile-admin/organizers/:userId/projects/:projectId`
+
+Removes their upstream role on the project and returns the organizer (audited as
+`organizer.project.remove`). Upstream refuses to remove a project's last administrator:
+`409 last_project_admin`.
 
 ## Clients
 

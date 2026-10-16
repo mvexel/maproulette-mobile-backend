@@ -54,6 +54,34 @@ object MobileAdminRoutes {
   def stockWrite(method: String, path: String): Boolean = method != "GET" && !adminApi(path)
 }
 
+/**
+  * Routes for `mobile:organize` grants (D8): the stock challenge routes of [[MobileAdminRoutes]],
+  * whose upstream project checks apply as for anyone, and the campaign part of the admin API. The
+  * controllers check the project of each campaign route. No clients, audit, organizers, project
+  * creation or write switch changes.
+  */
+object MobileOrganizeRoutes {
+  private val challenge = "/api/v2/mobile-admin/challenges/[0-9]+"
+
+  def adminApi(method: String, path: String): Boolean = method match {
+    case "GET" =>
+      Set(
+        "/api/v2/mobile-admin/campaigns",
+        "/api/v2/mobile-admin/projects",
+        "/api/v2/mobile-admin/write-policy"
+      ).contains(path) || path.matches(s"$challenge/(live|results|queue/export)")
+    case "PUT" =>
+      path.matches("/api/v2/mobile-admin/projects/[0-9]+/enabled") ||
+        path.matches(s"$challenge/live")
+    case "POST" => path.matches(s"$challenge/(live/rotate|queue)")
+    case _      => false
+  }
+
+  def permits(method: String, path: String, query: Map[String, Seq[String]]): Boolean =
+    MobileAdminRoutes.permits(method, path, query) &&
+      (!MobileAdminRoutes.adminApi(path) || adminApi(method, path))
+}
+
 /** An explicit route allowlist: several legacy GET routes mutate data or disclose API keys. */
 object MobileReadRoutes {
   private val number = "[+-]?[0-9]+(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?"
@@ -367,7 +395,8 @@ object MobileFieldRoutes {
           "/oauth/mobile/revoke",
           "/oauth/mobile/guest",
           "/api/v2/mobile-admin/clients",
-          "/api/v2/mobile-admin/projects"
+          "/api/v2/mobile-admin/projects",
+          "/api/v2/mobile-admin/organizers"
         ).contains(request.path) || MobileGuestRoutes.own(request.method, request.path) ||
           MobileLiveRoutes.rotate(request.path) ||
           // The confirm queue reads OSM and writes only our tables (H1b).
@@ -386,7 +415,9 @@ object MobileFieldRoutes {
           // Review marks write only the review tables.
           MobileReviewRoutes.mark(request.method, request.path)
       case "DELETE" =>
-        MobileGuestRoutes.own(request.method, request.path) ||
+        // Organizers: our table and upstream project grants, never a task or OSM.
+        request.path.matches("/api/v2/mobile-admin/organizers/[0-9]+(/projects/[0-9]+)?") ||
+          MobileGuestRoutes.own(request.method, request.path) ||
           MobileReviewRoutes.mark(request.method, request.path)
       case _ => false
     })
@@ -632,6 +663,7 @@ class MobileBearerFilter @Inject() (
     val read = MobileReadRoutes.permits(request.method, request.path) ||
       MobileReviewRoutes.permits(request.method, request.path)
     val admin       = MobileAdminRoutes.permits(request.method, request.path, request.queryString)
+    val organize    = MobileOrganizeRoutes.permits(request.method, request.path, request.queryString)
     val guest       = guests.enabled && MobileGuestRoutes.permits(request.method, request.path)
     val claimRoute  = MobileClaimRoutes.permits(request.method, request.path)
     val switchedOff = write && settings.writeControlEnabled && !writePolicy.enabled
@@ -652,10 +684,14 @@ class MobileBearerFilter @Inject() (
       // MobileOAuthService.authenticate has already checked the scopes against the client.
       grant.flatMap(value => MobileScopes.parse(value.scope).map(value -> _)) match {
         case Some((value, scopes)) =>
-          // Admin grants reach only admin routes; app grants never do.
-          val adminGrant = MobileScopes.isAdmin(scopes)
-          if (if (adminGrant) !admin else !write && !read) denied(403, "insufficient_scope")
-          else if (!adminGrant && settings.writeControlEnabled &&
+          // Admin grants reach only admin routes, organizer grants only organizer routes; app
+          // grants reach neither.
+          val adminGrant    = MobileScopes.isAdmin(scopes)
+          val organizeGrant = MobileScopes.isOrganize(scopes)
+          val staffGrant    = adminGrant || organizeGrant
+          if (if (adminGrant) !admin else if (organizeGrant) !organize else !write && !read)
+            denied(403, "insufficient_scope")
+          else if (!staffGrant && settings.writeControlEnabled &&
                    MobileGuestRoutes.guestOnlyWhenDisabled(request.method, request.path) &&
                    !writePolicy.enabled) denied(403, "mobile_writes_disabled")
           else if (write && !scopes.contains(MobileScopes.Write) ||
@@ -672,9 +708,11 @@ class MobileBearerFilter @Inject() (
               // Re-checked on every request, so a demotion takes effect at once.
               case Some(user) if adminGrant && !admins.isAdmin(user) =>
                 denied(403, "admin_required")
+              case Some(user) if organizeGrant && !admins.isOrganizer(user.id) =>
+                denied(403, "organizer_required")
               case Some(user) =>
                 val gate =
-                  if (adminGrant) Future.successful(None)
+                  if (staffGrant) Future.successful(None)
                   else
                     draftGate(Some(user), write, request).flatMap {
                       case None => choiceGate(request)
@@ -690,7 +728,7 @@ class MobileBearerFilter @Inject() (
                         .addAttr(MobileBearerIdentity.FamilyKey, value.familyId)
                         .addAttr(MobileBearerIdentity.ClientKey, value.clientId)
                     )
-                    if (adminGrant && MobileAdminRoutes.stockWrite(request.method, request.path))
+                    if (staffGrant && MobileAdminRoutes.stockWrite(request.method, request.path))
                       result.transformWith(outcome => auditStockWrite(user, request, outcome))
                     else if (switchedOff)
                       result

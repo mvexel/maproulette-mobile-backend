@@ -45,7 +45,7 @@ Default lifetimes are 10 minutes for a browser interaction, 2 minutes for an aut
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /oauth/mobile/authorize` | Start browser login with `response_type=code`, `client_id`, exact `redirect_uri`, `scope` (`tasks:read`, `tasks:read tasks:write`, `tasks:read tasks:write osm:tagfix`, `tasks:read tasks:write tasks:edit` or `mobile:admin`), `state`, `code_challenge` and `code_challenge_method=S256`. |
+| `GET /oauth/mobile/authorize` | Start browser login with `response_type=code`, `client_id`, exact `redirect_uri`, `scope` (`tasks:read`, `tasks:read tasks:write`, `tasks:read tasks:write osm:tagfix`, `tasks:read tasks:write tasks:edit`, `mobile:admin` or `mobile:organize`), `state`, `code_challenge` and `code_challenge_method=S256`. |
 | `GET /oauth/mobile/callback` | Server callback from OSM. The browser interaction must match persisted state and its separate HTTP-only cookie. |
 | `POST /oauth/mobile/consent` | Browser consent form with a transaction-bound CSRF value. Approval redirects to the app with only a short-lived code and its original state; denial returns `access_denied`. |
 | `POST /oauth/mobile/token` | Form-encoded authorization-code exchange or refresh. |
@@ -89,7 +89,7 @@ it. Enabling it again restores its grants.
 
 ## Scope and credential lifecycle
 
-Scopes are a space-separated set. Every app grant includes `tasks:read`; `tasks:write` is optional and only granted to clients whose `scopes` configuration lists it. `osm:tagfix` is optional too, valid only together with `tasks:write`, and only granted to clients configured for it; new grants also need a valid `osmTokenKey`. Unknown, duplicate, write-only or `osm:tagfix`-without-`tasks:write` requests fail with `invalid_scope`. `tasks:edit` (see [Editor scope](#editor-scope-tasksedit)) is likewise valid only together with `tasks:write`, never with `osm:tagfix`, and only for clients configured for it. Stored and returned scope strings use the canonical order `tasks:read tasks:write tasks:edit osm:tagfix`. `mobile:admin` stands alone (see [Admin scope](#admin-scope-mobileadmin)); combining it with any other scope is `invalid_scope`.
+Scopes are a space-separated set. Every app grant includes `tasks:read`; `tasks:write` is optional and only granted to clients whose `scopes` configuration lists it. `osm:tagfix` is optional too, valid only together with `tasks:write`, and only granted to clients configured for it; new grants also need a valid `osmTokenKey`. Unknown, duplicate, write-only or `osm:tagfix`-without-`tasks:write` requests fail with `invalid_scope`. `tasks:edit` (see [Editor scope](#editor-scope-tasksedit)) is likewise valid only together with `tasks:write`, never with `osm:tagfix`, and only for clients configured for it. Stored and returned scope strings use the canonical order `tasks:read tasks:write tasks:edit osm:tagfix`. `mobile:admin` and `mobile:organize` each stand alone (see [Admin scope](#admin-scope-mobileadmin) and [Organizer scope](#organizer-scope-mobileorganize)); combining either with any other scope is `invalid_scope`.
 
 `tasks:read` permits the SDK's challenge discovery/detail/tags, task listing/detail, spatial queries, read-only marker query, the choice check (`GET /api/v2/task/:id/choice/check`, no query or body) and the new identity endpoint. The HTTP method **and exact route pattern** must be allowlisted in `MobileReadRoutes`. Legacy `whoami`, task-start/release and mutation routes are excluded. The user's existing permissions still apply. The marker query is a read-only PUT; not every GET is read-only.
 
@@ -160,6 +160,29 @@ The staging registration is the public web client `maproulette-mobile-admin` wit
 `https://admin.mr-dev.osm.lol/callback` and `scopes = ["mobile:admin"]`. It is not
 `tasks:read mobile:admin`: with `tasks:read`, the admin token would also open the app read
 routes, and the reads the creator needs are already in the admin allowlist.
+
+## Organizer scope (`mobile:organize`)
+
+`mobile:organize` (D8) is the admin web app's grant for campaign organizers who aren't
+super-users. Like `mobile:admin` it stands alone. A client that may hold `mobile:admin` may also
+be granted `mobile:organize`, so the admin app uses one client: it asks for `mobile:admin` and,
+when that comes back `access_denied` with `MapRoulette super-user required`, asks again for
+`mobile:organize`.
+
+- **Listed organizers only.** The user must be on the organizer list (`mobile_memberships`,
+  evolution 145), which super-users keep on the admin app's Organizers screen. Anyone else goes
+  back to the app at the OSM callback with `error=access_denied` and
+  `error_description=MapRoulette organizer required`. The check is repeated on consent, at code
+  exchange, at every refresh and on every request (`403 organizer_required`), so removing someone
+  from the list takes effect on their next request.
+- **Their projects only.** An organizer runs the campaigns of projects where they hold the
+  upstream project role Write or better (`Permission.effectiveRole`, their own grants or their
+  teams'), except their Home project. The list does not say which projects; project grants do.
+- **Routes.** The stock challenge routes of the admin allowlist, which apply upstream's project
+  checks as for anyone, and the campaign part of the admin API. See
+  [mobile-admin-api.md](mobile-admin-api.md#organizers). The consent page says the app runs
+  campaigns in the projects they organize, that every change is recorded, and that it cannot
+  manage apps or turn saving answers on or off.
 
 ## CORS
 

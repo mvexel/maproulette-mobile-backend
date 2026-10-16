@@ -16,8 +16,8 @@ import scala.util.Try
   *   - `GET /api/v2/live/:token`: public, no credential, link-only. Only what the page shows: no
   *     user, guest or changeset, and answers only when the page's settings show them.
   *   - `GET|PUT /api/v2/mobile-admin/challenges/:id/live` and `POST .../live/rotate`: the page's
-  *     settings and token, for `mobile:admin` grants of super-users only. Changes are audited
-  *     without the token.
+  *     settings and token, for super-users and the campaign's organizers ([[MobileAdminAccess]]).
+  *     Changes are audited without the token.
   */
 class MobileLiveController @Inject() (
     components: ControllerComponents,
@@ -35,22 +35,10 @@ class MobileLiveController @Inject() (
       else Json.obj("error"                -> code, "detail" -> detail)
     )
 
-  private def admin[A](request: Request[A])(work: User => Future[Result]): Future[Result] = {
-    val result =
-      if (!settings.enabled) Future.successful(NotFound)
-      else
-        (
-          request.attrs.get(MobileBearerIdentity.UserKey),
-          request.attrs.get(MobileBearerIdentity.ScopesKey)
-        ) match {
-          // The bearer filter checked this already; checked again so no route can skip it.
-          case (Some(user), Some(scopes))
-              if MobileScopes.isAdmin(scopes) && service.admins.isAdmin(user) =>
-            work(user)
-          case _ => Future.successful(problem(Forbidden, "mobile_admin_only"))
-        }
-    result.map(_.withHeaders(CACHE_CONTROL -> "no-store"))
-  }
+  private def admin[A](request: Request[A], challengeId: Long)(
+      work: User => Future[Result]
+  ): Future[Result] =
+    MobileAdminAccess.challenge(request, settings, service, challengeId)(work)
 
   private def db[A](operation: => A): Future[A] = service.storage(operation)
 
@@ -94,7 +82,7 @@ class MobileLiveController @Inject() (
   }
 
   def get(challengeId: Long): Action[AnyContent] = Action.async { request =>
-    admin(request) { _ =>
+    admin(request, challengeId) { _ =>
       db {
         pages.byChallenge(challengeId) match {
           case Some(page)                                 => Ok(page.adminJson)
@@ -108,7 +96,7 @@ class MobileLiveController @Inject() (
   /** Creates the page on first use; see [[MobileLiveController.parseUpdate]] for the body. */
   def update(challengeId: Long): Action[JsValue] = Action.async(parse.tolerantJson(MaxBody)) {
     request =>
-      admin(request) { user =>
+      admin(request, challengeId) { user =>
         MobileLiveController.parseUpdate(request.body) match {
           case Left(errors) => Future.successful(problem(BadRequest, "invalid_request", errors))
           case Right(update) =>
@@ -132,7 +120,7 @@ class MobileLiveController @Inject() (
 
   /** A new token: the old link answers 404 from now on. */
   def rotate(challengeId: Long): Action[AnyContent] = Action.async { request =>
-    admin(request) { user =>
+    admin(request, challengeId) { user =>
       db {
         pages.rotate(challengeId) match {
           case None => problem(NotFound, "no_live_page")

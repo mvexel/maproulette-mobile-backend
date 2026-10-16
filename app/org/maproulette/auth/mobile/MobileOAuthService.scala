@@ -50,9 +50,8 @@ class MobileOAuthService @Inject() (
       actorSystem
     )
 
-  /** An admin grant needs a current super-user; other grants need nothing more. */
-  def adminAllowed(grant: MobileGrant): Boolean =
-    !MobileScopes.isAdmin(grant.scope) || admins.isAdmin(grant.userId)
+  /** An admin grant needs a current super-user, an organizer grant a listed organizer. */
+  def adminAllowed(grant: MobileGrant): Boolean = admins.mayHold(grant.scope, grant.userId)
 
   // Older production config files need no mobile dispatcher while the feature is disabled.
   private implicit lazy val executionContext: ExecutionContext =
@@ -94,7 +93,8 @@ class MobileOAuthService @Inject() (
             Left(new InvalidRequest("Invalid redirect URI"))
           else if (params.get("response_type") != Some("code"))
             Left(new InvalidRequest("Only code response type is supported"))
-          else if (!scopes.exists(_.subsetOf(client.scopes))) Left(new InvalidScope())
+          else if (!scopes.exists(_.subsetOf(MobileScopes.granted(client.scopes))))
+            Left(new InvalidScope())
           else if (scopes.exists(_.contains(MobileScopes.Write)) && !settings.allowTaskWrites)
             Left(new InvalidScope())
           // No token key: an OSM token could not be stored, so osm:tagfix is not offered.
