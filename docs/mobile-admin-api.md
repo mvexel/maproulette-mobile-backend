@@ -230,6 +230,71 @@ participant site.
   apps do. `hashtags` come from the changeset comment.
 - The response never carries a user, guest, OSM element or changeset.
 
+## Review page
+
+H1a. Mappers read a campaign's held guest answers and mark places. The page is reached by the
+campaign's live page token (above), and answers 404 like it: `not_found` for an unknown or rotated
+token, `turned_off` when the live page is off. A place is a task of the campaign with a point that
+has a held guest answer (not "I'm not sure"), or that someone marked. Every response has
+`Cache-Control: no-store`, `X-Robots-Tag: noindex` and `Referrer-Policy: no-referrer`. The routes
+are open while field writes are off, and CORS answers the claim origin and the admin origin,
+without credentials.
+
+Guest answers of a campaign with a live page stay `pending` after their guest expires or is
+purged (then without a guest), so they can be reviewed.
+
+### `GET /api/v2/review/:token[?filter=all|agree|visit|done&after=<placeId>&limit=1..200]`
+
+No credential needed. With an app grant's bearer, each place also says whether this mapper skipped
+it. `limit` defaults to 100; `next` is present while more places match. Anything else in the query
+is `400 invalid_request`.
+
+```json
+{
+  "campaign": {"name": "Woodbine entrance doors", "hashtags": ["#StreetTally"],
+               "changesetComment": "Add entrance details #StreetTally"},
+  "counts": {"toReview": 47, "added": 12, "needsVisit": 3},
+  "places": [
+    {"id": 1234, "osm": {"type": "node", "id": 14178183367}, "lon": -111.906812, "lat": 40.7538166,
+     "name": null, "ref": null, "state": "open", "skipped": false,
+     "suggestions": [
+       {"question": "door", "prompt": "How does this door open?", "answer": "sliding",
+        "label": "Sliding", "tags": {"door": "sliding"}, "people": 2, "day": "2026-10-14",
+        "current": {"door": null}}],
+     "reports": [
+       {"outcome": "moved", "label": "It's moved", "people": 1, "day": "2026-10-14",
+        "lon": -111.90679, "lat": 40.75382}]}
+  ],
+  "next": 1235
+}
+```
+
+- `state`: `open`, `needs_visit` or `done` (OSM carries the suggested tags; set by H1c).
+  `counts.toReview`, `added` and `needsVisit` count the campaign's places in each state.
+- `filter`: `agree` is open places where two or more guests gave the same answer; `visit` is
+  `needs_visit`; `done` is `done`.
+- `suggestions`: one per question and answer, merged across guests, in question order. `tags` are
+  the option's tag changes (null for a removed key); `current` is each of those keys in the task's
+  imported properties. `day` is the UTC date of the latest such answer.
+- `reports`: one per outcome id (built-in or the campaign's own), with the latest reported spot
+  when there is one.
+- No guest id or time finer than a day is ever sent.
+
+### `PUT` / `DELETE /api/v2/review/:token/places/:id/skip`
+
+Hides or unhides the place for this mapper only. Returns the updated place.
+
+### `PUT` / `DELETE /api/v2/review/:token/places/:id/needs-visit`
+
+Sets or clears the shared "Needs a visit" mark, audited as `review.needs_visit` or
+`review.needs_visit_cleared` with the mapper's user id. Returns the updated place. `409 done` when
+setting it on a place OSM already carries.
+
+Marks need a bearer from an app grant with `tasks:read` (the review page's client is
+`street-tally-review`, public, PKCE, scope `tasks:read`); without one they return
+`401 sign_in_required`. They write only the review tables, never a task or OSM. `404 not_found` for
+an id that isn't a place of the campaign. Guest and admin grants get `403 insufficient_scope`.
+
 ## Field write policy
 
 On deployments using `conf/mobile-field.conf`,

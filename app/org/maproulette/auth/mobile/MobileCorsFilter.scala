@@ -21,6 +21,8 @@ import scala.concurrent.ExecutionContext
   *     revoke and identity routes) and the live progress page's read (`/api/v2/live/:token`)
   *     answer the claim origin, which serves the participant site, without credentials. They
   *     answer no other origin.
+  *   - The review page's routes (`/api/v2/review/...`, H1a) answer the claim origin and the admin
+  *     origin, without credentials, and no other origin.
   *   - Everything else goes to Play's filter unchanged.
   * With mobile OAuth disabled, every request goes to Play's filter.
   */
@@ -53,7 +55,10 @@ object MobileCorsFilter {
   /** Paths where only the admin origin (and for the claim routes, the claim origin) gets CORS. */
   def exclusive(path: String): Boolean =
     MobileAdminRoutes.adminApi(path) || OAuthPaths.contains(path) || claimApi(path) ||
-      MobileLiveRoutes.public(path)
+      MobileLiveRoutes.public(path) || reviewPath(path)
+
+  private def reviewPath(path: String): Boolean =
+    Seq("GET", "PUT").exists(MobileReviewRoutes.permits(_, path))
 
   private def claimApi(path: String): Boolean =
     path == "/api/v2/mobile-claim" || path.matches("/api/v2/mobile-claim(/[A-Za-z0-9-]+)+")
@@ -70,14 +75,18 @@ object MobileCorsFilter {
     // The live progress page is served from the participant site too (BACKLOG #12).
     case "GET" =>
       path == "/oauth/mobile/me" || path.matches("/api/v2/mobile-claim/[0-9]+") ||
-        MobileLiveRoutes.public(path)
-    case _ => false
+        MobileLiveRoutes.public(path) || MobileReviewRoutes.read(method, path)
+    // The review page's marks (H1a), from the participant site.
+    case "PUT" | "DELETE" => MobileReviewRoutes.mark(method, path)
+    case _                => false
   }
   private def claimPath(path: String): Boolean =
-    claimEligible("POST", path) || claimEligible("GET", path)
+    claimEligible("POST", path) || claimEligible("GET", path) || claimEligible("PUT", path)
 
+  // The review page is also served from the admin app (H1a).
   private def eligible(method: String, path: String): Boolean =
-    if (OAuthPaths.contains(path)) method == "POST" else MobileAdminRoutes.matches(method, path)
+    if (OAuthPaths.contains(path)) method == "POST"
+    else MobileAdminRoutes.matches(method, path) || MobileReviewRoutes.permits(method, path)
 
   private def vary(result: Result): Result = {
     val current = result.header.headers.get("Vary").filter(_.nonEmpty)

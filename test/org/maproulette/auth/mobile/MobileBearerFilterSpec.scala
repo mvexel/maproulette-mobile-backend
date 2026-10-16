@@ -594,6 +594,38 @@ class MobileBearerFilterSpec extends PlaySpec with MockitoSugar with BeforeAndAf
       ) mustBe "123"
     }
 
+    "let a tasks:read grant reach the review page and its marks, even with writes off" in {
+      val oauth = mock[MobileOAuthService]
+      val users = mock[UserService]
+      when(oauth.authenticate(token)).thenReturn(Future.successful(Some(grant)))
+      when(users.retrieve(123)).thenReturn(Some(user))
+      val policy = mock[MobileWritePolicy]
+      when(policy.enabled).thenReturn(false)
+      val filter = new MobileBearerFilter(
+        settings(true, writeControlEnabled = true),
+        oauth,
+        users,
+        MobileAdminCheck.Nobody,
+        mock[MobileAdminRepository],
+        policy
+      )
+      val page = "/api/v2/review/" + ("b" * 43)
+      Seq(
+        bearer(GET, page),
+        bearer(GET, s"$page?filter=agree&after=9&limit=50"),
+        bearer(PUT, s"$page/places/123/skip"),
+        bearer(DELETE, s"$page/places/123/skip"),
+        bearer(PUT, s"$page/places/123/needs-visit"),
+        bearer(DELETE, s"$page/places/123/needs-visit")
+      ).foreach(request => contentAsString(filter.apply(next)(request)) mustBe "123")
+      status(filter.apply(next)(bearer(PUT, s"$page/places/123/skip?x=1"))) mustBe BAD_REQUEST
+      status(filter.apply(next)(bearer(POST, s"$page/places/123/skip"))) mustBe FORBIDDEN
+      status(filter.apply(next)(bearer(PUT, s"$page/places/123/done"))) mustBe FORBIDDEN
+      // Without a bearer the request reaches the controller, which asks for a sign-in.
+      contentAsString(filter.apply(next)(FakeRequest(PUT, s"$page/places/123/skip"))) mustBe
+        "legacy"
+    }
+
     "reject mutating GETs, credential-returning identity, other methods and ambiguous paths" in {
       val oauth  = mock[MobileOAuthService]
       val filter = new MobileBearerFilter(settings(true), oauth, mock[UserService])
