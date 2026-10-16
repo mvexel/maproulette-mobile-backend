@@ -113,6 +113,11 @@ class ChoiceQueueServiceSpec(implicit val application: Application) extends Fram
       .as(SqlParser.str("state").*)
   }
 
+  private def reasons(t: Task): Seq[Option[String]] = db.withConnection { implicit c =>
+    SQL"SELECT result->>'reason' AS reason FROM choice_pending WHERE task_id = ${t.id} ORDER BY id"
+      .as(SqlParser.get[Option[String]]("reason").*)
+  }
+
   private def detect(): ChoiceQueue.OnMapReport = Await.result(service.detect(1000), 30.seconds)
 
   private def generate(id: Long): Option[ChoiceQueue.Report] =
@@ -156,7 +161,9 @@ class ChoiceQueueServiceSpec(implicit val application: Application) extends Fram
       heldForever(changed) mustBe Seq(false)
       // H1c: the answer OSM already carried is on the map.
       rows(onMap) mustBe Seq("on_map")
-      rows(gone) mustBe Seq("pending")
+      // KI-1: the answer on the deleted element is skipped, not left waiting.
+      rows(gone) mustBe Seq("skipped_stale")
+      reasons(gone) mustBe Seq(Some("element_gone"))
 
       val queue = challengeDAL.retrieveById(first.queueChallengeId).get
       queue.name mustBe "Benches: confirm survey answers"
@@ -241,6 +248,8 @@ class ChoiceQueueServiceSpec(implicit val application: Application) extends Fram
       rows(door) mustBe Seq("pending", "on_map")
       state(door) mustBe None
       state(deleted) mustBe Some("gone")
+      rows(deleted) mustBe Seq("skipped_stale")
+      reasons(deleted) mustBe Seq(Some("element_gone"))
       def lastChecked = db.withConnection { implicit c =>
         SQL"SELECT max(checked_at)::text AS at FROM choice_queue_items WHERE source_task_id = ${deleted.id}"
           .as(SqlParser.str("at").single)
@@ -258,6 +267,59 @@ class ChoiceQueueServiceSpec(implicit val application: Application) extends Fram
               WHERE source_task_id = ${door.id} AND on_map_at IS NOT NULL"""
           .as(SqlParser.scalar[Long].single)
       } mustBe 2
+    }
+
+    "mark a queued edit stale when its key changes on OSM, and leave it out (H1d)" taggedAs ChoiceTag in {
+      val campaign = newChallenge("Repaints")
+      val bench    = task(campaign, 8831)
+      val other    = task(campaign, 8832)
+      answer(bench, "backrest" -> "yes", "material" -> "wood")
+      answer(bench, "material" -> "wood")
+      answer(other, "backrest" -> "no")
+      osm.put("node", 8831, Map("amenity" -> "bench"))
+      osm.put("node", 8832, Map("amenity" -> "bench"))
+      generate(campaign.id).get.queued mustBe 3
+      Await.result(service.exportQueue(campaign.id), 10.seconds).get.size mustBe 3
+
+      // Someone tags the bench stone after it was queued as wood; the backrest still holds.
+      osm.edit("node", 8831)(_ + ("material" -> "stone"))
+      val report = detect()
+      report.stale mustBe 1
+      report.failures mustBe 0
+      state(bench) mustBe Some("stale")
+      rows(bench) mustBe Seq("skipped_stale", "skipped_stale")
+      reasons(bench) mustBe Seq(Some("key_changed"), Some("key_changed"))
+      state(other) mustBe None
+      rows(other) mustBe Seq("pending")
+      // The stale edit is left out of the export; the backrest edit stays.
+      val lines = Await.result(service.exportQueue(campaign.id), 10.seconds).get
+      lines.size mustBe 2
+      lines
+        .flatMap(l =>
+          ((l \ "cooperativeWork" \ "operations")(0) \ "data" \ "operations")(0)
+            .asOpt[JsObject]
+            .map(op => (op \ "data").as[JsObject].keys.toSeq)
+        )
+        .flatten
+        .sorted mustBe
+        Seq("backrest", "backrest")
+
+      def checks = db.withConnection { implicit c =>
+        SQL"""SELECT question || ' ' || (checked_at IS NOT NULL) || ' ' || (stale_at IS NOT NULL)
+              FROM choice_queue_items WHERE source_task_id = ${bench.id} ORDER BY question"""
+          .as(SqlParser.str(1).*)
+      }
+      checks mustBe Seq("backrest true false", "material true true")
+      // The backrest lands; the place stays stale, since one of its edits never will.
+      osm.edit("node", 8831)(_ + ("backrest" -> "yes"))
+      detect().onMap mustBe 1
+      state(bench) mustBe Some("stale")
+      // The element leaving the campaign's filter makes every waiting edit stale.
+      osm.edit("node", 8832)(_ - "amenity")
+      detect().stale mustBe 1
+      state(other) mustBe Some("stale")
+      rows(other) mustBe Seq("skipped_stale")
+      Await.result(service.exportQueue(campaign.id), 10.seconds).get.size mustBe 1
     }
   }
 }
