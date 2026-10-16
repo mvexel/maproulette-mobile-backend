@@ -197,7 +197,7 @@ class CampaignWizard @Inject() (
             input.projectId,
             set.instruction,
             enabled = false,
-            checkinComment = s"Street Tally: ${input.name} #StreetTally",
+            checkinComment = changesetComment(input.name, input.place, input.eventDate),
             checkinSource = "survey",
             requiresLocal = true
           ),
@@ -281,6 +281,29 @@ object CampaignWizard {
 
   /** The admin's Publish tag (MobileChoicePendingService.PublishedTag, MobileCampaigns). */
   val PublishedTag = "mobile-survey-v1"
+
+  /** "#StreetTallyWoodbineFoodHall": as the admin's hashtag() (src/wizard/words.ts), at most 40 characters. */
+  def hashtag(place: String): String = {
+    val plain = java.text.Normalizer
+      .normalize(place, java.text.Normalizer.Form.NFKD)
+      .replaceAll("[\\u0300-\\u036f]", "")
+    val camel =
+      "[A-Za-z0-9]+".r.findAllIn(plain).map(w => w.take(1).toUpperCase + w.drop(1)).mkString
+    s"#StreetTally$camel".take(40)
+  }
+
+  /**
+    * The changeset comment Iris signed off (admin #30, words.ts changesetComment), so mappers see
+    * one string in the admin, on the review page and in OSM.
+    */
+  def changesetComment(name: String, place: String, eventDate: Option[LocalDate]): String = {
+    val day = eventDate.map(d =>
+      ", " + d.format(
+        java.time.format.DateTimeFormatter.ofPattern("d MMMM yyyy", java.util.Locale.UK)
+      )
+    )
+    s"From a Street Tally survey for $name${day.getOrElse("")}. Checked by me. #StreetTally ${hashtag(place)}"
+  }
 
   /** Centres snap to about 50 m, so nearby searches share Overpass answers and the create step. */
   def round(area: SearchArea): SearchArea =

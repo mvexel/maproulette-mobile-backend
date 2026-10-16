@@ -256,7 +256,7 @@ Overpass didn't answer.
 "name", "description", "eventDate"?, "projectId"}`. Reads Overpass again (no cache), drops
 `leaveOut`, and creates a disabled, local-only choice challenge in the project with one task per
 place left, as the admin's survey builder would (`src/survey.ts`; a shared golden file keeps them
-equal). The changeset comment is `Street Tally: <name> #StreetTally`, source `survey`. The set,
+equal). The changeset comment is the admin's (Iris, admin #30): `From a Street Tally survey for <name>[, <10 November 2026>]. Checked by me. #StreetTally #StreetTally<Place>`, the place in CamelCase, at most 40 characters; source `survey`. A startup log line says whether Overpass answers (`Overpass answered: HTTP 200 in 312 ms (…/status)`; anything but 200, or `Overpass not reachable`, means counts will be unavailable). The set,
 version, area and event date go in `mobile_campaign_sources` (evolution 146); the audit log gets
 `campaign.create`.
 

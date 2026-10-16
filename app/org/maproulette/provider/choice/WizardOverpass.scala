@@ -45,6 +45,25 @@ class WizardOverpass @Inject() (ws: WSClient, config: Config)(implicit ec: Execu
     ok
   }
 
+  /**
+    * One line saying whether Overpass answers from this server, for the deploy log (Rex reads it
+    * after each deploy; no container shell needed). Its status endpoint, 5 s, no retry.
+    */
+  def probe(): Future[String] = {
+    val status  = url.replaceFirst("/interpreter$", "/status")
+    val started = System.nanoTime()
+    def ms      = (System.nanoTime() - started) / 1000000
+    ws.url(status)
+      .withRequestTimeout(5.seconds)
+      .withHttpHeaders("User-Agent" -> userAgent)
+      .get()
+      .map(response => s"Overpass answered: HTTP ${response.status} in $ms ms ($status)")
+      .recover {
+        case e: Exception =>
+          s"Overpass not reachable: ${e.getClass.getSimpleName} after $ms ms ($status)"
+      }
+  }
+
   /** The query's `elements`, from the cache when `cached` and present. */
   def elements(
       query: String,
@@ -78,3 +97,13 @@ class WizardOverpass @Inject() (ws: WSClient, config: Config)(implicit ec: Execu
           .andThen { case _ => inFlight.release() }
     }
 }
+
+/** Logs [[WizardOverpass.probe]] once at startup. */
+@Singleton
+class WizardOverpassProbe @Inject() (overpass: WizardOverpass)(implicit ec: ExecutionContext) {
+  private val logger = play.api.Logger(getClass)
+  overpass.probe().foreach(line => logger.info(line))
+}
+
+class WizardOverpassModule
+    extends play.api.inject.SimpleModule(play.api.inject.bind[WizardOverpassProbe].toSelf.eagerly())

@@ -140,7 +140,8 @@ class MobileWizardSpec(implicit val application: Application) extends FrameworkH
           SqlParser.long("parent_id") ~ SqlParser.str("checkin_comment")).map {
           case a ~ b ~ c ~ d ~ e => (a, b, c, d, e)
         }
-      ) mustBe (false, true, 3, mine.id, "Street Tally: Entrance doors around Woodbine Food Hall #StreetTally")
+      ) mustBe (false, true, 3, mine.id, "From a Street Tally survey for Entrance doors around Woodbine Food Hall, 10 November 2026. " +
+        "Checked by me. #StreetTally #StreetTallyWoodbineFoodHall")
       column(
         SQL"SELECT COUNT(*) FROM tasks WHERE parent_id = $id",
         SqlParser.scalar[Long]

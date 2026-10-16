@@ -178,6 +178,24 @@ class CampaignWizardSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
     }
   }
 
+  "The wizard's words" should {
+    "make the admin's hashtag and changeset comment" in {
+      // Expected values from the admin's words.ts hashtag() and changesetComment().
+      CampaignWizard.hashtag("Woodbine Food Hall") mustBe "#StreetTallyWoodbineFoodHall"
+      CampaignWizard.hashtag("Café São-Paulo’s 9th ave") mustBe "#StreetTallyCafeSaoPauloS9thAve"
+      CampaignWizard.hashtag("Ninth & Ninth, Salt Lake City, Utah, United States") mustBe
+        "#StreetTallyNinthNinthSaltLakeCityUtahUn"
+      CampaignWizard.changesetComment(
+        "Entrance doors around Woodbine Food Hall",
+        "Woodbine Food Hall",
+        Some(java.time.LocalDate.of(2026, 11, 10))
+      ) mustBe "From a Street Tally survey for Entrance doors around Woodbine Food Hall, 10 November 2026. " +
+        "Checked by me. #StreetTally #StreetTallyWoodbineFoodHall"
+      CampaignWizard.changesetComment("Trees", "Liberty Park", None) mustBe
+        "From a Street Tally survey for Trees. Checked by me. #StreetTally #StreetTallyLibertyPark"
+    }
+  }
+
   "The wizard's Overpass client" should {
     "answer from Overpass, then from its cache" in {
       val client = overpass()
@@ -190,6 +208,16 @@ class CampaignWizardSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
       // The create step reads OSM as it is now.
       result(client.elements("query-a", 1, cached = false)).isRight mustBe true
       fake.count mustBe before + 2
+    }
+
+    "say in one line whether Overpass answers" in {
+      result(overpass().probe()) must fullyMatch regex
+        s"Overpass answered: HTTP 200 in [0-9]+ ms \\(${java.util.regex.Pattern
+          .quote(fake.url.replace("interpreter", "status"))}\\)"
+      val down = new WizardOverpass(ws, mock[Config]) {
+        override protected def url: String = "http://127.0.0.1:9/api/interpreter"
+      }
+      result(down.probe()) must startWith("Overpass not reachable: ")
     }
 
     "say when Overpass fails, runs out of time or is asked too often" in {

@@ -34,6 +34,15 @@ class FakeOverpass {
       exchange.close()
     }
   )
+  server.createContext(
+    "/api/status",
+    exchange => {
+      val bytes = "Connected as: 1\n2 slots available now.\n".getBytes(StandardCharsets.UTF_8)
+      exchange.sendResponseHeaders(200, bytes.length.toLong)
+      exchange.getResponseBody.write(bytes)
+      exchange.close()
+    }
+  )
   server.start()
 
   def count: Int   = synchronized(queries.size)
