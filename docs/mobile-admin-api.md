@@ -115,12 +115,16 @@ thank-yous. It is only in this export, never on the live page or in the app.
   with `= + - @` get a leading `'` so spreadsheets don't run them. After the answer columns:
   `pending_count` (guests' answers waiting to be published, `choice_pending` state `pending`),
   `pending_outcomes` and one `pending:<question id>` column per question guests answered, each a
-  tally such as `hinged 2;sliding 1`, most given first.
+  tally such as `hinged 2;sliding 1`, most given first. Last, `skipped_count` and
+  `skipped_reasons`: guests' answers the publish guard skipped because the place changed before
+  they were published (`choice_pending` state `skipped_stale`), with a tally of reasons such as
+  `key_changed 2`.
 - `geojson`: `application/geo+json`, a FeatureCollection with the note as a top-level `notice`
   member, of task points with the same fields as properties (`answers` and `tagsSet` as objects,
   `completedByCount`), plus `featureName` and `featureRef` (the task feature's `name` and `ref`
   tags, or null) so the admin can label stops, and `pending`: the waiting answers as
-  `{answers, outcome, outcomeLabel}`. Neither format carries guest ids or addresses.
+  `{answers, outcome, outcomeLabel}`, and `skippedCount` and `skippedReasons` (an object such as
+  `{"key_changed": 2}`). Neither format carries guest ids or addresses.
 
 Both carry `Content-Disposition: attachment; filename="challenge-<id>-results.<format>"`.
 

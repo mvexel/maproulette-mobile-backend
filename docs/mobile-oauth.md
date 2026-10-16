@@ -320,19 +320,22 @@ the task's status; claiming publishes it later.
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /api/v2/task/:id/choice/pending` | Guest bearer, body as for `POST /task/:id/choice` (JSON, 1–2048 bytes). Only for challenges with `liveMissingQuestions`. Runs the choice check (same 60 s cache), then stores the answer and replaces the guest's earlier answer for the task. `200 {"taskId", "state": "pending", "answeredAt", "holdUntil", "expiresAt"}`: the hold is 7 days and the guest's expiry moves to at least 30 days after this answer. |
+| `POST /api/v2/task/:id/choice/pending` | Guest bearer, body as for `POST /task/:id/choice` (JSON, 1–2048 bytes). Any choice challenge (G1). Runs the choice check (same 60 s cache), then stores the answer and replaces the guest's earlier answer for the task. `200 {"taskId", "state": "pending", "answeredAt", "holdUntil", "expiresAt"}`: the hold is 7 days and the guest's expiry moves to at least 30 days after this answer. |
 | `DELETE /api/v2/task/:id/choice/pending` | Guest bearer. Withdraws the guest's pending answer: `204`, or `404 not_found`. |
 | `GET /api/v2/mobile-guest/pending?limit=&after=` | Guest bearer. Every answer of the guest, newest first: `{"items": [{"taskId", "challengeId", "state", "answeredAt", "holdUntil", "result"}], "next"}`. `limit` 1–100 (default 50); `after` is the previous page's `next`. |
 
 Submit errors: `400 invalid_request`; `403 challenge_not_published` (field writes are off and the
 challenge is not enabled with tag `mobile-survey-v1`); `404 not_found` (unknown task, or its challenge or project is disabled: preview mode); `409 task_completed` (status
 no longer Created, Skipped or Too hard) or `409 task_ineligible` with `reason` and `detail` as from
-`choice/check`, `key_changed` when a chosen question was answered in OSM meanwhile; `422
-unsupported_task` (no `liveMissingQuestions`, not a choice task, or bundled) or `422
+`choice/check`, `key_changed` when a chosen question was answered in OSM meanwhile (challenges
+with `liveMissingQuestions`); `422 unsupported_task` (not a choice task, or bundled) or `422
 invalid_submission` (including `"delete": true`); `429 pending_limit` (200 pending answers per
 guest); `502 osm_unavailable`; `401 invalid_token` if the guest was deleted, claimed or expired in
 the meantime. Evolution 137 adds `choice_pending`; "delete my data" deletes the guest's answers that
-are still pending.
+are still pending. Publishing a claimed answer re-checks each answered question's `expect` against
+the element as it is then, for absent tags and fixed values alike; an answer whose guard no longer
+holds ends `skipped_stale` with its reason, and the campaign results count it. Status-only and report answers (too hard, an outcome, not here, moved) write no tags, so they
+publish without this re-check.
 
 Discovery: `excludePending=true` on `tasks/box`, `markers/box` and the cluster routes leaves out
 tasks with a pending answer whose hold has not ended (next to `excludeStale`). `challenge/:id/tasks`

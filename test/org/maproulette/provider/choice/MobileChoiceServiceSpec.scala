@@ -403,12 +403,13 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
       csv(1) must include(",completed_by,completed_by_osm_id,completed_by_count,completed_at,")
       csv(1) must endWith(
         ",tags_set,tags_unset,outcome,outcome_label,reported_lat,reported_lon,reported_source," +
-          "reported_distance_m,report_count,answer:backrest,pending_count,pending_outcomes"
+          "reported_distance_m,report_count,answer:backrest,pending_count,pending_outcomes," +
+          "skipped_count,skipped_reasons"
       )
       csv(2) must startWith(
         s"${answered.id},node/$node,node/$node,-111.891,40.7608,1,Fixed,ChoiceMapper,"
       )
-      csv(2) must endWith(",false,backrest=no,,,,,,,,0,no,0,")
+      csv(2) must endWith(",false,backrest=no,,,,,,,,0,no,0,,0,")
       // Two stops are completed by the same mapper; the others have no completer and no count.
       val counts = ChoiceResults.completedCounts(rows)
       counts.values.toSeq mustBe Seq(2)
@@ -975,6 +976,39 @@ class MobileChoiceServiceSpec(implicit val application: Application) extends Fra
       osm.elements(("node", node)).tags mustBe
         Map("amenity" -> "bench", "backrest" -> "yes", "capacity" -> "3")
       answers(task) mustBe Some(Json.obj("capacity" -> "c3"))
+    }
+
+    "publish a correction campaign's answer, and skip it once the value changed (G1)" taggedAs ChoiceTag in {
+      // A fixed expected value, as a correction campaign has: only "yes" changes "no".
+      val correction: JsObject => JsObject = work => {
+        val questions = (work \ "questions").as[Seq[JsObject]]
+        val first = questions.head ++ Json.obj(
+          "expect" -> Json.obj("backrest" -> "no"),
+          "options" -> Json.arr(
+            Json.obj("id" -> "yes", "label" -> "Yes", "setTags" -> Json.obj("backrest" -> "yes")),
+            Json.obj(
+              "id"      -> "part",
+              "label"   -> "Part",
+              "setTags" -> Json.obj("backrest" -> "limited")
+            )
+          )
+        )
+        work ++ Json.obj("questions" -> (Seq(first) ++ questions.tail))
+      }
+      val tags         = Map("amenity" -> "bench", "backrest" -> "no")
+      val (task, node) = benchTask(correction, tags)
+      publish(pendingRow(task, """{"answers": {"backrest": "yes"}}""")) match {
+        case PendingOutcome.Published(body) =>
+          (body \ "applied" \ "set").as[JsObject] mustBe Json.obj("backrest" -> "yes")
+        case other => fail(s"unexpected $other")
+      }
+      osm.elements(("node", node)).tags mustBe Map("amenity" -> "bench", "backrest" -> "yes")
+
+      val (changed, changedNode) = benchTask(correction, tags)
+      val row                    = pendingRow(changed, """{"answers": {"backrest": "yes"}}""")
+      osm.edit("node", changedNode)(_ + ("backrest" -> "unknown"))
+      publish(row) mustBe PendingOutcome.SkippedStale("key_changed")
+      fresh(changed) mustBe ((Task.STATUS_CREATED, None))
     }
 
     "skip as stale when no guard holds or the element no longer matches" taggedAs ChoiceTag in {

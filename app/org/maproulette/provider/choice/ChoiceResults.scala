@@ -30,7 +30,9 @@ case class ChoiceResultRow(
     reportCount: Int = 0,
     featureName: Option[String] = None,
     featureRef: Option[String] = None,
-    pending: Seq[PendingResult] = Nil
+    pending: Seq[PendingResult] = Nil,
+    /** Why each guest answer the publish guard skipped was skipped (G1). No guest id. */
+    skipped: Seq[String] = Nil
 )
 
 /** A guest's answer that waits to be published (choice_pending, state pending). No guest id. */
@@ -67,6 +69,7 @@ class ChoiceResultsRepository @Inject() (db: Database) {
     fName     <- SqlParser.get[Option[String]]("feature_name")
     fRef      <- SqlParser.get[Option[String]]("feature_ref")
     pending   <- SqlParser.get[Option[String]]("pending")
+    skipped   <- SqlParser.get[Option[String]]("skipped")
   } yield {
     val appliedJson = applied.map(Json.parse)
     val resultJson  = result.map(Json.parse)
@@ -107,7 +110,8 @@ class ChoiceResultsRepository @Inject() (db: Database) {
           outcome,
           outcome.map(id => ChoiceResults.outcomeLabel(id, payload.map(Json.parse)))
         )
-      }
+      },
+      skipped.toSeq.flatMap(Json.parse(_).as[Seq[String]])
     )
   }
 
@@ -136,7 +140,10 @@ class ChoiceResultsRepository @Inject() (db: Database) {
                   (SELECT json_agg(json_build_object('answers', p.body->'answers',
                       'outcome', p.body->>'outcome') ORDER BY p.id)::text
                     FROM choice_pending p WHERE p.task_id = t.id AND p.state = 'pending')
-                    AS pending
+                    AS pending,
+                  (SELECT json_agg(COALESCE(p.result->>'reason', 'stale') ORDER BY p.id)::text
+                    FROM choice_pending p WHERE p.task_id = t.id AND p.state = 'skipped_stale')
+                    AS skipped
                 FROM tasks t
                 LEFT JOIN users u ON u.id = t.completed_by
                 LEFT JOIN LATERAL (
@@ -229,7 +236,7 @@ object ChoiceResults {
       "reported_distance_m",
       "report_count"
     ) ++ questions.map(q => text(s"answer:$q")) ++ Seq("pending_count", "pending_outcomes") ++
-      waiting.map(q => text(s"pending:$q"))
+      waiting.map(q => text(s"pending:$q")) ++ Seq("skipped_count", "skipped_reasons")
     val lines = rows.map { row =>
       Seq(
         row.taskId.toString,
@@ -258,7 +265,10 @@ object ChoiceResults {
       ) ++ questions.map(q => text(row.answers.getOrElse(q, ""))) ++ Seq(
         row.pending.size.toString,
         text(tally(row.pending.flatMap(_.outcomeLabel)))
-      ) ++ waiting.map(q => text(tally(row.pending.flatMap(_.answers.get(q)))))
+      ) ++ waiting.map(q => text(tally(row.pending.flatMap(_.answers.get(q))))) ++ Seq(
+        row.skipped.size.toString,
+        text(tally(row.skipped))
+      )
     }
     (Seq(s"# $Notice") +: header +: lines).map(_.mkString(",")).mkString("", "\r\n", "\r\n")
   }
@@ -321,7 +331,11 @@ object ChoiceResults {
                 "outcome"      -> p.outcome,
                 "outcomeLabel" -> p.outcomeLabel
               )
-            )
+            ),
+            "skippedCount" -> row.skipped.size,
+            "skippedReasons" -> JsObject(row.skipped.groupBy(identity).toSeq.sortBy(_._1).map {
+              case (reason, all) => reason -> JsNumber(all.size)
+            })
           )
         ) +: reportedFeature(row).toSeq
       }
