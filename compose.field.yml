@@ -57,6 +57,7 @@ services:
       # Deployment gate for mobile task writes (mobileOAuth.allowTaskWrites); false for the D13 check.
       MR_MOBILE_TASK_WRITES_ENABLED: ${MR_MOBILE_TASK_WRITES_ENABLED:-true}
       MR_SUPER_ACCOUNTS: ${MR_SUPER_ACCOUNTS:-}
+      OVERPASS_URLS: ${OVERPASS_URLS:-}
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--max-time", "5", "http://127.0.0.1:80/ping"]
       interval: 20s
