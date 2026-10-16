@@ -197,7 +197,8 @@ changed first. `published` means the challenge carries the `mobile-survey-v1` ta
 app's Publish). `listed` is what the app shows: the challenge is enabled and published, and its
 project is on. Progress uses the app's rule: `checked` counts status 1, 2 or 5 and tasks held by a
 live pending guest answer; `needsLook` counts status 6 without one; `total` leaves out deleted (4)
-and disabled (9) tasks.
+and disabled (9) tasks, and, as the live page does, open places found stale (gone or retagged) that
+nothing holds.
 
 ### `GET /api/v2/mobile-admin/projects`
 

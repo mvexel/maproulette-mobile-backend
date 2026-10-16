@@ -156,6 +156,7 @@ class MobileCampaignSpec(implicit val application: Application) extends Framewor
       task(challenge, 5, Task.STATUS_DELETED)
       val onMap   = task(challenge, 6, Task.STATUS_CREATED)
       val skipped = task(challenge, 7, Task.STATUS_CREATED)
+      val gone    = task(challenge, 8, Task.STATUS_CREATED)
       db.withConnection { implicit c =>
         // Set by importing choice tasks in practice; inserting plain tasks resets it.
         SQL"UPDATE challenges SET cooperative_type = 3 WHERE id = ${challenge.id}".executeUpdate()
@@ -166,7 +167,14 @@ class MobileCampaignSpec(implicit val application: Application) extends Framewor
         SQL"""INSERT INTO choice_pending(task_id, challenge_id, body, payload_digest, element_version,
                 hold_until, state)
               VALUES ($onMap, ${challenge.id}, '{}'::jsonb, ${"0" * 64}, 1, '9999-12-31', 'on_map'),
-                ($skipped, ${challenge.id}, '{}'::jsonb, ${"0" * 64}, 1, '9999-12-31', 'skipped_stale')"""
+                ($skipped, ${challenge.id}, '{}'::jsonb, ${"0" * 64}, 1, '9999-12-31', 'skipped_stale'),
+                ($gone, ${challenge.id}, '{}'::jsonb, ${"0" * 64}, 1, '9999-12-31', 'skipped_stale')"""
+          .executeUpdate()
+        // A place found gone no longer counts toward the total; one whose own answer made it
+        // stale (already tagged) still counts as checked.
+        SQL"""INSERT INTO choice_stale(task_id, reason, detail, payload_md5)
+              VALUES ($gone, 'element_gone', '[]'::jsonb, ''),
+                ($onMap, 'already_tagged', '[]'::jsonb, '')"""
           .executeUpdate()
       }
 
