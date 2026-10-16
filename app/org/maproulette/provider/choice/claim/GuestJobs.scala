@@ -112,10 +112,11 @@ class GuestJobRepository @Inject() (db: Database) extends GuestJobStore {
 
   override def expiriesDue(now: Instant, limit: Int): Seq[ExpiryDue] =
     db.withConnection { implicit c =>
-      SQL("""SELECT g.id, g.expires_at, g.email_ciphertext, g.email_nonce FROM mobile_guests g
+      SQL(s"""SELECT g.id, g.expires_at, g.email_ciphertext, g.email_nonce FROM mobile_guests g
         WHERE g.deleted_at IS NULL AND g.claimed_user_id IS NULL AND g.expires_at <= {now}
           AND (g.email_ciphertext IS NOT NULL OR EXISTS (
-            SELECT 1 FROM choice_pending p WHERE p.guest_id = g.id AND p.state = 'pending'))
+            SELECT 1 FROM choice_pending p WHERE p.guest_id = g.id AND p.state = 'pending'
+              AND NOT ${GuestJobs.KeptForReview}))
         ORDER BY g.expires_at LIMIT {limit}""")
         .on("now" -> stamp(now), "limit" -> limit)
         .as(
@@ -130,8 +131,8 @@ class GuestJobRepository @Inject() (db: Database) extends GuestJobStore {
       SQL("DELETE FROM mobile_guest_tokens WHERE guest_id={id}::uuid")
         .on("id" -> guest.toString)
         .executeUpdate()
-      SQL("""UPDATE choice_pending SET state='expired', updated_at={now}
-        WHERE guest_id={id}::uuid AND state='pending'""")
+      SQL(s"""UPDATE choice_pending p SET state='expired', updated_at={now}
+        WHERE p.guest_id={id}::uuid AND p.state='pending' AND NOT ${GuestJobs.KeptForReview}""")
         .on("id" -> guest.toString, "now" -> stamp(now))
         .executeUpdate()
     }
@@ -148,13 +149,15 @@ class GuestJobRepository @Inject() (db: Database) extends GuestJobStore {
     db.withTransaction { implicit c =>
       // Answers left without a guest while pending: deleting a user deletes the guest they claimed
       // (evolution 140), and nothing would ever publish or expire those answers.
-      SQL("""UPDATE choice_pending SET state='expired', updated_at=now()
-        WHERE guest_id IS NULL AND state = 'pending'""")
+      SQL(s"""UPDATE choice_pending p SET state='expired', updated_at=now()
+        WHERE p.guest_id IS NULL AND p.state = 'pending' AND NOT ${GuestJobs.KeptForReview}""")
         .executeUpdate()
-      // Anything still pending is expired first, so no answer outlives its guest as pending.
-      SQL("""UPDATE choice_pending p SET state='expired', updated_at=now()
+      // Anything still pending is expired first, so no answer outlives its guest as pending, except
+      // the answers kept for the review page (H1a).
+      SQL(s"""UPDATE choice_pending p SET state='expired', updated_at=now()
         FROM mobile_guests g WHERE p.guest_id = g.id AND p.state = 'pending'
-          AND g.claimed_user_id IS NULL AND g.expires_at < {before}""")
+          AND g.claimed_user_id IS NULL AND g.expires_at < {before}
+          AND NOT ${GuestJobs.KeptForReview}""")
         .on("before" -> stamp(before))
         .executeUpdate()
       // Tokens cascade; choice_pending.guest_id is set to NULL.
@@ -207,7 +210,16 @@ object GuestJobs {
 
   /** Expired guests are deleted this long after `expires_at`, keeping their answers for statistics. */
   val PurgeAfter: Duration = Duration.ofDays(30)
-  val BatchSize            = 500
+
+  /**
+    * SQL on a `choice_pending p` row: its campaign has a live page, so its mappers review the answer
+    * (H1a). It stays pending after its guest expires or is purged, without a guest, until the
+    * campaign's tag-fix challenge takes it (H1b).
+    */
+  val KeptForReview: String =
+    "EXISTS (SELECT 1 FROM mobile_live_pages l WHERE l.challenge_id = p.challenge_id)"
+
+  val BatchSize = 500
 
   /** "Your 14 bus stops are waiting"; "5 days left to put your bus stops on the map". */
   def reminderSubject(which: Int, savedStopsText: String, savedCount: Int, daysLeft: Long): String =

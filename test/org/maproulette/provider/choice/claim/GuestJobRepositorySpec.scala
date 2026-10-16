@@ -41,7 +41,9 @@ class GuestJobRepositorySpec extends PlaySpec {
         SQL("INSERT INTO users VALUES(1)").executeUpdate()
         SQL("CREATE TABLE tasks(id bigint PRIMARY KEY)").execute()
         SQL("INSERT INTO tasks VALUES(1),(2)").executeUpdate()
-        Seq("129", "130", "131", "135", "137", "140").foreach { version =>
+        SQL("CREATE TABLE challenges(id bigint PRIMARY KEY)").execute()
+        SQL("INSERT INTO challenges VALUES(7),(8)").executeUpdate()
+        Seq("129", "130", "131", "135", "137", "140", "141").foreach { version =>
           val evolution = new String(
             Files.readAllBytes(Paths.get(s"conf/evolutions/default/$version.sql")),
             "UTF-8"
@@ -76,7 +78,8 @@ class GuestJobRepositorySpec extends PlaySpec {
       db: Database,
       expires: Instant,
       firstEmail: Option[Instant] = Some(now.minus(Duration.ofDays(2))),
-      pending: Boolean = true
+      pending: Boolean = true,
+      challenge: Long = 7
   ): UUID = {
     val id = UUID.randomUUID()
     db.withConnection { implicit c =>
@@ -104,13 +107,15 @@ class GuestJobRepositorySpec extends PlaySpec {
         token(db, id, s"first-$id", at)
       }
       if (pending)
-        SQL("""INSERT INTO choice_pending (guest_id,task_id,challenge_id,body,payload_digest,
-            element_version,hold_until) VALUES ({id}::uuid,1,7,{body}::jsonb,{digest},1,{hold})""")
-          .on(
-            "id"     -> id.toString,
-            "body"   -> "{}",
-            "digest" -> MobileSecrets.hash("p"),
-            "hold"   -> stamp(now)
+        SQL(
+          """INSERT INTO choice_pending (guest_id,task_id,challenge_id,body,payload_digest,
+            element_version,hold_until) VALUES ({id}::uuid,1,{challenge},{body}::jsonb,{digest},1,{hold})"""
+        ).on(
+            "id"        -> id.toString,
+            "challenge" -> challenge,
+            "body"      -> "{}",
+            "digest"    -> MobileSecrets.hash("p"),
+            "hold"      -> stamp(now)
           )
           .executeUpdate()
     }
@@ -196,6 +201,25 @@ class GuestJobRepositorySpec extends PlaySpec {
         pendingStates(db) mustBe Seq(None -> "pending", Some(live) -> "pending")
         store.purge(now.minus(Duration.ofDays(30))) mustBe 0
         pendingStates(db) mustBe Seq(None -> "expired", Some(live) -> "pending")
+    }
+
+    "keep the answers of a campaign with a live page pending for review" in withStore {
+      (store, db) =>
+        db.withConnection { implicit c =>
+          SQL("INSERT INTO mobile_live_pages (challenge_id, token) VALUES (8, 'review')").execute()
+        }
+        val reviewed = guest(db, now.minusSeconds(60), None, challenge = 8)
+        val other    = guest(db, now.minusSeconds(60), None)
+        // Only the other campaign's answer makes the guest due.
+        store.expiriesDue(now, 10).map(_.guest).toSet mustBe Set(other)
+        store.expire(other, now) mustBe 1
+        store.expire(reviewed, now) mustBe 0
+        store.expiriesDue(now, 10) mustBe empty
+
+        store.purge(now) mustBe 2
+        pendingStates(db) mustBe Seq(None -> "pending", None -> "expired")
+        store.purge(now) mustBe 0
+        pendingStates(db) mustBe Seq(None -> "pending", None -> "expired")
     }
 
     "accept only a guest's three newest claim tokens" in withStore { (store, db) =>

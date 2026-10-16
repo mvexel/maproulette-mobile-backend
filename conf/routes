@@ -41,6 +41,12 @@ POST    /api/v2/mobile-admin/projects                                   @control
 PUT     /api/v2/mobile-admin/projects/:id/enabled                       @controllers.MobileCampaignController.setProjectEnabled(id:Long)
 # Live progress page (fork, BACKLOG #12): public and link-only, by an unguessable token
 GET     /api/v2/live/:token                                             @controllers.MobileLiveController.show(token:String)
+# Review page (fork, H1a): read by the live page token; marks need an app grant (docs/mobile-admin-api.md)
+GET     /api/v2/review/:token                                           @controllers.MobileReviewController.show(token:String)
+PUT     /api/v2/review/:token/places/:id/skip                           @controllers.MobileReviewController.skip(token:String, id:Long)
+DELETE  /api/v2/review/:token/places/:id/skip                           @controllers.MobileReviewController.skip(token:String, id:Long)
+PUT     /api/v2/review/:token/places/:id/needs-visit                    @controllers.MobileReviewController.needsVisit(token:String, id:Long)
+DELETE  /api/v2/review/:token/places/:id/needs-visit                    @controllers.MobileReviewController.needsVisit(token:String, id:Long)
 # Authentication Routes
 GET     /auth/authenticate                                              @controllers.AuthController.authenticate(redirectUri: String ?= "")
 GET     /auth/callback                                                  @controllers.AuthController.callback(code: String, state: String)

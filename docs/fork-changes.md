@@ -179,6 +179,7 @@ Off by default (`mobileOAuth.guests.enabled`). See [mobile-oauth.md](mobile-oaut
 | `includePending=true` on `tasks/box`: `pending` and `heldKind` (`answer`/`report`/null) per task | `TaskController.scala` (`withPending`), `ChoicePendingRepository.scala` (`held`, `heldKinds`) |
 | `choice/check` accepts guest tokens | `app/org/maproulette/controllers/api/MobileChoiceController.scala` |
 | Routes `GET /api/v2/mobile-guest/pending`, `POST` and `DELETE /api/v2/task/:id/choice/pending` | `conf/routes` |
+| Review page (H1a): `GET /api/v2/review/:token` by the live page token, `PUT`/`DELETE …/places/:id/skip` and `…/needs-visit` for app grants with `tasks:read` (open while writes are off; claim and admin origin CORS); tables `choice_review_marks`, `choice_review_places`; guest answers of a campaign with a live page stay pending past the guest's expiry and purge | `app/controllers/MobileReviewController.scala`, `app/org/maproulette/provider/choice/ReviewPage.scala`, `MobileBearerFilter.scala` (`MobileReviewRoutes`), `MobileCorsFilter`, `GuestJobs.scala` (`KeptForReview`), `conf/routes`, `conf/evolutions/default/142.sql` |
 
 ### Discovery filters
 

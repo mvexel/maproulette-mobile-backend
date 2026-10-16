@@ -306,6 +306,23 @@ object MobileLiveRoutes {
     path.matches("/api/v2/mobile-admin/challenges/[0-9]+/live/rotate")
 }
 
+/**
+  * The review page (H1a): its read, by the live page token, and the per-place marks. Marks write
+  * only the fork's review tables, never a task or OSM, so app grants with `tasks:read` reach them,
+  * also while field writes are off. Guest and admin grants don't.
+  */
+object MobileReviewRoutes {
+  private val page = "/api/v2/review/[A-Za-z0-9_-]{43}"
+
+  def read(method: String, path: String): Boolean = method == "GET" && path.matches(page)
+
+  def mark(method: String, path: String): Boolean =
+    (method == "PUT" || method == "DELETE") &&
+      path.matches(s"$page/places/[0-9]{1,18}/(skip|needs-visit)")
+
+  def permits(method: String, path: String): Boolean = read(method, path) || mark(method, path)
+}
+
 /** During a field deployment's disabled phase, expose only the mobile login,
   * admin control, and known read routes. This also closes legacy session and
   * API-key write paths while the policy is off.
@@ -331,6 +348,7 @@ object MobileFieldRoutes {
       case "OPTIONS" => true
       case "GET" =>
         request.path == "/ping" || MobileLiveRoutes.public(request.path) ||
+          MobileReviewRoutes.read(request.method, request.path) ||
           Set("/oauth/mobile/authorize", "/oauth/mobile/callback", "/oauth/mobile/me")
             .contains(request.path) ||
           // Guests neither write OSM nor change task status. The choice check is for guest
@@ -362,9 +380,13 @@ object MobileFieldRoutes {
           request.path.matches("/api/v2/mobile-admin/projects/[0-9]+/enabled") ||
           // The live page's settings: who may see progress, not a task or OSM write.
           MobileLiveRoutes.settings(request.path) ||
-          MobileGuestRoutes.email(request.method, request.path)
-      case "DELETE" => MobileGuestRoutes.own(request.method, request.path)
-      case _        => false
+          MobileGuestRoutes.email(request.method, request.path) ||
+          // Review marks write only the review tables.
+          MobileReviewRoutes.mark(request.method, request.path)
+      case "DELETE" =>
+        MobileGuestRoutes.own(request.method, request.path) ||
+          MobileReviewRoutes.mark(request.method, request.path)
+      case _ => false
     })
   }
 }
@@ -603,9 +625,10 @@ class MobileBearerFilter @Inject() (
     val parts = authorizations.head.split(" ", -1)
     if (parts.length != 2 || !parts(0).equalsIgnoreCase("Bearer") ||
         !parts(1).matches("[A-Za-z0-9_-]{32,256}")) return denied(401, "invalid_token")
-    val editor      = MobileEditorRoutes.requires(request)
-    val write       = MobileWriteRoutes.permits(request.method, request.path) || editor
-    val read        = MobileReadRoutes.permits(request.method, request.path)
+    val editor = MobileEditorRoutes.requires(request)
+    val write  = MobileWriteRoutes.permits(request.method, request.path) || editor
+    val read = MobileReadRoutes.permits(request.method, request.path) ||
+      MobileReviewRoutes.permits(request.method, request.path)
     val admin       = MobileAdminRoutes.permits(request.method, request.path, request.queryString)
     val guest       = guests.enabled && MobileGuestRoutes.permits(request.method, request.path)
     val claimRoute  = MobileClaimRoutes.permits(request.method, request.path)
@@ -619,7 +642,8 @@ class MobileBearerFilter @Inject() (
         !MobileWriteRoutes.acceptableBody(request)
       else if (guest && !write && !read) !MobileGuestRoutes.acceptable(request)
       else
-        (write || MobileReadRoutes.bare(request.method, request.path)) &&
+        (write || MobileReadRoutes.bare(request.method, request.path) ||
+        MobileReviewRoutes.mark(request.method, request.path)) &&
         (request.rawQueryString.nonEmpty || request.hasBody)
     if (badShape) return denied(400, "invalid_request")
     oauth.authenticate(parts(1)).flatMap { grant =>
