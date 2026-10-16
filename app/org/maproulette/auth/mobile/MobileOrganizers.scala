@@ -4,7 +4,8 @@ import anorm.SqlParser._
 import anorm._
 import javax.inject.{Inject, Singleton}
 import org.maproulette.data.Actions
-import org.maproulette.framework.model.Grant
+import java.sql.Connection
+import org.maproulette.framework.model.{Grant, GrantTarget, Grantee}
 import play.api.db.Database
 import play.api.libs.json._
 
@@ -31,8 +32,10 @@ object MobileOrganizers {
 }
 
 /**
-  * The organizer list (evolution 145) for the super-user Organizers screen. Every change and its
-  * audit entry share one transaction. The projects shown are the person's own upstream grants of
+  * The organizer list (evolution 145) for the super-user Organizers screen. Every change, the
+  * upstream project grant it makes and its audit entry share one transaction: the grant rows are
+  * written here as upstream's GrantRepository writes them, and the caller clears upstream's user
+  * and project caches after commit. The projects shown are the person's own upstream grants of
   * Write or better; their Home project is left out.
   */
 @Singleton
@@ -117,12 +120,82 @@ class MobileOrganizerRepository @Inject() (db: Database, audit: MobileAdminRepos
 
   def organizer(userId: Long): Option[JsObject] = rows(Some(userId)).headOption
 
-  /** Lists the user (no change if listed already) and audits what was granted. */
-  def add(userId: Long, actor: Long, granted: JsObject): Unit =
+  // The person's own project roles; the project row is locked so two changes can't both leave
+  // it without an administrator.
+  private def roles(userId: Long, projectId: Long)(implicit c: Connection): Seq[Int] = {
+    SQL"SELECT id FROM projects WHERE id = $projectId FOR UPDATE".as(scalar[Long].singleOpt)
+    SQL"""SELECT role FROM grants WHERE grantee_type = ${Actions.ITEM_TYPE_USER}
+          AND grantee_id = $userId AND object_type = ${Actions.ITEM_TYPE_PROJECT}
+          AND object_id = $projectId""".as(scalar[Int].*)
+  }
+
+  /** Upstream's rule: a project keeps at least one administrator who is a person. */
+  private def lastAdmin(userId: Long, projectId: Long, held: Seq[Int])(implicit c: Connection) =
+    held.exists(_ <= Grant.ROLE_ADMIN) &&
+      !SQL"""SELECT EXISTS(SELECT 1 FROM grants WHERE grantee_type = ${Actions.ITEM_TYPE_USER}
+              AND grantee_id <> $userId AND object_type = ${Actions.ITEM_TYPE_PROJECT}
+              AND object_id = $projectId AND role <= ${Grant.ROLE_ADMIN})"""
+        .as(scalar[Boolean].single)
+
+  private def dropRoles(userId: Long, projectId: Long)(implicit c: Connection): Unit = {
+    SQL"""DELETE FROM grants WHERE grantee_type = ${Actions.ITEM_TYPE_USER}
+          AND grantee_id = $userId AND object_type = ${Actions.ITEM_TYPE_PROJECT}
+          AND object_id = $projectId""".executeUpdate()
+    ()
+  }
+
+  /**
+    * Sets the person's role on the project (replacing any other role they held there, as
+    * upstream's `addUserToProject` with `clear`), lists them (no change if listed already) and
+    * audits it. Left("last_project_admin") when that would leave the project without an
+    * administrator.
+    */
+  def add(
+      person: MobileOrganizerCandidate,
+      projectId: Long,
+      role: Int,
+      actor: Long
+  ): Either[String, Unit] =
     db.withTransaction { implicit c =>
-      SQL"""INSERT INTO mobile_memberships(user_id, role, granted_by) VALUES ($userId, $Role, $actor)
-            ON CONFLICT DO NOTHING""".executeUpdate()
-      audit.record(actor, "organizer.add", s"user:$userId", None, Some(granted))
+      val held = roles(person.userId, projectId)
+      if (role > Grant.ROLE_ADMIN && lastAdmin(person.userId, projectId, held))
+        Left("last_project_admin")
+      else {
+        dropRoles(person.userId, projectId)
+        val grant =
+          Grant(-1, "", Grantee.user(person.userId), role, GrantTarget.project(projectId))
+        SQL"""INSERT INTO grants (name, grantee_id, grantee_type, role, object_id, object_type)
+              VALUES (${grant.description()}, ${person.userId}, ${Actions.ITEM_TYPE_USER},
+                $role, $projectId, ${Actions.ITEM_TYPE_PROJECT})""".executeUpdate()
+        SQL"""INSERT INTO mobile_memberships(user_id, role, granted_by)
+              VALUES (${person.userId}, $Role, $actor) ON CONFLICT DO NOTHING""".executeUpdate()
+        audit.record(
+          actor,
+          "organizer.add",
+          s"user:${person.userId}",
+          None,
+          Some(Json.obj("projectId" -> projectId, "role" -> roleName(role), "name" -> person.name))
+        )
+        Right(())
+      }
+    }
+
+  /** Removes every role the person holds on the project, audited; refused for its last administrator. */
+  def removeProject(userId: Long, projectId: Long, actor: Long): Either[String, Unit] =
+    db.withTransaction { implicit c =>
+      val held = roles(userId, projectId)
+      if (lastAdmin(userId, projectId, held)) Left("last_project_admin")
+      else {
+        dropRoles(userId, projectId)
+        audit.record(
+          actor,
+          "organizer.project.remove",
+          s"user:$userId",
+          None,
+          Some(Json.obj("projectId" -> projectId))
+        )
+        Right(())
+      }
     }
 
   /** False when the user wasn't listed. Their upstream project grants stay. */
@@ -136,12 +209,4 @@ class MobileOrganizerRepository @Inject() (db: Database, audit: MobileAdminRepos
       removed
     }
   }
-
-  def recordProjectRemoved(userId: Long, projectId: Long, actor: Long): Unit =
-    audit.record(
-      actor,
-      "organizer.project.remove",
-      s"user:$userId",
-      Some(Json.obj("projectId" -> projectId))
-    )
 }

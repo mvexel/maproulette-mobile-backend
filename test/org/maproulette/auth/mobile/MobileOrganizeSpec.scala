@@ -3,12 +3,24 @@ package org.maproulette.auth.mobile
 import akka.actor.ActorSystem
 import akka.stream.{Materializer, SystemMaterializer}
 import com.typesafe.config.ConfigFactory
-import controllers.{MobileAdminController, MobileOAuthController, MobileOrganizerController}
+import controllers.{
+  MobileAdminController,
+  MobileLiveController,
+  MobileOAuthController,
+  MobileOrganizerController,
+  MobileQueueController,
+  MobileResultsController
+}
 import java.time.Instant
 import org.joda.time.DateTime
 import org.maproulette.Config
 import org.maproulette.framework.model.{Location, OSMProfile, User}
 import org.maproulette.framework.service.UserService
+import org.maproulette.provider.choice.{
+  ChoiceQueueService,
+  ChoiceResultsRepository,
+  LivePageRepository
+}
 import org.mockito.ArgumentMatchers.{any, anyLong, anyString}
 import org.mockito.Mockito.{never, verify, when}
 import org.scalatest.BeforeAndAfterAll
@@ -41,8 +53,7 @@ class MobileOrganizeSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
   override def afterAll(): Unit                   = { Await.result(system.terminate(), 5.seconds); super.afterAll() }
 
   private val adminOrigin = "https://admin.example"
-  private val settings = new MobileOAuthSettings(
-    Configuration(ConfigFactory.parseString(s"""
+  private val config      = ConfigFactory.parseString(s"""
     mobileOAuth {
       enabled = true
       callbackUri = "https://mr.example/oauth/mobile/callback"
@@ -51,9 +62,9 @@ class MobileOrganizeSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
         { id = "app", name = "App", redirectUris = ["org.example.app:/cb"], scopes = ["tasks:read", "tasks:write"] },
         { id = "admin", name = "Admin", redirectUris = ["$adminOrigin/callback"], scopes = ["mobile:admin"] }
       ]
-    }"""))
-  )
-  private val token = "A" * 43
+    }""")
+  private val settings    = new MobileOAuthSettings(Configuration(config))
+  private val token       = "A" * 43
   private def user(id: Long) = User(
     id,
     DateTime.now(),
@@ -271,9 +282,6 @@ class MobileOrganizeSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
       POST -> "/api/v2/mobile-admin/challenges/70/queue",
       GET  -> "/api/v2/mobile-admin/challenges/70/queue/export",
       GET  -> "/oauth/mobile/me",
-      POST -> "/api/v2/challenge",
-      PUT  -> "/api/v2/challenge/70",
-      PUT  -> "/api/v2/challenge/70/addFileTasks?lineByLine=true&report=true",
       GET  -> "/api/v2/challenge/70/tasks?limit=5",
       GET  -> "/api/v2/task/9"
     )
@@ -292,6 +300,13 @@ class MobileOrganizeSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
       DELETE -> "/api/v2/mobile-admin/challenges/70/live",
       PUT    -> "/api/v2/mobile-admin/challenges/70/results"
     )
+    // Organizers write only through organize endpoints that check the project (Ada, #47 review).
+    val stockWrites = Seq(
+      POST -> "/api/v2/challenge",
+      PUT  -> "/api/v2/challenge/70",
+      PUT  -> "/api/v2/challenge/71",
+      PUT  -> "/api/v2/challenge/70/addFileTasks?lineByLine=true&report=true"
+    )
 
     "let an organizer's grant reach the campaign routes and nothing else of the admin API" in {
       val (gate, _) = filter(organizeGrant)
@@ -301,7 +316,7 @@ class MobileOrganizeSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
             contentAsString(gate.apply(next)(bearer(method, path))) mustBe "admin"
           )
       }
-      (staffOnly ++ Seq(
+      (staffOnly ++ stockWrites ++ Seq(
         GET -> "/api/v2/tasks/box/-112/40/-111/41",
         GET -> "/api/v2/task/9/start",
         PUT -> "/api/v2/task/9/1"
@@ -317,7 +332,7 @@ class MobileOrganizeSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
 
     "leave the super-user's admin grant every route it had, and the organizer list" in {
       val (gate, _) = filter(adminGrant)
-      (organizerRoutes ++ staffOnly.take(11)).foreach {
+      (organizerRoutes ++ stockWrites ++ staffOnly.take(11)).foreach {
         case (method, path) =>
           withClue(s"$method $path")(
             contentAsString(gate.apply(next)(bearer(method, path))) mustBe "admin"
@@ -325,14 +340,49 @@ class MobileOrganizeSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
       }
     }
 
-    "refuse an organizer's grant once they are off the list, and audit their stock writes" in {
-      val (demoted, _) = filter(organizeGrant.copy(userId = mapper.id))
-      val refused      = demoted.apply(next)(bearer(GET, "/api/v2/mobile-admin/campaigns"))
+    "refuse an organizer's grant once they are off the list" in {
+      val (demoted, audit) = filter(organizeGrant.copy(userId = mapper.id))
+      val refused          = demoted.apply(next)(bearer(GET, "/api/v2/mobile-admin/campaigns"))
       status(refused) mustBe FORBIDDEN
       contentAsJson(refused) mustBe Json.obj("error" -> "organizer_required")
-      val (gate, audit) = filter(organizeGrant)
-      status(gate.apply(next)(bearer(PUT, "/api/v2/challenge/70"))) mustBe OK
-      verify(audit).record(9L, "stock.PUT", "/api/v2/challenge/70", Some(Json.obj("status" -> 200)))
+      verify(audit, never()).record(anyLong(), anyString(), anyString(), any())
+    }
+
+    "refuse an organizer's writes while answer saving is off, and let the super-user write" in {
+      val switched = new MobileOAuthSettings(
+        Configuration(
+          ConfigFactory
+            .parseString("mobileOAuth.writeControlEnabled = true")
+            .withFallback(config)
+        )
+      )
+      val policy = mock[MobileWritePolicy]
+      when(policy.enabled).thenReturn(false)
+      def gate(grant: MobileGrant) = {
+        val oauth = mock[MobileOAuthService]
+        val users = mock[UserService]
+        when(oauth.authenticate(token)).thenReturn(Future.successful(Some(grant)))
+        when(users.retrieve(grant.userId)).thenReturn(Some(user(grant.userId)))
+        new MobileBearerFilter(switched, oauth, users, admins, mock[MobileAdminRepository], policy)
+      }
+      val writes = Seq(
+        PUT  -> "/api/v2/mobile-admin/projects/3/enabled",
+        PUT  -> "/api/v2/mobile-admin/challenges/70/live",
+        POST -> "/api/v2/mobile-admin/challenges/70/live/rotate",
+        POST -> "/api/v2/mobile-admin/challenges/70/queue"
+      )
+      writes.foreach {
+        case (method, path) =>
+          withClue(s"$method $path") {
+            val result = gate(organizeGrant).apply(next)(bearer(method, path))
+            status(result) mustBe FORBIDDEN
+            contentAsJson(result) mustBe Json.obj("error" -> "mobile_writes_disabled")
+            contentAsString(gate(adminGrant).apply(next)(bearer(method, path))) mustBe "admin"
+          }
+      }
+      contentAsString(
+        gate(organizeGrant).apply(next)(bearer(GET, "/api/v2/mobile-admin/campaigns"))
+      ) mustBe "admin"
     }
   }
 
@@ -361,6 +411,45 @@ class MobileOrganizeSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
         Json.obj("error" -> "mobile_admin_only")
       contentAsJson(controller.getWritePolicy(as(mapper, Set(MobileScopes.Read)))) mustBe
         Json.obj("error" -> "mobile_admin_only")
+    }
+  }
+
+  "The campaign routes" should {
+    def as(u: User, scopes: Set[String]) =
+      FakeRequest()
+        .addAttr(MobileBearerIdentity.UserKey, u)
+        .addAttr(MobileBearerIdentity.ScopesKey, scopes)
+    val pages   = mock[LivePageRepository]
+    val queue   = mock[ChoiceQueueService]
+    val results = mock[ChoiceResultsRepository]
+    val audit   = mock[MobileAdminRepository]
+    val cc      = stubControllerComponents()
+    val live    = new MobileLiveController(cc, settings, service(), pages, audit)
+    val queues  = new MobileQueueController(cc, settings, service(), queue, audit)
+    val exports = new MobileResultsController(cc, settings, service(), results)
+
+    "refuse an organizer the live page, queue and results of another project's challenge" in {
+      // Challenge 71 is in project 4, which the organizer doesn't run; 72 is in no known project.
+      for (challenge <- Seq(71L, 72L)) {
+        Seq(
+          live.get(challenge)(as(organizer, Organize)),
+          live.rotate(challenge)(as(organizer, Organize)),
+          live.update(challenge)(as(organizer, Organize).withBody(Json.obj("enabled" -> true))),
+          queues.generate(challenge)(as(organizer, Organize)),
+          queues.exportQueue(challenge)(as(organizer, Organize)),
+          exports.results(challenge, "csv")(as(organizer, Organize))
+        ).foreach { result =>
+          withClue(s"challenge $challenge") {
+            status(result) mustBe FORBIDDEN
+            contentAsJson(result) mustBe Json.obj("error" -> "organizer_forbidden")
+          }
+        }
+      }
+      verify(pages, never()).byChallenge(anyLong())
+      verify(pages, never()).rotate(anyLong())
+      verify(queue, never()).generate(anyLong(), any[User])
+      verify(results, never()).results(anyLong())
+      verify(audit, never()).record(anyLong(), anyString(), anyString(), any())
     }
   }
 

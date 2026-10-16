@@ -2,7 +2,6 @@ package controllers
 
 import javax.inject.Inject
 import org.maproulette.auth.mobile._
-import org.maproulette.exception.InvalidException
 import org.maproulette.framework.model.User
 import org.maproulette.framework.service.{ProjectService, UserService}
 import play.api.libs.json._
@@ -11,7 +10,8 @@ import scala.concurrent.{ExecutionContext, Future}
 
 /**
   * The super-user Organizers screen (D8, docs/mobile-admin-api.md "Organizers"). Adding someone
-  * gives them an upstream project role and puts them on the organizer list in one audited step;
+  * gives them an upstream project role and puts them on the organizer list in one audited
+  * transaction; a change that would leave a project without an administrator is 409;
   * removing them from the list ends their `mobile:organize` access on their next request.
   */
 class MobileOrganizerController @Inject() (
@@ -36,6 +36,14 @@ class MobileOrganizerController @Inject() (
 
   private def db[A](operation: => A): Future[A] = service.storage(operation)
 
+  // Grants are written in our transaction, not through upstream's services: drop what upstream
+  // cached about the person (by id and by OSM id) and the project, so its checks see the change.
+  private def changed(person: MobileOrganizerCandidate, projectId: Long): Unit = {
+    users.clearCache(person.userId)
+    users.clearCache(person.osmId)
+    projects.clearCache(projectId)
+  }
+
   def list: Action[AnyContent] = Action.async { request =>
     admin(request)(_ => db(Ok(Json.obj("organizers" -> organizers.list))))
   }
@@ -55,17 +63,12 @@ class MobileOrganizerController @Inject() (
               case (None, _) => problem(NotFound, "user_not_found")
               case (_, None) => problem(NotFound, "project_not_found")
               case (Some(person), Some(project)) =>
-                users.addUserToProject(person.osmId, project.id, role, actor, clear = true)
-                organizers.add(
-                  person.userId,
-                  actor.id,
-                  Json.obj(
-                    "projectId" -> project.id,
-                    "role"      -> MobileOrganizers.roleName(role),
-                    "name"      -> person.name
-                  )
-                )
-                Ok(organizers.organizer(person.userId).get)
+                organizers.add(person, project.id, role, actor.id) match {
+                  case Left(code) => problem(Conflict, code)
+                  case Right(_) =>
+                    changed(person, project.id)
+                    Ok(organizers.organizer(person.userId).get)
+                }
             }
           }
       }
@@ -88,12 +91,11 @@ class MobileOrganizerController @Inject() (
           case Some(_) if projects.retrieve(projectId).forall(_.deleted) =>
             problem(NotFound, "project_not_found")
           case Some(person) =>
-            try {
-              users.removeUserFromProject(person.osmId, projectId, None, actor)
-              organizers.recordProjectRemoved(userId, projectId, actor.id)
-              Ok(organizers.organizer(userId).get)
-            } catch {
-              case _: InvalidException => problem(Conflict, "last_project_admin")
+            organizers.removeProject(userId, projectId, actor.id) match {
+              case Left(code) => problem(Conflict, code)
+              case Right(_) =>
+                changed(person, projectId)
+                Ok(organizers.organizer(userId).get)
             }
         }
       }

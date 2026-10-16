@@ -178,11 +178,13 @@ when that comes back `access_denied` with `MapRoulette super-user required`, ask
 - **Their projects only.** An organizer runs the campaigns of projects where they hold the
   upstream project role Write or better (`Permission.effectiveRole`, their own grants or their
   teams'), except their Home project. The list does not say which projects; project grants do.
-- **Routes.** The stock challenge routes of the admin allowlist, which apply upstream's project
-  checks as for anyone, and the campaign part of the admin API. See
+- **Routes.** The GET stock challenge routes of the admin allowlist, which apply upstream's
+  project checks as for anyone, and the campaign part of the admin API; no stock writes. See
   [mobile-admin-api.md](mobile-admin-api.md#organizers). The consent page says the app runs
   campaigns in the projects they organize, that every change is recorded, and that it cannot
-  manage apps or turn saving answers on or off.
+  edit OpenStreetMap, manage apps, turn saving answers on or off or get the user's API key.
+- **The write switch applies.** Unlike super-users' admin grants, organizer grants don't write
+  while the write switch is off (`403 mobile_writes_disabled` for every non-GET request).
 
 ## CORS
 

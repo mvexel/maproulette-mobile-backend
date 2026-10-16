@@ -55,10 +55,10 @@ object MobileAdminRoutes {
 }
 
 /**
-  * Routes for `mobile:organize` grants (D8): the stock challenge routes of [[MobileAdminRoutes]],
-  * whose upstream project checks apply as for anyone, and the campaign part of the admin API. The
-  * controllers check the project of each campaign route. No clients, audit, organizers, project
-  * creation or write switch changes.
+  * Routes for `mobile:organize` grants (D8): the stock challenge reads of [[MobileAdminRoutes]]
+  * and the campaign part of the admin API. Organizers write only through routes whose controllers
+  * check the project ([[MobileAdminCheck.can]]), never through stock challenge writes. No clients,
+  * audit, organizers, project creation or write switch changes.
   */
 object MobileOrganizeRoutes {
   private val challenge = "/api/v2/mobile-admin/challenges/[0-9]+"
@@ -79,7 +79,7 @@ object MobileOrganizeRoutes {
 
   def permits(method: String, path: String, query: Map[String, Seq[String]]): Boolean =
     MobileAdminRoutes.permits(method, path, query) &&
-      (!MobileAdminRoutes.adminApi(path) || adminApi(method, path))
+      (if (MobileAdminRoutes.adminApi(path)) adminApi(method, path) else method == "GET")
 }
 
 /** An explicit route allowlist: several legacy GET routes mutate data or disclose API keys. */
@@ -691,7 +691,7 @@ class MobileBearerFilter @Inject() (
           val staffGrant    = adminGrant || organizeGrant
           if (if (adminGrant) !admin else if (organizeGrant) !organize else !write && !read)
             denied(403, "insufficient_scope")
-          else if (!staffGrant && settings.writeControlEnabled &&
+          else if (!adminGrant && settings.writeControlEnabled &&
                    MobileGuestRoutes.guestOnlyWhenDisabled(request.method, request.path) &&
                    !writePolicy.enabled) denied(403, "mobile_writes_disabled")
           else if (write && !scopes.contains(MobileScopes.Write) ||
@@ -700,6 +700,10 @@ class MobileBearerFilter @Inject() (
           else if (value.clientId == MobileClaimRoutes.ClientId && (write && !claimRoute ||
                    MobileGuestRoutes.guestOnlyWhenDisabled(request.method, request.path)))
             denied(403, "insufficient_scope")
+          // While field writes are off only super-users' admin grants write (fork-changes.md);
+          // organizers' writes wait like everyone else's.
+          else if (organizeGrant && request.method != "GET" && settings.writeControlEnabled &&
+                   !writePolicy.enabled) denied(403, "mobile_writes_disabled")
           // D13: with the switch off, only the claim page's grant may claim.
           else if (switchedOff && value.clientId != MobileClaimRoutes.ClientId)
             denied(403, "mobile_writes_disabled")

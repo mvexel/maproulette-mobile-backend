@@ -313,7 +313,8 @@ class MobileOAuthController(
       if (MobileScopes.isAdmin(interaction.scope))
         "This app can administer MapRoulette as you, a super-user: manage the approved mobile apps, create and update challenges, add tasks to them and read challenges and tasks. Every change is recorded in an audit log. It cannot edit OpenStreetMap or obtain your personal API key."
       else if (MobileScopes.isOrganize(interaction.scope))
-        "This app can run campaigns as you in the MapRoulette projects you organize: create and update challenges there, add tasks to them, publish them and read their results. Every change is recorded in an audit log. It cannot manage apps, turn saving answers on or off, edit OpenStreetMap or obtain your personal API key."
+        // Iris's wording; organizers know the product as Street Tally and the work as campaigns.
+        s"${html(clientName)} can run campaigns for you in the projects you organize: create and change campaigns, add places to them, publish them and read their results. Every change is recorded in a log. It can't edit OpenStreetMap, manage apps, turn answer saving on or off, or get your personal API key."
       else if (canWrite && edit(interaction.scope))
         "This app can read MapRoulette tasks and your basic identity. It can also lock, skip and release tasks, keep a task locked while you edit, mark tasks fixed, not an issue, already fixed or too hard, request a review, set task tags, answer a task's questions, comment on tasks, bundle tasks to work on them together and link a task to your OpenStreetMap changeset, as you. It cannot edit OpenStreetMap, review tasks, delete tasks or obtain your personal API key."
       else if (canWrite && tagFix(interaction.scope))

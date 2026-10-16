@@ -38,8 +38,8 @@ upload; a changed selected tag returns `409 task_ineligible` without an edit or 
 ### Organizers
 
 A `mobile:organize` grant ([mobile-oauth.md](mobile-oauth.md#organizer-scope-mobileorganize))
-reaches the same stock routes as an admin grant, where upstream's project checks apply, and these
-admin routes, for the projects the organizer runs (Write or better, not their Home project):
+reaches the GET stock routes of the admin allowlist, where upstream's project checks apply, and
+these admin routes, for the projects the organizer runs (Write or better, not their Home project):
 
 | Method | Route | Organizer |
 | --- | --- | --- |
@@ -51,9 +51,14 @@ admin routes, for the projects the organizer runs (Write or better, not their Ho
 | GET | `/api/v2/mobile-admin/write-policy` | Read only |
 
 Anything else of the admin API (clients, scope sets, audit, setting the write switch, creating
-projects, organizers) is `403 insufficient_scope` at the bearer filter. A route for a project or
-campaign that isn't theirs is `403 organizer_forbidden`, and an organizer no longer on the list
-gets `403 organizer_required`. Their stock writes are audited as for admins.
+projects, organizers) is `403 insufficient_scope` at the bearer filter, and so is every stock
+write (creating or changing a challenge, adding tasks): organizers write only through routes that
+check the project. A route for a project or campaign that isn't theirs is `403
+organizer_forbidden`, and an organizer no longer on the list gets `403 organizer_required`.
+
+While the write switch is off (`mobileOAuth.writeControlEnabled` and
+the [field write policy](#field-write-policy) off), only super-users' admin grants write: an organizer's
+non-GET request is `403 mobile_writes_disabled`, as an app's would be.
 
 Super-users keep the list:
 
@@ -68,7 +73,8 @@ project grants of Write or better, without their Home project.
 `{"osmUsername", "projectId", "role": "write"|"admin"}`. Gives the person that upstream role on
 the project (replacing any other role they held there, as upstream's
 `PUT /api/v2/user/:osmId/project/:pid/:role`) and puts them on the list, audited as
-`organizer.add`. Returns the organizer as listed. The username matches without regard to case;
+`organizer.add`, in one transaction. Returns the organizer as listed. Making the project's last
+administrator a Write organizer is `409 last_project_admin`, and changes nothing. The username matches without regard to case;
 the person must have signed in to MapRoulette once (`404 user_not_found`). An unknown or deleted
 project is `404 project_not_found`. Adding someone to another project is the same call.
 
@@ -80,8 +86,8 @@ Their project roles stay, as upstream roles.
 #### `DELETE /api/v2/mobile-admin/organizers/:userId/projects/:projectId`
 
 Removes their upstream role on the project and returns the organizer (audited as
-`organizer.project.remove`). Upstream refuses to remove a project's last administrator:
-`409 last_project_admin`.
+`organizer.project.remove`, in the same transaction). Removing a project's last administrator is
+`409 last_project_admin`, and changes nothing.
 
 ## Clients
 

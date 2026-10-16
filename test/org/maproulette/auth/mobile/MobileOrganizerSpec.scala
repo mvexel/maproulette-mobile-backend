@@ -17,6 +17,7 @@ import play.api.test.Helpers.{
   status,
   stubControllerComponents,
   BAD_REQUEST,
+  CONFLICT,
   FORBIDDEN,
   NOT_FOUND,
   NO_CONTENT,
@@ -198,6 +199,61 @@ class MobileOrganizerSpec(implicit val application: Application) extends Framewo
         SQL"""SELECT action FROM mobile_admin_audit WHERE target = ${s"user:${dana.id}"}
               ORDER BY id""".as(SqlParser.str("action").*)
       } mustBe Seq("organizer.add", "organizer.add", "organizer.project.remove", "organizer.remove")
+    }
+  }
+
+  "An organizer's projects" should {
+    "leave out their Home project" taggedAs ChoiceTag in {
+      val eli  = serviceManager.user.create(getTestUser(77002, "Eli_Organizer"), User.superUser)
+      val home = project(s"Home_${eli.osmProfile.id}")
+      val real = project("Organizer spec: Eli's")
+      Seq(home, real).foreach { p =>
+        status(
+          controller.add(
+            as(
+              User.superUser,
+              body =
+                Json.obj("osmUsername" -> "Eli_Organizer", "projectId" -> p.id, "role" -> "admin")
+            )
+          )
+        ) mustBe OK
+      }
+      gate.organizerProjects(eli) mustBe Set(real.id)
+    }
+
+    "keep an administrator on every project: a change that would leave none is 409" taggedAs ChoiceTag in {
+      val fay = serviceManager.user.create(getTestUser(77003, "Fay_Organizer"), User.superUser)
+      val p   = project("Organizer spec: Fay's")
+      def add(role: String) =
+        controller.add(
+          as(
+            User.superUser,
+            body = Json.obj("osmUsername" -> "Fay_Organizer", "projectId" -> p.id, "role" -> role)
+          )
+        )
+      status(add("admin")) mustBe OK
+      // Fay becomes the project's only administrator.
+      db.withConnection { implicit c =>
+        SQL"""DELETE FROM grants WHERE object_type = 0 AND object_id = ${p.id}
+              AND grantee_type = 5 AND grantee_id <> ${fay.id}""".executeUpdate()
+      }
+      serviceManager.project.clearCache(p.id)
+      val demote = add("write")
+      status(demote) mustBe CONFLICT
+      contentAsJson(demote) mustBe Json.obj("error" -> "last_project_admin")
+      val removed = controller.removeProject(fay.id, p.id)(as(User.superUser))
+      status(removed) mustBe CONFLICT
+      contentAsJson(removed) mustBe Json.obj("error" -> "last_project_admin")
+      // Nothing changed: still the admin, still listed with the project, and nothing audited.
+      gate.organizerProjects(fay) mustBe Set(p.id)
+      db.withConnection { implicit c =>
+        SQL"""SELECT role FROM grants WHERE object_type = 0 AND object_id = ${p.id}
+              AND grantee_type = 5 AND grantee_id = ${fay.id}""".as(SqlParser.int("role").*)
+      } mustBe Seq(1)
+      db.withConnection { implicit c =>
+        SQL"""SELECT action FROM mobile_admin_audit WHERE target = ${s"user:${fay.id}"}
+              ORDER BY id""".as(SqlParser.str("action").*)
+      } mustBe Seq("organizer.add")
     }
   }
 }
