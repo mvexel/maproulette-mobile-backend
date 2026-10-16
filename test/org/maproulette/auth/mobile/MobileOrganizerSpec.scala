@@ -108,6 +108,9 @@ class MobileOrganizerSpec(implicit val application: Application) extends Framewo
     created
   }
 
+  /** The user as upstream's checks load them, after the controller cleared its caches. */
+  private def fresh(id: Long): User = serviceManager.user.retrieve(id).get
+
   private def ids(result: JsValue, key: String, id: JsValue => Long): Set[Long] =
     (result \ key).as[JsArray].value.map(id).toSet
 
@@ -142,6 +145,16 @@ class MobileOrganizerSpec(implicit val application: Application) extends Framewo
       status(add("Dana%Organizer", mine.id, "write")) mustBe NOT_FOUND
       gate.isOrganizer(dana.id) mustBe true
       gate.organizerProjects(dana) mustBe Set(mine.id)
+      // We write upstream's grant rows ourselves (fork-changes.md): upstream's own check must agree.
+      def role(p: Project) =
+        permission.effectiveRole(serviceManager.project.retrieve(p.id).get, fresh(dana.id))
+      role(mine) mustBe Some(Grant.ROLE_WRITE_ACCESS)
+      role(theirs) mustBe None
+      permission.hasObjectWriteAccess(c1, fresh(dana.id))
+      an[IllegalAccessException] must be thrownBy permission.hasObjectWriteAccess(
+        c2,
+        fresh(dana.id)
+      )
       gate.projectOf(c2.id) mustBe Some(theirs.id)
 
       val danaCampaigns = contentAsJson(campaigns.listCampaigns(as(dana, MobileScopes.Organize)))
@@ -175,6 +188,7 @@ class MobileOrganizerSpec(implicit val application: Application) extends Framewo
       // A second project, then off it again.
       status(add("Dana_Organizer", theirs.id, "admin")) mustBe OK
       gate.organizerProjects(dana) mustBe Set(mine.id, theirs.id)
+      role(theirs) mustBe Some(Grant.ROLE_ADMIN)
       val listed = (contentAsJson(controller.list(as(User.superUser))) \ "organizers")
         .as[JsArray]
         .value
@@ -184,6 +198,8 @@ class MobileOrganizerSpec(implicit val application: Application) extends Framewo
         Set(mine.id, theirs.id)
       status(controller.removeProject(dana.id, theirs.id)(as(User.superUser))) mustBe OK
       gate.organizerProjects(dana) mustBe Set(mine.id)
+      role(theirs) mustBe None
+      role(mine) mustBe Some(Grant.ROLE_WRITE_ACCESS)
       status(controller.removeProject(dana.id + 1000, mine.id)(as(User.superUser))) mustBe
         NOT_FOUND
 
