@@ -60,13 +60,10 @@ class ChoiceOsmClient @Inject() (ws: WSClient, config: Config)(implicit ec: Exec
             case None    => throw failed(response)
           }
         case 410 => ElementGone
-        // OSM answers 404 with an empty body (labelled text/html) for an id that never existed.
-        // An HTML 404 with a page is a proxy or a wrong MR_OSM_SERVER, which must not mark tasks
-        // stale.
-        case 404
-            if response.body.trim.isEmpty || !response.contentType.toLowerCase.contains("html") =>
-          ElementGone
-        case _ => throw failed(response)
+        // OSM answers 404 for an id that never existed. An HTML 404 is a proxy or a wrong
+        // MR_OSM_SERVER, which must not mark tasks stale.
+        case 404 if !response.contentType.toLowerCase.contains("html") => ElementGone
+        case _                                                         => throw failed(response)
       }
     }
   }
