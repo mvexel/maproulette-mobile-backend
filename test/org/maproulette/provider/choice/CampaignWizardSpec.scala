@@ -240,6 +240,39 @@ class CampaignWizardSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
       WizardOverpass.resolved("https://[::1]/api/status") mustBe "resolves to 0:0:0:0:0:0:0:1 (IPv6)"
     }
 
+    "say in one line whether the GeoParquet host answers a ranged read (spike)" in {
+      val server = com.sun.net.httpserver.HttpServer
+        .create(new java.net.InetSocketAddress("127.0.0.1", 0), 0)
+      @volatile var range = ""
+      server.createContext(
+        "/layercake/pois.parquet",
+        exchange => {
+          range = Option(exchange.getRequestHeaders.getFirst("Range")).getOrElse("")
+          val bytes = "\u0000\u0001\u0002\u0003PAR1".getBytes("UTF-8")
+          exchange.getResponseHeaders.set("Content-Range", "bytes 92-99/100")
+          exchange.sendResponseHeaders(206, bytes.length.toLong)
+          exchange.getResponseBody.write(bytes)
+          exchange.close()
+        }
+      )
+      server.start()
+      try {
+        val file = s"http://127.0.0.1:${server.getAddress.getPort}/layercake/pois.parquet"
+        val probe = new WizardParquetProbe(ws, mock[Config]) {
+          override protected def url: String = file
+        }
+        val line = result(probe.probe())
+        line must fullyMatch regex
+          s"Parquet host answered: HTTP 206 in [0-9]+ ms, Parquet footer, bytes 92-99/100 \\(${java.util.regex.Pattern
+            .quote(file)}, resolves to 127\\.0\\.0\\.1 \\(IPv4\\)\\)"
+        range mustBe "bytes=-8"
+        val down = new WizardParquetProbe(ws, mock[Config]) {
+          override protected def url: String = "http://127.0.0.1:9/layercake/pois.parquet"
+        }
+        result(down.probe()) must startWith("Parquet host not reachable: ")
+      } finally server.stop(0)
+    }
+
     "read its endpoints from OVERPASS_URLS, and try the next only when connecting fails" in {
       WizardOverpass.parseUrls(None) mustBe WizardOverpass.DefaultUrls
       WizardOverpass.parseUrls(Some(" ")) mustBe WizardOverpass.DefaultUrls

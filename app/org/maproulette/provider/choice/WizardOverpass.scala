@@ -179,4 +179,7 @@ class WizardOverpassProbe @Inject() (overpass: WizardOverpass)(implicit ec: Exec
 }
 
 class WizardOverpassModule
-    extends play.api.inject.SimpleModule(play.api.inject.bind[WizardOverpassProbe].toSelf.eagerly())
+    extends play.api.inject.SimpleModule(
+      play.api.inject.bind[WizardOverpassProbe].toSelf.eagerly(),
+      play.api.inject.bind[WizardParquetProbe].toSelf.eagerly()
+    )
