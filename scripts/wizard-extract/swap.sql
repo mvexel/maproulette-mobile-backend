@@ -5,6 +5,9 @@ BEGIN;
 CREATE TEMP TABLE wizard_osm_lines (line jsonb) ON COMMIT DROP;
 -- CSV with quote and delimiter bytes JSON never holds, so each line arrives as written.
 \copy wizard_osm_lines FROM pstdin WITH (FORMAT csv, QUOTE e'\x01', DELIMITER e'\x02')
+-- Index names: a rename keeps them, so the live table's indexes carry `_next` names, and each
+-- load's LIKE picks the free pair (`..._next_pkey` and `..._next_pkey1` alternate). Tested over
+-- five runs on one database; nothing refers to these names.
 CREATE TABLE wizard_osm_features_next (LIKE wizard_osm_features INCLUDING ALL);
 INSERT INTO wizard_osm_features_next (kind, osm_id, tags, geom)
   SELECT line #>> '{properties,@type}', (line #>> '{properties,@id}')::bigint,
