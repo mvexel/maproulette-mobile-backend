@@ -216,5 +216,6 @@ class WizardOverpassModule
     extends play.api.inject.SimpleModule(
       play.api.inject.bind[WizardSource].to[WizardSources],
       play.api.inject.bind[WizardOverpassProbe].toSelf.eagerly(),
-      play.api.inject.bind[WizardParquetProbe].toSelf.eagerly()
+      play.api.inject.bind[WizardParquetProbe].toSelf.eagerly(),
+      play.api.inject.bind[WizardExtractProbe].toSelf.eagerly()
     )

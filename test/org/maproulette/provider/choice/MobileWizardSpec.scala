@@ -279,6 +279,16 @@ class MobileWizardSpec(implicit val application: Application) extends FrameworkH
         counts.head mustBe SetCount(1, 1)
         counts.map(_.all).sum mustBe 2
         fake.count mustBe asked
+        val check =
+          new WizardExtractProbe(new WizardExtract(db, mock[Config]), library, mock[Config])
+        run(check.probe()) mustBe "Wizard counts at 40.7538,-111.9068 r800: answered from the extract " +
+          "(startup check): " + library.sets
+          .zip(counts)
+          .map {
+            case (s, c) => s"${s.id} ${c.open} open of ${c.all}"
+          }
+          .mkString(", ")
+        fake.count mustBe asked
 
         // Outside the extract, or once it is two days old, Overpass answers (here: it can't).
         run(sources.features(doors, area.copy(lon = -110.0), 2001, 1, cached = true)) mustBe
@@ -287,6 +297,7 @@ class MobileWizardSpec(implicit val application: Application) extends FrameworkH
         run(sources.features(doors, area, 2001, 1, cached = true)) mustBe
           Left(WizardQueryFailure("osm_unavailable"))
         fake.count mustBe asked + 2
+        run(check.probe()) mustBe "Wizard counts at 40.7538,-111.9068 r800: no fresh extract covers it (startup check)"
       } finally db.withConnection { implicit c =>
         SQL"DELETE FROM wizard_osm_features".executeUpdate()
         SQL"DELETE FROM wizard_osm_extract".executeUpdate()
