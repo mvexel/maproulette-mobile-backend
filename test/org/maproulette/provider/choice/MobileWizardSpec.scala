@@ -238,5 +238,59 @@ class MobileWizardSpec(implicit val application: Application) extends FrameworkH
       contentAsJson(inHome) mustBe Json.obj("error" -> "organizer_forbidden")
       status(controller.publish(Long.MaxValue)(as(User.superUser, MobileScopes.Admin))) mustBe NOT_FOUND
     }
+
+    "read the nightly extract where it covers the area, and Overpass elsewhere" taggedAs ChoiceTag in {
+      val overpass = new WizardOverpass(application.injector.instanceOf[WSClient], mock[Config]) {
+        override protected def urls: Seq[String] = Seq(fake.url)
+      }
+      val sources                                  = new WizardSources(new WizardExtract(db, mock[Config]), overpass)
+      val library                                  = new QuestionSetLibrary()
+      val doors                                    = library.find("entrance-doors").get
+      val area                                     = SearchArea(40.7538, -111.9068, 800)
+      def run[A](f: scala.concurrent.Future[A]): A = scala.concurrent.Await.result(f, 10.seconds)
+      def node(id: Long, lon: Double, lat: Double, tags: (String, String)*) =
+        db.withConnection { implicit c =>
+          val json = Json.stringify(Json.toJson(tags.toMap))
+          SQL"""INSERT INTO wizard_osm_features (kind, osm_id, tags, geom)
+                VALUES ('node', $id, $json::jsonb, ST_SetSRID(ST_MakePoint($lon, $lat), 4326))"""
+            .executeUpdate()
+        }
+      def extract(cutHoursAgo: Int) = db.withConnection { implicit c =>
+        SQL"""INSERT INTO wizard_osm_extract (id, source, extract_at, features, coverage)
+              VALUES (1, 'test', NOW() - ($cutHoursAgo * INTERVAL '1 hour'), 4,
+                ST_MakeEnvelope(-112.2, 40.6, -111.6, 40.9, 4326))
+              ON CONFLICT (id) DO UPDATE SET extract_at = EXCLUDED.extract_at"""
+          .executeUpdate()
+      }
+      try {
+        node(11, -111.9068, 40.7540, "entrance" -> "main", "name" -> "Granary \"Live\"")
+        node(12, -111.9070, 40.7536, "entrance" -> "emergency")
+        node(13, -111.8500, 40.7538, "entrance" -> "yes")
+        node(14, -111.9066, 40.7539, "natural"  -> "tree")
+        extract(3)
+        fake.answer = _ => (504, "")
+        val asked = fake.count
+
+        val open = run(sources.features(doors, area, 2001, 1, cached = true)).toOption.get
+        (open.all, open.open) mustBe (1L, 1L)
+        open.features.map(f => (f.element, f.tags.get("name"))) mustBe
+          List(("node/11", Some("Granary \"Live\"")))
+        val counts = run(sources.counts(library.sets, area, 1)).toOption.get
+        counts.head mustBe SetCount(1, 1)
+        counts.map(_.all).sum mustBe 2
+        fake.count mustBe asked
+
+        // Outside the extract, or once it is two days old, Overpass answers (here: it can't).
+        run(sources.features(doors, area.copy(lon = -110.0), 2001, 1, cached = true)) mustBe
+          Left(WizardQueryFailure("osm_unavailable"))
+        extract(49)
+        run(sources.features(doors, area, 2001, 1, cached = true)) mustBe
+          Left(WizardQueryFailure("osm_unavailable"))
+        fake.count mustBe asked + 2
+      } finally db.withConnection { implicit c =>
+        SQL"DELETE FROM wizard_osm_features".executeUpdate()
+        SQL"DELETE FROM wizard_osm_extract".executeUpdate()
+      }
+    }
   }
 }

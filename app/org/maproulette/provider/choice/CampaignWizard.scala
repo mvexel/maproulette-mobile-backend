@@ -114,13 +114,13 @@ case class OpenFeatures(all: Long, open: Long, features: List[SetFeature]) {
 
 /**
   * The campaign wizard's server side (campaign-wizard.md §4, Juno's wizard-api-draft.md): counts
-  * and open features from Overpass, and one-call create and publish. Create reads OSM again and
+  * and open features from OSM ([[WizardSource]]), and one-call create and publish. Create reads OSM again and
   * makes the tasks itself, so a campaign never holds a feature the set wouldn't pick.
   */
 @Singleton
 class CampaignWizard @Inject() (
     val library: QuestionSetLibrary,
-    overpass: WizardOverpass,
+    source: WizardSource,
     db: Database,
     dal: DALManager,
     provider: ChallengeProvider,
@@ -129,22 +129,22 @@ class CampaignWizard @Inject() (
 )(implicit ec: ExecutionContext) {
   import CampaignWizard._
 
-  /** Every set's count, or all `unavailable` when Overpass didn't answer. */
+  /** Every set's count, or all `unavailable` when OSM didn't answer. */
   def counts(area: SearchArea, userId: Long): Future[Either[WizardQueryFailure, JsObject]] = {
     val sets = library.sets
-    overpass.elements(OverpassQuery.counts(sets, round(area)), userId).map {
+    source.counts(sets, round(area), userId).map {
       case Left(f @ WizardQueryFailure("rate_limited")) => Left(f)
       case other =>
-        val totals = other.toOption.map(_.value.flatMap(OverpassQuery.total).toList)
+        val found = other.toOption.filter(_.size == sets.size)
         Right(Json.obj("counts" -> sets.zipWithIndex.map {
           case (set, i) =>
-            totals.filter(_.size == 2 * sets.size) match {
-              case Some(t) =>
+            found match {
+              case Some(c) =>
                 Json.obj(
                   "set"      -> set.id,
                   "version"  -> set.version,
-                  "open"     -> t(2 * i),
-                  "complete" -> math.max(0, t(2 * i + 1) - t(2 * i))
+                  "open"     -> c(i).open,
+                  "complete" -> math.max(0, c(i).all - c(i).open)
                 )
               case None =>
                 Json.obj("set" -> set.id, "version" -> set.version, "unavailable" -> true)
@@ -159,18 +159,7 @@ class CampaignWizard @Inject() (
       userId: Long,
       cached: Boolean = true
   ): Future[Either[WizardQueryFailure, OpenFeatures]] =
-    overpass
-      .elements(OverpassQuery.features(set, round(area), MaxFeatures + 1), userId, cached)
-      .map(_.flatMap { elements =>
-        elements.value.flatMap(OverpassQuery.total).toList match {
-          case all :: open :: _ =>
-            // Re-checked here: only what the set would pick, nearest-first is the admin's job.
-            val found =
-              elements.value.flatMap(OverpassQuery.feature).filter(f => set.isOpen(f.kind, f.tags))
-            Right(OpenFeatures(all, open, found.toList.distinctBy(_.element)))
-          case _ => Left(WizardQueryFailure("osm_unavailable"))
-        }
-      })
+    source.features(set, round(area), MaxFeatures + 1, userId, cached)
 
   /**
     * Creates the campaign as a draft in the project: a disabled challenge with one task per open
