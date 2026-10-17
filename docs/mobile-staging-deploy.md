@@ -43,6 +43,10 @@ MR_SUPER_ACCOUNTS=<osm-user-id>
 OVERPASS_URLS=https://overpass-api.de/api/interpreter,https://maps.mail.ru/osm/tools/overpass/api/interpreter,https://overpass.private.coffee/api/interpreter
 ```
 
+The compose files start the JVM with `-Djava.net.preferIPv4Addresses=true`. The VPS has no IPv6
+route, and without it the JVM connects to a host's IPv6 address first and fails (the wizard saw
+`ConnectException` from overpass-api.de while IPv4 works).
+
 Use only a hostname in `PUBLIC_HOST`, without `https://` or a path. Compose
 derives the public origin and backend callback from it. Keep
 `APPLICATION_SECRET` and `MAPROULETTE_SECRET_KEY` stable across restarts and

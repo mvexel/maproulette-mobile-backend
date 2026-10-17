@@ -31,6 +31,7 @@ services:
       - /MapRouletteAPI/bin/maprouletteapi
       - -Dhttp.port=80
       - -Dpidfile.path=/dev/null
+      - -Djava.net.preferIPv4Addresses=true
       - -Dconfig.file=/MapRouletteAPI/conf/mobile-field.conf
     environment:
       MR_DATABASE_URL: jdbc:postgresql://db:5432/maproulette
