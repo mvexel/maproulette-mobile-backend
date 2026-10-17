@@ -1,6 +1,6 @@
 Hi,
 
-Thanks for checking {{nounMany}} with {{organizerName}} on {{eventDate}}. You checked {{savedStopsText}}.
+Thanks for checking {{nounMany}}{{withOrganizer}} on {{eventDate}}. You checked {{savedStopsText}}.
 
 They're saved, but not on the map yet. To add them to OpenStreetMap, the free map that anyone can use, open this link on a computer:
 

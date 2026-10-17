@@ -2,7 +2,7 @@ Hi,
 
 Your {{savedAnswersText}} from {{firstAnswerDate}} weren't put on the map before {{deadline}}, so we've removed them and your email address. They still count in the campaign's totals.
 
-Thanks for checking {{nounMany}} with {{organizerName}}. Next time, you can put your answers on the map right away by signing in to OpenStreetMap in the app.
+Thanks for checking {{nounMany}}{{withOrganizer}}. Next time, you can put your answers on the map right away by signing in to OpenStreetMap in the app.
 
 Street Tally
 
