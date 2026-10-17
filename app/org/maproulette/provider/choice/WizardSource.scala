@@ -159,3 +159,52 @@ class WizardSources @Inject() (extract: WizardExtract, overpass: WizardOverpass)
       overpass.features(set, area, limit, userId, cached)
     )
 }
+
+/**
+  * Logs once at startup whether the extract answers one sample count, so the deploy log shows it
+  * without an organizer token. The area is `mobileWizard.extractProbeArea`, "lat,lon,radius"
+  * (default: Woodbine Food Hall, 800 m). Reads the extract only; never asks Overpass.
+  */
+@Singleton
+class WizardExtractProbe @Inject() (
+    extract: WizardExtract,
+    library: QuestionSetLibrary,
+    config: Config
+)(implicit ec: ExecutionContext) {
+  private val logger = play.api.Logger(getClass)
+
+  protected def area: SearchArea =
+    Option(config.config)
+      .flatMap(_.getOptional[String]("mobileWizard.extractProbeArea"))
+      .map(_.split(",").map(_.trim))
+      .collect { case Array(lat, lon, r) => SearchArea.parse(Some(lat), Some(lon), Some(r)) }
+      .flatMap(_.toOption)
+      .getOrElse(WizardExtractProbe.Woodbine)
+
+  def probe(): Future[String] = {
+    val at    = area
+    val sets  = library.sets
+    val where = f"${at.lat}%.4f,${at.lon}%.4f r${at.radius}"
+    extract
+      .counts(sets, at)
+      .map {
+        case Some(counts) =>
+          s"Wizard counts at $where: answered from the extract (startup check): " +
+            sets
+              .zip(counts)
+              .map { case (s, c) => s"${s.id} ${c.open} open of ${c.all}" }
+              .mkString(", ")
+        case None => s"Wizard counts at $where: no fresh extract covers it (startup check)"
+      }
+      .recover {
+        case e: Exception =>
+          s"Wizard counts at $where: extract not readable (startup check): ${e.getClass.getSimpleName}"
+      }
+  }
+
+  probe().foreach(line => logger.info(line))
+}
+
+object WizardExtractProbe {
+  val Woodbine = SearchArea(40.7538, -111.9068, 800)
+}
