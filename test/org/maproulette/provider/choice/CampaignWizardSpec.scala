@@ -240,6 +240,53 @@ class CampaignWizardSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
       WizardOverpass.resolved("https://[::1]/api/status") mustBe "resolves to 0:0:0:0:0:0:0:1 (IPv6)"
     }
 
+    "say in one line whether the GeoParquet and extract hosts answer a ranged read (spike)" in {
+      val server = com.sun.net.httpserver.HttpServer
+        .create(new java.net.InetSocketAddress("127.0.0.1", 0), 0)
+      val ranges = new java.util.concurrent.ConcurrentHashMap[String, String]()
+      def serve(path: String, body: String, contentRange: String): Unit =
+        server.createContext(
+          path,
+          exchange => {
+            ranges.put(path, Option(exchange.getRequestHeaders.getFirst("Range")).getOrElse(""))
+            val bytes = body.getBytes("UTF-8")
+            exchange.getResponseHeaders.set("Content-Range", contentRange)
+            exchange.sendResponseHeaders(206, bytes.length.toLong)
+            exchange.getResponseBody.write(bytes)
+            exchange.close()
+          }
+        )
+      serve("/layercake/pois.parquet", "\u0000\u0001\u0002\u0003PAR1", "bytes 92-99/100")
+      serve(
+        "/utah-latest.osm.pbf",
+        "\u0000\u0000\u0000\u000e\n\tOSMHeader\u0018",
+        "bytes 0-15/2000"
+      )
+      server.start()
+      try {
+        val base    = s"http://127.0.0.1:${server.getAddress.getPort}"
+        val file    = s"$base/layercake/pois.parquet"
+        val extract = s"$base/utah-latest.osm.pbf"
+        val probe = new WizardParquetProbe(ws, mock[Config]) {
+          override protected def url: String        = file
+          override protected def extractUrl: String = extract
+        }
+        def quoted(u: String) = java.util.regex.Pattern.quote(u)
+        result(probe.probe()) must fullyMatch regex
+          s"Parquet host answered: HTTP 206 in [0-9]+ ms, Parquet footer, bytes 92-99/100 \\(${quoted(file)}, resolves to 127\\.0\\.0\\.1 \\(IPv4\\)\\)"
+        result(probe.extractProbe()) must fullyMatch regex
+          s"Extract host answered: HTTP 206 in [0-9]+ ms, PBF header, bytes 0-15/2000 \\(${quoted(extract)}, resolves to 127\\.0\\.0\\.1 \\(IPv4\\)\\)"
+        ranges.get("/layercake/pois.parquet") mustBe "bytes=-8"
+        ranges.get("/utah-latest.osm.pbf") mustBe "bytes=0-15"
+        val down = new WizardParquetProbe(ws, mock[Config]) {
+          override protected def url: String        = "http://127.0.0.1:9/layercake/pois.parquet"
+          override protected def extractUrl: String = "http://127.0.0.1:9/utah-latest.osm.pbf"
+        }
+        result(down.probe()) must startWith("Parquet host not reachable: ")
+        result(down.extractProbe()) must startWith("Extract host not reachable: ")
+      } finally server.stop(0)
+    }
+
     "read its endpoints from OVERPASS_URLS, and try the next only when connecting fails" in {
       WizardOverpass.parseUrls(None) mustBe WizardOverpass.DefaultUrls
       WizardOverpass.parseUrls(Some(" ")) mustBe WizardOverpass.DefaultUrls
