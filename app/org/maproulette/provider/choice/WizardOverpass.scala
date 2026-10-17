@@ -21,7 +21,8 @@ case class WizardQueryFailure(code: String)
   * one only when connecting fails; a timeout is the answer (504), never retried elsewhere.
   */
 @Singleton
-class WizardOverpass @Inject() (ws: WSClient, config: Config)(implicit ec: ExecutionContext) {
+class WizardOverpass @Inject() (ws: WSClient, config: Config)(implicit ec: ExecutionContext)
+    extends WizardSource {
   protected def urls: Seq[String] =
     WizardOverpass.parseUrls(config.config.getOptional[String]("mobileWizard.overpassUrls"))
   protected def requestTimeout: FiniteDuration = (OverpassQuery.Timeout + 2).seconds
@@ -110,6 +111,39 @@ class WizardOverpass @Inject() (ws: WSClient, config: Config)(implicit ec: Execu
           .andThen { case _ => inFlight.release() }
     }
 
+  /** Two count elements per set, open then all; anything else is `osm_unavailable`. */
+  def counts(
+      sets: Seq[QuestionSet],
+      area: SearchArea,
+      userId: Long
+  ): Future[Either[WizardQueryFailure, List[SetCount]]] =
+    elements(OverpassQuery.counts(sets, area), userId).map(_.flatMap { found =>
+      found.value.flatMap(OverpassQuery.total).toList match {
+        case totals if totals.size == 2 * sets.size =>
+          Right(totals.grouped(2).map(p => SetCount(p(0), p(1))).toList)
+        case _ => Left(WizardQueryFailure("osm_unavailable"))
+      }
+    })
+
+  def features(
+      set: QuestionSet,
+      area: SearchArea,
+      limit: Int,
+      userId: Long,
+      cached: Boolean
+  ): Future[Either[WizardQueryFailure, OpenFeatures]] =
+    elements(OverpassQuery.features(set, area, limit), userId, cached)
+      .map(_.flatMap { found =>
+        found.value.flatMap(OverpassQuery.total).toList match {
+          case all :: open :: _ =>
+            // Re-checked here: only what the set would pick, nearest-first is the admin's job.
+            val picked =
+              found.value.flatMap(OverpassQuery.feature).filter(f => set.isOpen(f.kind, f.tags))
+            Right(OpenFeatures(all, open, picked.toList.distinctBy(_.element)))
+          case _ => Left(WizardQueryFailure("osm_unavailable"))
+        }
+      })
+
   /** Posts to the first endpoint that accepts the connection. */
   private def post(endpoints: Seq[String], query: String): Future[play.api.libs.ws.WSResponse] =
     ws.url(endpoints.head)
@@ -180,6 +214,7 @@ class WizardOverpassProbe @Inject() (overpass: WizardOverpass)(implicit ec: Exec
 
 class WizardOverpassModule
     extends play.api.inject.SimpleModule(
+      play.api.inject.bind[WizardSource].to[WizardSources],
       play.api.inject.bind[WizardOverpassProbe].toSelf.eagerly(),
       play.api.inject.bind[WizardParquetProbe].toSelf.eagerly()
     )
