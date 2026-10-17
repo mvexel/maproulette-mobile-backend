@@ -120,26 +120,33 @@ class WizardSources @Inject() (extract: WizardExtract, overpass: WizardOverpass)
 ) extends WizardSource {
   private val logger = play.api.Logger(getClass)
 
-  private def orOverpass[A](read: => Future[Option[A]])(
+  /** Logs one line per query naming the source that answered, for the dev log. */
+  private def orOverpass[A](what: String, area: SearchArea)(read: => Future[Option[A]])(
       fallback: => Future[Either[WizardQueryFailure, A]]
-  ): Future[Either[WizardQueryFailure, A]] =
+  ): Future[Either[WizardQueryFailure, A]] = {
+    val where = f"${area.lat}%.4f,${area.lon}%.4f r${area.radius}"
     read
       .recover {
         case e: Exception =>
-          logger.warn(s"Wizard extract not readable, asking Overpass: ${e.getMessage}")
+          logger.warn(s"Wizard $what at $where: extract not readable (${e.getMessage})")
           None
       }
       .flatMap {
-        case Some(answer) => Future.successful(Right(answer))
-        case None         => fallback
+        case Some(answer) =>
+          logger.info(s"Wizard $what at $where: answered from the extract")
+          Future.successful(Right(answer))
+        case None =>
+          logger.info(s"Wizard $what at $where: asked Overpass (no fresh extract covers it)")
+          fallback
       }
+  }
 
   def counts(
       sets: Seq[QuestionSet],
       area: SearchArea,
       userId: Long
   ): Future[Either[WizardQueryFailure, List[SetCount]]] =
-    orOverpass(extract.counts(sets, area))(overpass.counts(sets, area, userId))
+    orOverpass("counts", area)(extract.counts(sets, area))(overpass.counts(sets, area, userId))
 
   def features(
       set: QuestionSet,
@@ -148,7 +155,7 @@ class WizardSources @Inject() (extract: WizardExtract, overpass: WizardOverpass)
       userId: Long,
       cached: Boolean
   ): Future[Either[WizardQueryFailure, OpenFeatures]] =
-    orOverpass(extract.features(set, area, limit))(
+    orOverpass(s"${set.id} features", area)(extract.features(set, area, limit))(
       overpass.features(set, area, limit, userId, cached)
     )
 }
