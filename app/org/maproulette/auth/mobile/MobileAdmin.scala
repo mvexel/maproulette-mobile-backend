@@ -53,6 +53,9 @@ trait MobileAdminCheck {
   /** The project of a challenge that is not deleted. */
   def projectOf(challengeId: Long): Option[Long] = None
 
+  /** The OSM id of a challenge's owner, when the challenge is not deleted. */
+  def ownerOf(challengeId: Long): Option[Long] = None
+
   /** Whether the user may be given, or keep using, a grant of this scope. */
   final def mayHold(scope: String, userId: Long): Boolean =
     if (MobileScopes.isAdmin(scope)) isAdmin(userId)
@@ -120,6 +123,11 @@ class MobileAdminGate @Inject() (
   override def projectOf(challengeId: Long): Option[Long] = db.withConnection { implicit c =>
     SQL"SELECT parent_id FROM challenges WHERE id = $challengeId AND NOT deleted"
       .as(SqlParser.long("parent_id").singleOpt)
+  }
+
+  override def ownerOf(challengeId: Long): Option[Long] = db.withConnection { implicit c =>
+    SQL"SELECT owner_id FROM challenges WHERE id = $challengeId AND NOT deleted"
+      .as(SqlParser.long("owner_id").singleOpt)
   }
 }
 

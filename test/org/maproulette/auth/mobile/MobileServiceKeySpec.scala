@@ -46,6 +46,12 @@ class MobileServiceKeySpec extends PlaySpec with MockitoSugar with BeforeAndAfte
   private val admins = new MobileAdminCheck {
     def isAdmin(value: User): Boolean  = value.id == serviceUser.id
     def isAdmin(userId: Long): Boolean = userId == serviceUser.id
+    // Challenge 5 is the service user's, 6 someone else's; others don't exist.
+    override def ownerOf(challengeId: Long): Option[Long] = challengeId match {
+      case 5 => Some(MobileServiceKey.ServiceOsmId)
+      case 6 => Some(8909L)
+      case _ => None
+    }
   }
   private def settings(writeControl: Boolean) =
     new MobileOAuthSettings(
@@ -193,6 +199,21 @@ class MobileServiceKeySpec extends PlaySpec with MockitoSugar with BeforeAndAfte
         ),
         bearer(DELETE, "/api/v2/challenge/5")
       ).foreach(request => status(gate.apply(next)(request)) mustBe FORBIDDEN)
+    }
+
+    "write only challenges the service user owns, and still read the others" in {
+      val (gate, _) = filter(stageKey())
+      Seq(
+        bearer(PUT, "/api/v2/challenge/6"),
+        bearer(PUT, "/api/v2/challenge/6/addFileTasks?lineByLine=true&report=true"),
+        bearer(PUT, "/api/v2/challenge/7")
+      ).foreach { request =>
+        val result = gate.apply(next)(request)
+        status(result) mustBe FORBIDDEN
+        contentAsJson(result) mustBe Json.obj("error" -> "not_owner")
+      }
+      Seq(bearer(GET, "/api/v2/challenge/6"), bearer(GET, "/api/v2/challenge/6/tasks"))
+        .foreach(request => status(gate.apply(next)(request)) mustBe OK)
     }
 
     "refuse the secret once the service user is no longer a super-user" in {

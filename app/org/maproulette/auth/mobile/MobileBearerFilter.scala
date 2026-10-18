@@ -683,7 +683,8 @@ class MobileBearerFilter @Inject() (
 
   /**
     * The stage service key (SK): the dedicated super-user, as an admin grant, on the service
-    * routes only. Its stock writes are audited as `service_key.stock.<method>`.
+    * routes only, writing only challenges it owns (SK-OWN). Its stock writes are audited as
+    * `service_key.stock.<method>`.
     */
   private def service(
       next: RequestHeader => Future[Result],
@@ -693,6 +694,11 @@ class MobileBearerFilter @Inject() (
       denied(403, "insufficient_scope")
     else
       Future(serviceKey.user()).flatMap {
+        case Some(user)
+            if admins.isAdmin(user) && MobileServiceRoutes
+              .writtenChallenge(request.method, request.path)
+              .exists(id => !admins.ownerOf(id).contains(user.osmProfile.id)) =>
+          denied(403, "not_owner")
         case Some(user) if admins.isAdmin(user) =>
           logger.info(s"Stage service key: ${request.method} ${request.path}")
           val result = next(
