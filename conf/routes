@@ -50,6 +50,7 @@ DELETE  /api/v2/mobile-admin/organizers/:userId/projects/:projectId     @control
 GET     /api/v2/mobile-admin/wizard/question-sets                       @controllers.MobileWizardController.questionSets
 GET     /api/v2/mobile-admin/wizard/question-sets/:id/features          @controllers.MobileWizardController.features(id:String)
 GET     /api/v2/mobile-admin/wizard/counts                              @controllers.MobileWizardController.counts
+GET     /api/v2/mobile-admin/wizard/coverage                            @controllers.MobileWizardController.coverage
 POST    /api/v2/mobile-admin/wizard/campaigns                           @controllers.MobileWizardController.create
 POST    /api/v2/mobile-admin/wizard/campaigns/:id/publish               @controllers.MobileWizardController.publish(id:Long)
 # Live progress page (fork, BACKLOG #12): public and link-only, by an unguessable token

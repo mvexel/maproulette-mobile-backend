@@ -52,6 +52,11 @@ class MobileWizardController @Inject() (
     )
   }
 
+  /** `GET /api/v2/mobile-admin/wizard/coverage`: the nightly extract's area, or `extract: null`. */
+  def coverage: Action[AnyContent] = Action.async { request =>
+    organizer(request)(_ => wizard.coverage().map(found => Ok(Json.obj("extract" -> found))))
+  }
+
   def counts: Action[AnyContent] = Action.async { request =>
     organizer(request) { user =>
       area(request) match {

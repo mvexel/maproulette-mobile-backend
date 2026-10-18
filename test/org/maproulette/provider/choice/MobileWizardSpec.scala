@@ -267,6 +267,7 @@ class MobileWizardSpec(implicit val application: Application) extends FrameworkH
         node(12, -111.9070, 40.7536, "entrance" -> "emergency")
         node(13, -111.8500, 40.7538, "entrance" -> "yes")
         node(14, -111.9066, 40.7539, "natural"  -> "tree")
+        run(sources.coverage()) mustBe None
         extract(3)
         fake.answer = _ => (504, "")
         val asked = fake.count
@@ -279,6 +280,12 @@ class MobileWizardSpec(implicit val application: Application) extends FrameworkH
         counts.head mustBe SetCount(1, 1)
         counts.map(_.all).sum mustBe 2
         fake.count mustBe asked
+        val covered = run(sources.coverage()).get
+        (covered \ "source").as[String] mustBe "test"
+        (covered \ "fresh").as[Boolean] mustBe true
+        (covered \ "features").as[Long] mustBe 4L
+        (covered \ "bbox").as[Seq[Double]] mustBe Seq(-112.2, 40.6, -111.6, 40.9)
+        (covered \ "coverage" \ "type").as[String] mustBe "Polygon"
         val check =
           new WizardExtractProbe(new WizardExtract(db, mock[Config]), library, mock[Config])
         run(check.probe()) mustBe "Wizard counts at 40.7538,-111.9068 r800: answered from the extract " +
@@ -294,6 +301,7 @@ class MobileWizardSpec(implicit val application: Application) extends FrameworkH
         run(sources.features(doors, area.copy(lon = -110.0), 2001, 1, cached = true)) mustBe
           Left(WizardQueryFailure("osm_unavailable"))
         extract(49)
+        (run(sources.coverage()).get \ "fresh").as[Boolean] mustBe false
         run(sources.features(doors, area, 2001, 1, cached = true)) mustBe
           Left(WizardQueryFailure("osm_unavailable"))
         fake.count mustBe asked + 2

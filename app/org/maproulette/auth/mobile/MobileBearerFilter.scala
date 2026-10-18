@@ -72,7 +72,8 @@ object MobileOrganizeRoutes {
         "/api/v2/mobile-admin/projects",
         "/api/v2/mobile-admin/write-policy",
         s"$wizard/question-sets",
-        s"$wizard/counts"
+        s"$wizard/counts",
+        s"$wizard/coverage"
       ).contains(path) || path.matches(s"$challenge/(live|results|queue/export)") ||
         path.matches(s"$wizard/question-sets/[a-z0-9-]{1,32}/features")
     case "PUT" =>

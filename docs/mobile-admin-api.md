@@ -261,6 +261,14 @@ with `{place}`, `{nounMany}` and `{audience}`.
 query: `{"counts": [{"set", "version", "open", "complete"}]}`, or every set `{"set", "version",
 "unavailable": true}` when Overpass didn't answer.
 
+### `GET /api/v2/mobile-admin/wizard/coverage`
+
+What the nightly OSM extract covers, so the wizard can stop early on a place outside it:
+`{"extract": {"source", "extractAt", "loadedAt", "features", "fresh", "maxAgeHours", "bbox":
+[west, south, east, north], "coverage": <GeoJSON geometry, simplified to about 100 m>}}`, or
+`{"extract": null}` when none was ever loaded. A place is read from the extract when `fresh` is
+true and its whole circle lies inside `coverage`; anywhere else counts and features ask Overpass.
+
 ### `GET /api/v2/mobile-admin/wizard/question-sets/:id/features?lat=&lon=&radius=`
 
 `{"set", "version", "complete", "truncated", "open": [{"id": "node/<n>"|"way/<n>", "lon", "lat",

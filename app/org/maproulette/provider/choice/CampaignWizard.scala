@@ -129,6 +129,9 @@ class CampaignWizard @Inject() (
 )(implicit ec: ExecutionContext) {
   import CampaignWizard._
 
+  /** What the nightly extract covers, if one is loaded. */
+  def coverage(): Future[Option[JsObject]] = source.coverage()
+
   /** Every set's count, or all `unavailable` when OSM didn't answer. */
   def counts(area: SearchArea, userId: Long): Future[Either[WizardQueryFailure, JsObject]] = {
     val sets = library.sets
