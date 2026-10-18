@@ -354,7 +354,7 @@ class MobileOrganizeSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
     }
 
     "refuse an organizer's writes while answer saving is off, and let the super-user write" +
-      " everything but the wizard's" in {
+      " everything but a wizard publish" in {
       val switched = new MobileOAuthSettings(
         Configuration(
           ConfigFactory
@@ -386,17 +386,21 @@ class MobileOrganizeSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
             contentAsString(gate(adminGrant).apply(next)(bearer(method, path))) mustBe "admin"
           }
       }
-      // No draft exemption: wizard create and publish wait for the switch, for everyone.
-      Seq(
-        "/api/v2/mobile-admin/wizard/campaigns",
-        "/api/v2/mobile-admin/wizard/campaigns/70/publish"
-      ).foreach { path =>
-        Seq(organizeGrant, adminGrant).foreach { grant =>
-          withClue(s"POST $path ${grant.scope}") {
-            val result = gate(grant).apply(next)(bearer(POST, path))
-            status(result) mustBe FORBIDDEN
-            contentAsJson(result) mustBe Json.obj("error" -> "mobile_writes_disabled")
-          }
+      // W-DRAFT: a wizard draft is created while the switch is off; publishing it waits, for
+      // everyone.
+      Seq(organizeGrant, adminGrant).foreach { grant =>
+        withClue(s"create ${grant.scope}") {
+          val created =
+            gate(grant).apply(next)(bearer(POST, "/api/v2/mobile-admin/wizard/campaigns"))
+          status(created) mustBe OK
+          contentAsString(created) mustBe "admin"
+        }
+        withClue(s"publish ${grant.scope}") {
+          val result = gate(grant).apply(next)(
+            bearer(POST, "/api/v2/mobile-admin/wizard/campaigns/70/publish")
+          )
+          status(result) mustBe FORBIDDEN
+          contentAsJson(result) mustBe Json.obj("error" -> "mobile_writes_disabled")
         }
       }
       contentAsString(

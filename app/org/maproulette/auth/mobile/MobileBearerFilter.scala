@@ -63,6 +63,7 @@ object MobileAdminRoutes {
 object MobileOrganizeRoutes {
   private val challenge = "/api/v2/mobile-admin/challenges/[0-9]+"
   private val wizard    = "/api/v2/mobile-admin/wizard"
+  val WizardCreate      = s"$wizard/campaigns"
 
   def adminApi(method: String, path: String): Boolean = method match {
     case "GET" =>
@@ -402,7 +403,9 @@ object MobileFieldRoutes {
           "/oauth/mobile/guest",
           "/api/v2/mobile-admin/clients",
           "/api/v2/mobile-admin/projects",
-          "/api/v2/mobile-admin/organizers"
+          "/api/v2/mobile-admin/organizers",
+          // W-DRAFT: a wizard campaign is created as a disabled draft; publishing it waits.
+          MobileOrganizeRoutes.WizardCreate
         ).contains(request.path) || MobileGuestRoutes.own(request.method, request.path) ||
           MobileLiveRoutes.rotate(request.path) ||
           // The confirm queue reads OSM and writes only our tables (H1b).
@@ -762,9 +765,10 @@ class MobileBearerFilter @Inject() (
                    MobileGuestRoutes.guestOnlyWhenDisabled(request.method, request.path)))
             denied(403, "insufficient_scope")
           // While field writes are off only super-users' admin grants write (fork-changes.md);
-          // organizers' writes wait like everyone else's.
+          // organizers' writes wait like everyone else's, except a wizard draft (W-DRAFT).
           else if (organizeGrant && request.method != "GET" && settings.writeControlEnabled &&
-                   !writePolicy.enabled) denied(403, "mobile_writes_disabled")
+                   !writePolicy.enabled && request.path != MobileOrganizeRoutes.WizardCreate)
+            denied(403, "mobile_writes_disabled")
           // D13: with the switch off, only the claim page's grant may claim.
           else if (switchedOff && value.clientId != MobileClaimRoutes.ClientId)
             denied(403, "mobile_writes_disabled")
