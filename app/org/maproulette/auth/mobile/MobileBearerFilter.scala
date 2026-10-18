@@ -63,6 +63,7 @@ object MobileAdminRoutes {
 object MobileOrganizeRoutes {
   private val challenge = "/api/v2/mobile-admin/challenges/[0-9]+"
   private val wizard    = "/api/v2/mobile-admin/wizard"
+  val WizardCreate      = s"$wizard/campaigns"
 
   def adminApi(method: String, path: String): Boolean = method match {
     case "GET" =>
@@ -402,7 +403,9 @@ object MobileFieldRoutes {
           "/oauth/mobile/guest",
           "/api/v2/mobile-admin/clients",
           "/api/v2/mobile-admin/projects",
-          "/api/v2/mobile-admin/organizers"
+          "/api/v2/mobile-admin/organizers",
+          // W-DRAFT: a wizard campaign is created as a disabled draft; publishing it waits.
+          MobileOrganizeRoutes.WizardCreate
         ).contains(request.path) || MobileGuestRoutes.own(request.method, request.path) ||
           MobileLiveRoutes.rotate(request.path) ||
           // The confirm queue reads OSM and writes only our tables (H1b).
@@ -439,10 +442,37 @@ class MobileBearerFilter @Inject() (
     adminRepository: MobileAdminRepository,
     writePolicy: MobileWritePolicy,
     guests: MobileGuestAuth,
-    drafts: MobileDrafts
+    drafts: MobileDrafts,
+    serviceKey: MobileServiceKey
 )(implicit val mat: Materializer, ec: ExecutionContext)
     extends Filter {
   private val logger = play.api.Logger(getClass)
+
+  // Without the stage service key: every filter built by hand.
+  def this(
+      settings: MobileOAuthSettings,
+      oauth: MobileOAuthService,
+      users: UserService,
+      admins: MobileAdminCheck,
+      adminRepository: MobileAdminRepository,
+      writePolicy: MobileWritePolicy,
+      guests: MobileGuestAuth,
+      drafts: MobileDrafts
+  )(
+      implicit mat: Materializer,
+      ec: ExecutionContext
+  ) =
+    this(
+      settings,
+      oauth,
+      users,
+      admins,
+      adminRepository,
+      writePolicy,
+      guests,
+      drafts,
+      MobileServiceKey.Off
+    )
 
   // Without guests, every challenge published: for tests of app and admin grants.
   def this(
@@ -611,14 +641,16 @@ class MobileBearerFilter @Inject() (
   private def auditStockWrite(
       user: User,
       request: RequestHeader,
-      outcome: scala.util.Try[Result]
+      outcome: scala.util.Try[Result],
+      via: String = ""
   ): Future[Result] = {
     val after = outcome match {
       case scala.util.Success(response) => Json.obj("status" -> response.header.status)
       case scala.util.Failure(e)        => Json.obj("status" -> 500, "error" -> e.getClass.getSimpleName)
     }
-    Future(adminRepository.record(user.id, s"stock.${request.method}", request.path, Some(after)))
-      .recover {
+    Future(
+      adminRepository.record(user.id, s"${via}stock.${request.method}", request.path, Some(after))
+    ).recover {
         case e: Exception =>
           // The write already happened; losing its audit entry must be visible in the logs.
           logger.error(
@@ -648,6 +680,31 @@ class MobileBearerFilter @Inject() (
       }
       .flatMap(_ => Future.fromTry(outcome))
   }
+
+  /**
+    * The stage service key (SK): the dedicated super-user, as an admin grant, on the service
+    * routes only. Its stock writes are audited as `service_key.stock.<method>`.
+    */
+  private def service(
+      next: RequestHeader => Future[Result],
+      request: RequestHeader
+  ): Future[Result] =
+    if (!MobileServiceRoutes.permits(request.method, request.path, request.queryString))
+      denied(403, "insufficient_scope")
+    else
+      Future(serviceKey.user()).flatMap {
+        case Some(user) if admins.isAdmin(user) =>
+          logger.info(s"Stage service key: ${request.method} ${request.path}")
+          val result = next(
+            request
+              .addAttr(MobileBearerIdentity.UserKey, user)
+              .addAttr(MobileBearerIdentity.ScopesKey, Set(MobileScopes.Admin))
+          )
+          if (MobileAdminRoutes.stockWrite(request.method, request.path))
+            result.transformWith(outcome => auditStockWrite(user, request, outcome, "service_key."))
+          else result
+        case _ => denied(403, "admin_required")
+      }
 
   def apply(next: RequestHeader => Future[Result])(request: RequestHeader): Future[Result] = {
     if (settings.writeControlEnabled && !MobileFieldRoutes.permitsWhenDisabled(request) &&
@@ -686,6 +743,7 @@ class MobileBearerFilter @Inject() (
         MobileReviewRoutes.mark(request.method, request.path)) &&
         (request.rawQueryString.nonEmpty || request.hasBody)
     if (badShape) return denied(400, "invalid_request")
+    if (serviceKey.matches(parts(1))) return service(next, request)
     oauth.authenticate(parts(1)).flatMap { grant =>
       // MobileOAuthService.authenticate has already checked the scopes against the client.
       grant.flatMap(value => MobileScopes.parse(value.scope).map(value -> _)) match {
@@ -707,9 +765,10 @@ class MobileBearerFilter @Inject() (
                    MobileGuestRoutes.guestOnlyWhenDisabled(request.method, request.path)))
             denied(403, "insufficient_scope")
           // While field writes are off only super-users' admin grants write (fork-changes.md);
-          // organizers' writes wait like everyone else's.
+          // organizers' writes wait like everyone else's, except a wizard draft (W-DRAFT).
           else if (organizeGrant && request.method != "GET" && settings.writeControlEnabled &&
-                   !writePolicy.enabled) denied(403, "mobile_writes_disabled")
+                   !writePolicy.enabled && request.path != MobileOrganizeRoutes.WizardCreate)
+            denied(403, "mobile_writes_disabled")
           // D13: with the switch off, only the claim page's grant may claim.
           else if (switchedOff && value.clientId != MobileClaimRoutes.ClientId)
             denied(403, "mobile_writes_disabled")

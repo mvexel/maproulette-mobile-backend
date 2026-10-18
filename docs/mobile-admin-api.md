@@ -58,7 +58,8 @@ organizer_forbidden`, and an organizer no longer on the list gets `403 organizer
 
 While the write switch is off (`mobileOAuth.writeControlEnabled` and
 the [field write policy](#field-write-policy) off), only super-users' admin grants write: an organizer's
-non-GET request is `403 mobile_writes_disabled`, as an app's would be.
+non-GET request is `403 mobile_writes_disabled`, as an app's would be, except creating a
+wizard draft (see [Campaign wizard](#campaign-wizard)).
 
 Super-users keep the list:
 
@@ -88,6 +89,21 @@ Their project roles stay, as upstream roles.
 Removes their upstream role on the project and returns the organizer (audited as
 `organizer.project.remove`, in the same transaction). Removing a project's last administrator is
 `409 last_project_admin`, and changes nothing.
+
+### Stage service key
+
+Stage only: `Authorization: Bearer <service key>` acts as a dedicated super-user, "Street Tally
+stage service" (OSM id -1001, not a real OSM account; created and promoted on first use), so
+scripts can import test challenges without an admin sign-in. It reaches only `POST
+/api/v2/challenge`, `PUT /api/v2/challenge/:id`, the line-by-line `addFileTasks` import, `GET
+/api/v2/challenge/:id` and `.../tasks`, and `GET /api/v2/mobile-admin/campaigns` and `/projects`;
+anything else is `403 insufficient_scope`. Its writes are audited as `service_key.stock.<METHOD>`.
+
+The server holds only the key's SHA-256 (`MR_STAGE_SERVICE_KEY_SHA256`, lowercase hex) and
+compares in constant time. It accepts the key only when `MR_DEPLOYMENT` is `stage` and the public
+origin is `https://mr-stage.osm.lol`; anywhere else it logs `Stage service key ignored` at startup
+and the key is just an unknown bearer token (`401 invalid_token`). Generate it with
+`openssl rand -hex 32`; its hash with `printf %s "$KEY" | sha256sum`.
 
 ## Clients
 
@@ -278,8 +294,9 @@ Lists the campaign in the app as the admin's Publish does: enabled and tagged
 is off. `404 not_found` for anything but a choice campaign, `422 nothing_to_check` without tasks.
 Audited as `campaign.publish`.
 
-While the write switch is off, create and publish are `403 mobile_writes_disabled` for everyone,
-super-users included (Ada, #48: no draft exemption until Martijn decides).
+While the write switch is off, create still works, since the campaign is a disabled draft (W-DRAFT,
+Martijn 2026-10-17), and publish is `403 mobile_writes_disabled` for everyone, super-users
+included.
 
 ## Live progress page
 
