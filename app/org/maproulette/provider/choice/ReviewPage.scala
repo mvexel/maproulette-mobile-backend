@@ -266,9 +266,14 @@ class ReviewRepository @Inject() (db: Database) {
       .on("challenge" -> challengeId, "one" -> one)
       .as(place.*)
     val answers =
-      SQL("""SELECT task_id, body::text AS body, answered_at FROM choice_pending
-        WHERE challenge_id = {challenge} AND state = 'pending' AND ({one} < 0 OR task_id = {one})
-        ORDER BY task_id, answered_at""")
+      // A gone place keeps listing the answers its element's deletion skipped (R1); answers
+      // skipped because the key changed stay out.
+      SQL("""SELECT p.task_id, p.body::text AS body, p.answered_at FROM choice_pending p
+        LEFT JOIN choice_review_places rp ON rp.task_id = p.task_id
+        WHERE p.challenge_id = {challenge} AND ({one} < 0 OR p.task_id = {one})
+          AND (p.state = 'pending' OR (rp.state = 'gone' AND p.state = 'skipped_stale'
+            AND p.result->>'reason' = 'element_gone'))
+        ORDER BY p.task_id, p.answered_at""")
         .on("challenge" -> challengeId, "one" -> one)
         .as(
           (SqlParser.long("task_id") ~ SqlParser.str("body") ~ SqlParser.date("answered_at")).map {
