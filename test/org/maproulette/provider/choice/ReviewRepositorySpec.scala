@@ -20,6 +20,7 @@ class ReviewRepositorySpec(implicit val application: Application) extends Framew
   private val db                                = application.injector.instanceOf[Database]
   private val reviews                           = new ReviewRepository(db)
   private val guests                            = new MobileGuestRepository(db)
+  private val queue                             = new ChoiceQueueRepository(db)
   private var challenge: Challenge              = _
   private var other: Challenge                  = _
 
@@ -127,6 +128,25 @@ class ReviewRepositorySpec(implicit val application: Application) extends Framew
         Left(ReviewRefusal.NotFound)
       reviews.skip(challenge.id, elsewhere.id, defaultUser.id, on = true) mustBe
         Left(ReviewRefusal.NotFound)
+    }
+
+    "list a gone place's answers that its deletion skipped, but not key-changed ones (R1)" taggedAs ChoiceTag in {
+      val t = task(challenge, 9921)
+      pending(t, Json.obj("answers" -> Json.obj("material" -> "wood")))
+      pending(t, Json.obj("answers" -> Json.obj("material" -> "metal")))
+      db.withConnection { implicit c =>
+        SQL"""UPDATE choice_pending SET state = 'skipped_stale',
+                result = '{"reason": "key_changed"}'::jsonb
+              WHERE task_id = ${t.id} AND body->'answers'->>'material' = 'metal'""".executeUpdate()
+      }
+      queue.skipGone(t.id) mustBe 1
+      db.withConnection(implicit c => reviews.places(challenge.id, Some(t.id))) mustBe empty
+      queue.setState(challenge.id, t.id, ReviewPage.Gone)
+      val place = db.withConnection(implicit c => reviews.places(challenge.id, Some(t.id))).head
+      place.state mustBe ReviewPage.Gone
+      place.answers.map(a => (a.body \ "answers" \ "material").as[String]) mustBe Seq("wood")
+      val json = place.json(skipped = false)
+      ((json \ "suggestions")(0) \ "people").as[Int] mustBe 1
     }
 
     "keep skips per mapper and needs-visit shared and audited" taggedAs ChoiceTag in {
