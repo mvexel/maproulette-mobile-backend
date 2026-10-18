@@ -116,10 +116,12 @@ class MobileStageServiceKey @Inject() (
 
 /**
   * What the service key reaches: creating a challenge, its line-by-line import and publishing it,
-  * plus the reads those need. A subset of [[MobileAdminRoutes]].
+  * plus the reads those need. A subset of [[MobileAdminRoutes]]. Writes reach only challenges the
+  * service user owns; a new challenge is its own.
   */
 object MobileServiceRoutes {
   private val challenge = "/api/v2/challenge/[0-9]+"
+  private val written   = "/api/v2/challenge/([0-9]+)(?:/addFileTasks)?".r
 
   def permits(method: String, path: String, query: Map[String, Seq[String]]): Boolean =
     MobileAdminRoutes.permits(method, path, query) && (method match {
@@ -130,4 +132,10 @@ object MobileServiceRoutes {
       case "PUT"  => path.matches(challenge) || path.matches(s"$challenge/addFileTasks")
       case _      => false
     })
+
+  /** The challenge a write changes, which the service user must own (SK-OWN). */
+  def writtenChallenge(method: String, path: String): Option[Long] = path match {
+    case written(id) if method == "PUT" => Some(id.toLong)
+    case _                              => None
+  }
 }
