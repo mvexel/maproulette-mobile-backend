@@ -169,6 +169,23 @@ class MobileOrganizerRequestRepository @Inject() (db: Database, audit: MobileAdm
     }
 
   /**
+    * Why this person can't ask now, checked before the OSM lookup so a refused ask costs no call
+    * to OSM. [[create]] checks again under its lock.
+    */
+  def refusal(user: User, now: Instant = Instant.now()): Option[OrganizerRequestRefusal] =
+    db.withConnection(implicit c => refused(user, now))
+
+  private def refused(user: User, now: Instant)(implicit c: Connection) =
+    if (organizer(user.id)) Some(OrganizerRequestRefusal("already_organizer"))
+    else if (SQL"""SELECT EXISTS(SELECT 1 FROM mobile_organizer_requests
+                   WHERE user_id = ${user.id} AND state = 'open')""".as(scalar[Boolean].single))
+      Some(OrganizerRequestRefusal("request_open"))
+    else
+      askAgainAt(user.id, now).map(at =>
+        OrganizerRequestRefusal("too_soon", Json.obj("askAgainAt" -> at))
+      )
+
+  /**
     * A new open request. Refused when they are listed already (`already_organizer`), have an
     * open one (`request_open`) or were declined less than 30 days ago (`too_soon`, with
     * `askAgainAt`).
@@ -184,33 +201,28 @@ class MobileOrganizerRequestRepository @Inject() (db: Database, audit: MobileAdm
       SQL("SELECT pg_advisory_xact_lock(hashtext({key}))")
         .on("key" -> s"mobile_organizer_request:${user.id}")
         .execute()
-      val open = SQL"""SELECT EXISTS(SELECT 1 FROM mobile_organizer_requests
-                       WHERE user_id = ${user.id} AND state = 'open')""".as(scalar[Boolean].single)
-      if (organizer(user.id)) Left(OrganizerRequestRefusal("already_organizer"))
-      else if (open) Left(OrganizerRequestRefusal("request_open"))
-      else
-        askAgainAt(user.id, now) match {
-          case Some(at) => Left(OrganizerRequestRefusal("too_soon", Json.obj("askAgainAt" -> at)))
-          case None =>
-            val created =
-              account.created.orElse(Some(Instant.ofEpochMilli(user.osmProfile.created.getMillis)))
-            val stamp   = java.sql.Timestamp.from(now)
-            val id      = SQL"""INSERT INTO mobile_organizer_requests
+      refused(user, now) match {
+        case Some(refusal) => Left(refusal)
+        case None =>
+          val created =
+            account.created.orElse(Some(Instant.ofEpochMilli(user.osmProfile.created.getMillis)))
+          val stamp   = java.sql.Timestamp.from(now)
+          val id      = SQL"""INSERT INTO mobile_organizer_requests
                   (user_id, place, subject, group_name, policy_accepted_at, osm_account_created,
                    osm_changesets, created_at)
                   VALUES (${user.id}, ${input.place}, ${input.subject}, ${input.group}, $stamp,
                     ${created.map(java.sql.Timestamp.from)}, ${account.changesets}, $stamp)
                   RETURNING id""".as(scalar[Long].single)
-            val request = latest(user.id).get
-            audit.record(
-              user.id,
-              "organizer.request",
-              s"organizer_request:$id",
-              None,
-              Some(request)
-            )
-            Right(request)
-        }
+          val request = latest(user.id).get
+          audit.record(
+            user.id,
+            "organizer.request",
+            s"organizer_request:$id",
+            None,
+            Some(request)
+          )
+          Right(request)
+      }
     }
 
   /** Open requests for the super-user Organizers screen (§2.3), oldest first. */
@@ -280,7 +292,8 @@ class MobileOrganizerRequestRepository @Inject() (db: Database, audit: MobileAdm
         SQL"""INSERT INTO projects (name, owner_id, display_name, description, enabled, is_virtual,
                 featured, require_confirmation)
               VALUES ($projectName, ${actor.osmProfile.id}, $projectName, '', true, false, false, false)
-              ON CONFLICT DO NOTHING RETURNING id""".as(scalar[Long].singleOpt) match {
+              ON CONFLICT ((lower(name))) DO NOTHING RETURNING id"""
+          .as(scalar[Long].singleOpt) match {
           case None => Left(OrganizerRequestRefusal("project_exists"))
           case Some(projectId) =>
             val osmId = SQL"SELECT osm_id FROM users WHERE id = $userId".as(scalar[Long].single)

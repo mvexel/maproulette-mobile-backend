@@ -60,9 +60,12 @@ class MobileOrganizerRequestSpec(implicit val application: Application) extends 
   private val audit    = application.injector.instanceOf[MobileAdminRepository]
   private val requests = new MobileOrganizerRequestRepository(db, audit)
   private val created  = Instant.parse("2019-05-01T10:00:00Z")
+  private val lookups  = new java.util.concurrent.atomic.AtomicInteger()
   private val osm = new OsmAccountStats {
-    def lookup(osmId: Long): Future[OsmAccount] =
+    def lookup(osmId: Long): Future[OsmAccount] = {
+      lookups.incrementAndGet()
       Future.successful(OsmAccount(Some(created), Some(42)))
+    }
   }
   private def controller(requestsSetting: String = MobileOrganizerPolicy.Review) = {
     val values = settings(requestsSetting)
@@ -264,8 +267,11 @@ class MobileOrganizerRequestSpec(implicit val application: Application) extends 
       (view \ "canRequest").as[Boolean] mustBe false
       val at = (view \ "askAgainAt").as[Instant]
       at.isAfter(Instant.now().plus(29, ChronoUnit.DAYS)) mustBe true
-      val soon = open.create(as(hal, body = ask))
+      val before = lookups.get()
+      val soon   = open.create(as(hal, body = ask))
       status(soon) mustBe CONFLICT
+      // A refused ask costs no call to OSM.
+      lookups.get() mustBe before
       (contentAsJson(soon) \ "error").as[String] mustBe "too_soon"
       (contentAsJson(soon) \ "askAgainAt").as[Instant] mustBe at
       contentAsJson(open.decline(id)(as(User.superUser, MobileScopes.Admin))) mustBe

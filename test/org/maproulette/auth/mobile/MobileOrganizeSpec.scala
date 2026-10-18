@@ -408,11 +408,15 @@ class MobileOrganizeSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
               contentAsJson(result) mustBe Json.obj("error" -> "insufficient_scope")
             }
         }
-      // Requests closed since, or the person can't ask any more: refused on the next request.
+      // Requests closed since: asking is refused on the next request, reading their own request
+      // (a decline note) still works while the grant lasts.
       val (closed, _) = filter(asking.copy(userId = mapper.id))
-      val refused     = closed.apply(next)(bearer(GET, "/api/v2/mobile-admin/organizer-request"))
+      val refused     = closed.apply(next)(bearer(POST, "/api/v2/mobile-admin/organizer-request"))
       status(refused) mustBe FORBIDDEN
       contentAsJson(refused) mustBe Json.obj("error" -> "organizer_request_not_allowed")
+      contentAsString(
+        closed.apply(next)(bearer(GET, "/api/v2/mobile-admin/organizer-request"))
+      ) mustBe "admin"
       verify(audit, never()).record(anyLong(), anyString(), anyString(), any())
     }
 

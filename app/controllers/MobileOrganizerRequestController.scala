@@ -81,11 +81,15 @@ class MobileOrganizerRequestController @Inject() (
         case Right(_) if !settings.organizerRequestsOpen =>
           Future.successful(problem(Conflict, "requests_closed"))
         case Right(input) =>
-          osm.lookup(user.osmProfile.id).flatMap { account =>
-            db(requests.create(user, input, account) match {
-              case Left(refusal) => refused(refusal)
-              case Right(body)   => Created(body)
-            })
+          db(requests.refusal(user)).flatMap {
+            case Some(refusal) => Future.successful(refused(refusal))
+            case None =>
+              osm.lookup(user.osmProfile.id).flatMap { account =>
+                db(requests.create(user, input, account) match {
+                  case Left(refusal) => refused(refusal)
+                  case Right(body)   => Created(body)
+                })
+              }
           }
       }
     }

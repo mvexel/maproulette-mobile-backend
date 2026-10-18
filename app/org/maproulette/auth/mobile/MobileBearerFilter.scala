@@ -807,8 +807,11 @@ class MobileBearerFilter @Inject() (
                 denied(403, "admin_required")
               case Some(user) if organizeGrant && !admins.isOrganizer(user.id) =>
                 denied(403, "organizer_required")
-              // ORG-ONB: requests closed, or the person no longer may ask.
-              case Some(user) if requestGrant && !admins.mayRequestOrganizer(user.id) =>
+              // ORG-ONB: asking needs requests open; reading their own request (a decline note)
+              // stays possible while the grant lasts.
+              case Some(user)
+                  if requestGrant && (!MobileOrganizerPolicy.eligible(user) ||
+                    request.method != "GET" && !admins.mayRequestOrganizer(user.id)) =>
                 denied(403, "organizer_request_not_allowed")
               case Some(user) =>
                 val gate =

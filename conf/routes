@@ -46,7 +46,7 @@ GET     /api/v2/mobile-admin/organizers                                 @control
 POST    /api/v2/mobile-admin/organizers                                 @controllers.MobileOrganizerController.add
 DELETE  /api/v2/mobile-admin/organizers/:userId                         @controllers.MobileOrganizerController.remove(userId:Long)
 DELETE  /api/v2/mobile-admin/organizers/:userId/projects/:projectId     @controllers.MobileOrganizerController.removeProject(userId:Long, projectId:Long)
-# Organizer requests (ORG-ONB): the requester's own, by their mobile:organize grant, and the super-user decisions
+# Organizer requests (ORG-ONB): the requester's own, by their mobile:organizer-request grant, and the super-user decisions
 GET     /api/v2/mobile-admin/organizer-request                          @controllers.MobileOrganizerRequestController.status
 POST    /api/v2/mobile-admin/organizer-request                          @controllers.MobileOrganizerRequestController.create
 GET     /api/v2/mobile-admin/organizer-requests                         @controllers.MobileOrganizerRequestController.list

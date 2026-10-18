@@ -101,8 +101,8 @@ OpenStreetMap, not a guest; a super-user decides each request) or `closed`.
 Such a person asks with a `mobile:organizer-request` grant
 ([mobile-oauth.md](mobile-oauth.md#organizer-request-scope-mobileorganizer-request)), which
 reaches only the two `organizer-request` routes below; anything else is `403 insufficient_scope`,
-and a grant whose person can no longer ask (requests closed) is `403
-organizer_request_not_allowed`. `mobile:organize` still means a listed organizer: once approved,
+and asking with a grant whose person can no longer ask (requests closed since) is `403
+organizer_request_not_allowed`; reading their own request still works while the grant lasts. `mobile:organize` still means a listed organizer: once approved,
 the admin app signs in again for `mobile:organize`. Asking is allowed while the write switch is
 off, like a wizard draft: it writes only this table.
 

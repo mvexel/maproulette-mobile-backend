@@ -197,7 +197,8 @@ admin app. It stands alone and is never configured on a client: a client that ma
 - **Who may hold it.** Users signed in with OSM (not guests) while
   `mobileOAuth.organizers.requests` is `review`, the default. Otherwise the callback returns
   `error=access_denied` with `error_description=Organizer requests closed`. Checked on consent,
-  at code exchange, at every refresh and on every request (`403 organizer_request_not_allowed`).
+  at code exchange, at every refresh and on every `POST` (`403 organizer_request_not_allowed`), so
+  a grant from before requests closed can still read the person's own request until it expires.
 - **Routes.** Only `GET` and `POST /api/v2/mobile-admin/organizer-request`, the person's own
   request ([mobile-admin-api.md](mobile-admin-api.md#organizer-requests)); everything else is
   `403 insufficient_scope`. It never reaches organizer routes, so `mobile:organize` keeps meaning
