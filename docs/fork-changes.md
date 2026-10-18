@@ -122,9 +122,11 @@ Backend for the admin web app: approved clients in the database, the super-user-
 | Optional `liveMissingQuestions` choice templates filter absent-tag questions at check time; selected answers are guarded again immediately before an OSM edit                                      | `ChoiceWork.scala`, `MobileChoiceService.scala`                                                                                 |
 | Campaign results export `GET /api/v2/mobile-admin/challenges/:id/results?format=csv\|geojson`; choice submissions store their answers (`mobile_choice_submissions.answers`) | `conf/routes` → `app/controllers/MobileResultsController.scala`, `app/org/maproulette/provider/choice/ChoiceResults.scala`, `conf/evolutions/default/134.sql` |
 | Organizer role (D8): scope `mobile:organize` (granted to clients that may hold `mobile:admin`), organizer list `mobile_memberships`, capability check `MobileAdminCheck.can` (projects with Write or better, not Home), organizer routes (stock routes GET only; writes refused while the write switch is off), Organizers routes for super-users (grant and list change in one transaction; 409 for a last project admin). **Deviation:** adding and removing an organizer's project role writes upstream's `grants` rows (grantee type 5 user, object type 0 project, role 1 or 2) by SQL instead of through `UserService.addUserToProject`/`removeUserFromProject`, so the role, the membership and the audit entry commit together; it then clears upstream's user and project caches. An upstream sync that changes the `grants` table, its `name` description or those caches must update `MobileOrganizers.scala`; `MobileOrganizerSpec` checks that `Permission.effectiveRole` and `hasObjectWriteAccess` see the role after add and lose it after removal | `conf/evolutions/default/145.sql`, `MobileAdmin.scala` (`MobileCapability`, `MobileAdminGate`), `MobileOrganizers.scala`, `MobileBearerFilter.scala` (`MobileOrganizeRoutes`), `app/controllers/MobileAdminAccess.scala`, `MobileOrganizerController.scala` |
+| Organizer requests (ORG-ONB): `mobileOAuth.organizers.requests` (`MR_ORGANIZER_REQUESTS`, `closed` by default, or `review`); scope `mobile:organizer-request` reaches only `GET`/`POST /api/v2/mobile-admin/organizer-request`; super-users list, approve (adds the organizer) or decline with `GET …/organizer-requests` and `POST …/organizer-requests/:id/approve` or `/decline`; table `mobile_organizer_requests` | `conf/evolutions/default/151.sql`, `app/org/maproulette/auth/mobile/MobileOrganizerRequests.scala`, `app/controllers/MobileOrganizerRequestController.scala`, `MobileBearerFilter.scala`, `conf/application.conf` (`mobileOAuth.organizers.requests`), `conf/routes` |
 | Campaign wizard: question-set library, Overpass counts and open features (cache, rate limits, timeout; endpoints from `OVERPASS_URLS`, next one on connect failure), one-call create of a draft choice campaign from a set and an area, and publish; `mobile_campaign_sources` | `conf/mobile/question-sets.json`, `conf/evolutions/default/146.sql`, `QuestionSets.scala`, `WizardOverpass.scala`, `CampaignWizard.scala`, `app/controllers/MobileWizardController.scala`, `MobileBearerFilter.scala` (`MobileOrganizeRoutes`), `conf/application.conf` (`mobileWizard`) |
 | Campaign wizard reads the nightly OSM extract (`wizard_osm_features`, `wizard_osm_extract`) where a fresh one covers the area, Overpass elsewhere; the load script filters the extract with osmium by the question sets and swaps the table in one transaction | `conf/evolutions/default/149.sql`, `WizardSource.scala`, `WizardOverpass.scala`, `CampaignWizard.scala`, `scripts/wizard-extract/`, `conf/application.conf` (`mobileWizard.extractMaxAge`) |
 | Campaigns list, project list/create and project on/off for the admin app (`/api/v2/mobile-admin/campaigns`, `/projects`, `/projects/:id/enabled`); no evolution | `conf/routes` → `app/controllers/MobileCampaignController.scala`, `app/org/maproulette/auth/mobile/MobileCampaigns.scala` |
+| Live progress page (BACKLOG #12): one link-only page per campaign by an unguessable token; `GET`/`PUT /api/v2/mobile-admin/challenges/:id/live`, `POST …/live/rotate`, public `GET /api/v2/live/:token`; table `mobile_live_pages` | `conf/evolutions/default/141.sql`, `app/org/maproulette/provider/choice/LiveProgress.scala`, `app/controllers/MobileLiveController.scala`, `conf/routes` |
 | Built-in `not-here` and `moved` reports (status 6, no OSM edit); `moved` carries a spot within 500 m of the task; results export report columns and a `reported_position` point | `ChoiceWork.scala` (`BuiltIn`), `MobileChoiceService.scala` (`Report`, `measured`), `ChoiceResults.scala` |
 | Routes `GET`/`POST /api/v2/mobile-admin/clients`, `PATCH …/clients/:id[?revokeGrants=true]`, `GET …/audit`, `GET …/scope-sets` (allowed client scope sets, from `MobileScopes.clientScopeSets`)                                                                                         | `conf/routes:27-31` → `app/controllers/MobileAdminController.scala:103,107,112,126,156`                                               |
 | Client writes and audit entries in one transaction; revocation of a client's grant families                                                                                                        | `MobileAdmin.scala:73` (`MobileAdminRepository`)                                                                                |
@@ -132,6 +134,7 @@ Backend for the admin web app: approved clients in the database, the super-user-
 | CORS for `mobileOAuth.adminOrigin` (`MR_MOBILE_ADMIN_ORIGIN`)                                                                                                                                      | `app/org/maproulette/auth/mobile/MobileCorsFilter.scala:24,65`, `MobileOAuthSettings.scala:132`                                 |
 | Staging admin client `maproulette-mobile-admin` (`https://admin.mr-dev.osm.lol/callback`, `mobile:admin`) and admin origin                                                                         | `conf/mobile-staging.conf:26-37`                                                                                                |
 | Per-database write policy, initially disabled on a new database, and audited updates                                                                                                               | `conf/evolutions/default/132.sql`, `MobileWritePolicy.scala`                                                                    |
+| Stage service key: on stage only (`MR_DEPLOYMENT=stage` and the stage public origin), a static bearer key whose SHA-256 is `MR_STAGE_SERVICE_KEY_SHA256` acts as a dedicated super-user for challenge import and campaign/project reads; writes audited as `service_key.stock.<METHOD>`; ignored with a warning anywhere else. See [mobile-admin-api.md](mobile-admin-api.md#stage-service-key) | `app/org/maproulette/auth/mobile/MobileServiceKey.scala`, `MobileBearerFilter.scala`, `conf/application.conf` (`mobileOAuth.deployment`, `serviceKey.sha256`) |
 | Super-user-only `GET`/`PUT /api/v2/mobile-admin/write-policy`; enabling also requires a configured OSM token encryption key                                                                        | `conf/routes`, `MobileAdminController.scala`                                                                                    |
 
 ### Multiple-choice tasks (`cooperativeWork.meta.type = 3`)
@@ -165,6 +168,7 @@ Off by default (`mobileOAuth.guests.enabled`). See [mobile-oauth.md](mobile-oaut
 | Tables `mobile_guests`, `mobile_guest_tokens`, `mobile_guest_claim_tokens` | `conf/evolutions/default/135.sql` |
 | Guest storage: create, mint and authenticate guest tokens, delete with tombstone | `app/org/maproulette/auth/mobile/guest/MobileGuestRepository.scala` |
 | Guest registration (per-IP limit), guest token grant, guest authentication | `app/org/maproulette/auth/mobile/guest/MobileGuestService.scala`, `app/controllers/MobileGuestController.scala`, `MobileOAuthController.token` (`guestToken`) |
+| Idempotent guest registration (G-IDEM): `POST /oauth/mobile/guest` takes an optional install id; a retry with the same id returns the same unused guest; column `mobile_guests.install_id` | `conf/evolutions/default/150.sql`, `MobileGuestRepository.scala`, `MobileGuestService.scala`, `app/controllers/MobileGuestController.scala` |
 | Routes `POST /oauth/mobile/guest`, `GET /api/v2/mobile-guest/me`, `DELETE /api/v2/mobile-guest` | `conf/routes` |
 | Guest bearer branch and `MobileGuestRoutes`; `GuestKey` instead of `UserKey`; field-gate entries | `app/org/maproulette/auth/mobile/MobileBearerFilter.scala` |
 | Claim email (B4): `PUT /api/v2/mobile-guest/email`, sealed address, claim tokens, rate limit, pluggable mail provider (Postmark, log, none) and templates | `app/org/maproulette/provider/choice/claim/` (`ClaimMail.scala`, `GuestEmail.scala`), `app/controllers/MobileGuestEmailController.scala`, `conf/mobile-email/`, `conf/application.conf` (`mobileOAuth.guests.mail`), `conf/routes`, `MobileGuestRoutes.email` |
@@ -226,6 +230,7 @@ not only mobile.
 | Play's CORS filter is wrapped by `MobileCorsFilter`. Disabled mobile OAuth: unchanged. Enabled: `/oauth/mobile/token` and `/revoke` (fork routes) answer only the admin origin; everything else is as upstream | Token and revoke need no browser origin other than the admin app's; see [mobile-oauth.md](mobile-oauth.md#cors)                                                       | `app/org/maproulette/filters/Filters.scala:16`, `MobileCorsFilter.scala`                               |
 | `.gitignore` also ignores Metals and Bloop editor files                                                                                                                                                        | Local editor state                                                                                                                                                    | `.gitignore`                                                                                           |
 | Test database: the background connection pool also points at the test database                                                                                                                                 | The pool copied `db.default` before the test overrides were applied, so it connected to the wrong database                                                            | `test/org/maproulette/framework/util/TestDatabase.scala`                                               |
+| CI: the test job waits for PostGIS to accept connections and runs the mobile specs against a second disposable database; the java-client integration job signs in with `devMode` instead of the removed `MR_SUPER_KEY` | `.github/workflows/scala.yml` |
 
 ## Disabled or restricted
 
@@ -258,17 +263,38 @@ bearer grants are narrower than a web session in either configuration:
 documented but did not change: §1–9, covering issues such as Deleted and
 Disabled escalation, same-status takeover, status writes without a lock, the
 `requestReview=false` bypass, fix/apply trust and ordering, and Swagger gaps.
-Its §10 lists the parts of this fork proposed for upstream: `meta.type = 3`,
-the `cct` filter and `addFileTasks?report=true`. Nothing has been filed yet.
+Its §10 lists the parts of this fork proposed for upstream. Nothing has been
+filed yet; filing is Martijn's step.
 
-These changes touch only upstream code. They were made on branches cut from the
-upstream base `d9989212`, so each series applies to upstream `main` without
-fork code:
+### Upstream branch
 
-| Change | Commits | Where |
-| ------ | ------- | ----- |
-| Lock responses (`start`, `lockBundle`, `refreshLock`) include `expiresAt`; error bodies add a machine-readable `error` code next to `status`/`message` | `52dbe965` (#36) | `TaskController.scala`, `Locking.resolveLockExpiry`, `MPExceptions.scala` (`ErrorCodes`, `ErrorCoded`), `MPExceptionUtil.body` |
-| `PUT /task/:id/changeset?changesetId=` links a named changeset after ownership and timing checks, behind `maproulette.tasks.changesets.linkEnabled` (default `true`) | `7d04c452` (#36), `a2919099` (#37) | `TaskDAL.linkOSMChangeSet`, `TaskController.matchToOSMChangeSet`, `conf/v2_route/task.api` |
+Branch
+[`claude/project-thread-rsciiv`](https://github.com/mvexel/maproulette-mobile-backend/tree/claude/project-thread-rsciiv)
+(2026-10-18) is cut from upstream `main` at `d9989212` and holds only the
+generic changes below, one commit each, with no mobile OAuth, guests, choice
+tasks, admin, evolutions, deployment config or branding. Its full test suite
+passes against PostGIS. To offer it upstream, push it to a fork of
+`maproulette/maproulette-backend` and open a PR (or one PR per commit).
 
-`831ca67f` in #36 is a copy of the fork's CI fix `e2fe49d2`, which keeps the
-upstream-based branch's own CI green. It is not part of these upstream changes.
+| Change | Where |
+| ------ | ----- |
+| The cached task carries the `completedBy`, `mappedOn` and `completedTimeSpent` the status write stored | `TaskDAL.setTaskStatus`, `TaskServiceSpec` |
+| `submitOsmChange` closes the changeset when building the change fails | `ChangesetProvider.scala` |
+| The request header trace log redacts `Authorization`, `apiKey`, `Cookie`, `Set-Cookie` and `Referer` (the fork's extra rule for `/oauth/mobile/*` query strings is left out) | `HttpLoggingFilter.scala` (`SafeRequestLog`) |
+| `TestDatabase` also points the background pool at the test database | `test/.../TestDatabase.scala` |
+| CI: PostGIS health check; integration job uses `devMode` instead of `MR_SUPER_KEY`; Metals/Bloop in `.gitignore` | `.github/workflows/scala.yml`, `.gitignore` |
+| `cct` search filter on `challenges.cooperative_type` | `SearchParameters.scala`, `SearchParametersMixin.scala` |
+| `addFileTasks?lineByLine=true&report=true` returns created/updated counts and rejected lines; a rejected line does not mark the challenge FAILED | `ChallengeController.scala`, `ChallengeProvider.scala`, `conf/v2_route/challenge.api` |
+| Machine-readable `error` codes next to `status`/`message`; lock responses include `expiresAt` | `MPExceptions.scala` (`ErrorCodes`, `ErrorCoded`), `MPExceptionUtil.body`, `Locking.resolveLockExpiry`, `TaskController.scala`, `TaskBundleController.scala` |
+| `PUT /task/:id/changeset?changesetId=` links a named changeset after ownership and timing checks, behind `maproulette.tasks.changesets.linkEnabled` (default `true`) | `TaskDAL.linkOSMChangeSet`, `TaskController.matchToOSMChangeSet`, `conf/v2_route/task.api`, `Config.scala` |
+
+Left out on purpose: choice tasks (`meta.type = 3`, proposed in §10 but the
+core of the apps, with its validator and fork tables), the `inTransaction`
+hook in `setTaskStatus` (used only by choice submissions), `excludeStale`,
+`excludePending` and `includePending`, the draft gate in
+`TaskBundleController`, the mobile bearer and CORS filters, the `curl` added
+to the `Dockerfile`, and all fork evolutions (129–132, 134–151). The branch
+needs no evolution.
+
+The earlier upstream-based branches from #36 and #37 (`52dbe965`,
+`7d04c452`, `a2919099`) are superseded by this branch.
