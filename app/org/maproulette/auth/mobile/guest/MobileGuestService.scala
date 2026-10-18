@@ -33,6 +33,9 @@ object MobileGuestService {
 
   /** Pending answers are kept this long after the last one; a new guest gets the same window. */
   val Retention: Duration = Duration.ofDays(30)
+
+  /** How long a registration retry with the same install id returns the unused guest (G-IDEM). */
+  val RetryWindow: Duration = Duration.ofMinutes(10)
 }
 
 /** What the bearer filter needs from guests; [[MobileGuestAuth.Disabled]] where guests are off. */
@@ -96,7 +99,15 @@ class MobileGuestService @Inject() (
       .get(clientId)
       .exists(client => client.enabled && client.scopes.contains(MobileScopes.Guest))
 
-  def register(clientId: String, ip: String): Future[Either[GuestError, GuestRegistration]] = {
+  /**
+    * A new guest, or with an install id, the unused guest of a retry whose response was lost: that
+    * guest comes back with a new secret, and only the latest response's secret works (G-IDEM).
+    */
+  def register(
+      clientId: String,
+      ip: String,
+      installId: Option[String] = None
+  ): Future[Either[GuestError, GuestRegistration]] = {
     val now = Instant.now()
     if (!guestClient(clientId)) Future.successful(Left(GuestError.InvalidClient))
     else if (!admit(ip, now)) Future.successful(Left(GuestError.RateLimited))
@@ -105,12 +116,14 @@ class MobileGuestService @Inject() (
       storage {
         Right(
           GuestRegistration(
-            store.create(
+            store.register(
               UUID.randomUUID(),
               clientId,
               MobileSecrets.hash(secret),
               now.plus(retention),
-              now
+              now,
+              installId,
+              now.minus(MobileGuestService.RetryWindow)
             ),
             secret
           )
