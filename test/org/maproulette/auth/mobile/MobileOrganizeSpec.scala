@@ -75,12 +75,15 @@ class MobileOrganizeSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
   private val superUser = user(7)
   private val mapper    = user(8)
   private val organizer = user(9)
+  // Not listed, but may ask to be (ORG-ONB).
+  private val requester = user(10)
   // The organizer runs project 3; challenge 70 is in project 3, challenge 71 in project 4.
   private val admins = new MobileAdminCheck {
-    def isAdmin(value: User): Boolean                  = value.id == superUser.id
-    def isAdmin(userId: Long): Boolean                 = userId == superUser.id
-    override def isOrganizer(userId: Long): Boolean    = userId == organizer.id
-    override def organizerProjects(u: User): Set[Long] = if (u.id == organizer.id) Set(3) else Set()
+    def isAdmin(value: User): Boolean                       = value.id == superUser.id
+    def isAdmin(userId: Long): Boolean                      = userId == superUser.id
+    override def isOrganizer(userId: Long): Boolean         = userId == organizer.id
+    override def mayRequestOrganizer(userId: Long): Boolean = userId == requester.id
+    override def organizerProjects(u: User): Set[Long]      = if (u.id == organizer.id) Set(3) else Set()
     override def projectOf(challengeId: Long): Option[Long] =
       Map(70L -> 3L, 71L -> 4L).get(challengeId)
   }
@@ -114,6 +117,22 @@ class MobileOrganizeSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
       MobileScopes.parseClient("mobile:organize") mustBe Some(Organize)
       MobileScopes.parseClient("mobile:organize guest") mustBe None
       MobileScopes.clientScopeSets must contain(Seq("mobile:organize"))
+    }
+
+    "keep mobile:organizer-request alone, granted with mobile:admin and never configured" in {
+      MobileScopes.parse("mobile:organizer-request") mustBe Some(Set(MobileScopes.OrganizerRequest))
+      Seq(
+        "tasks:read mobile:organizer-request",
+        "mobile:organize mobile:organizer-request",
+        "mobile:admin mobile:organizer-request"
+      ).foreach(value => MobileScopes.parse(value) mustBe None)
+      MobileScopes.isOrganize("mobile:organizer-request") mustBe false
+      MobileScopes.isStaff(Set(MobileScopes.OrganizerRequest)) mustBe false
+      MobileScopes.parseClient("mobile:organizer-request") mustBe None
+      MobileScopes.clientScopeSets.flatten must not contain MobileScopes.OrganizerRequest
+      MobileScopes.granted(Set(MobileScopes.Admin)) must contain(MobileScopes.OrganizerRequest)
+      MobileScopes.granted(Set(MobileScopes.Read)) must not contain MobileScopes.OrganizerRequest
+      MobileScopes.osmScope("mobile:organizer-request") mustBe "read_prefs"
     }
 
     "be granted to a client that may hold mobile:admin, and to no app client" in {
@@ -304,7 +323,12 @@ class MobileOrganizeSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
       DELETE -> "/api/v2/mobile-admin/organizers/9",
       DELETE -> "/api/v2/mobile-admin/organizers/9/projects/3",
       DELETE -> "/api/v2/mobile-admin/challenges/70/live",
-      PUT    -> "/api/v2/mobile-admin/challenges/70/results"
+      PUT    -> "/api/v2/mobile-admin/challenges/70/results",
+      GET    -> "/api/v2/mobile-admin/organizer-requests",
+      POST   -> "/api/v2/mobile-admin/organizer-requests/4/approve",
+      POST   -> "/api/v2/mobile-admin/organizer-requests/4/decline",
+      GET    -> "/api/v2/mobile-admin/organizer-request",
+      POST   -> "/api/v2/mobile-admin/organizer-request"
     )
     // Organizers write only through organize endpoints that check the project (Ada, #47 review).
     val stockWrites = Seq(
@@ -344,6 +368,52 @@ class MobileOrganizeSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
             contentAsString(gate.apply(next)(bearer(method, path))) mustBe "admin"
           )
       }
+    }
+
+    "read an OSM account's age and changeset count, and nothing it can't parse" in {
+      OsmAccount.parse(
+        Json.parse(
+          """{"user": {"id": 1, "account_created": "2019-05-01T10:00:00Z", "changesets": {"count": 42}}}"""
+        )
+      ) mustBe OsmAccount(Some(Instant.parse("2019-05-01T10:00:00Z")), Some(42))
+      OsmAccount.parse(Json.obj("user" -> Json.obj("account_created" -> "yesterday"))) mustBe
+        OsmAccount.Unknown
+    }
+
+    "let a mobile:organizer-request grant reach only its own request, while it may be held" in {
+      admins.mayHold(MobileScopes.OrganizerRequest, requester.id) mustBe true
+      admins.mayHold(MobileScopes.OrganizerRequest, mapper.id) mustBe false
+      admins.mayHold(MobileScopes.Organize, requester.id) mustBe false
+      val asking        = organizeGrant.copy(userId = requester.id, scope = "mobile:organizer-request")
+      val (gate, audit) = filter(asking)
+      Seq(
+        GET  -> "/api/v2/mobile-admin/organizer-request",
+        POST -> "/api/v2/mobile-admin/organizer-request"
+      ).foreach {
+        case (method, path) =>
+          withClue(s"$method $path")(
+            contentAsString(gate.apply(next)(bearer(method, path))) mustBe "admin"
+          )
+      }
+      (organizerRoutes ++ staffOnly.filterNot(_._2.endsWith("organizer-request")) ++ stockWrites ++
+        Seq(
+          PUT -> "/api/v2/mobile-admin/organizer-request",
+          GET -> "/api/v2/tasks/box/-112/40/-111/41"
+        ))
+        .foreach {
+          case (method, path) =>
+            withClue(s"$method $path") {
+              val result = gate.apply(next)(bearer(method, path))
+              status(result) mustBe FORBIDDEN
+              contentAsJson(result) mustBe Json.obj("error" -> "insufficient_scope")
+            }
+        }
+      // Requests closed since, or the person can't ask any more: refused on the next request.
+      val (closed, _) = filter(asking.copy(userId = mapper.id))
+      val refused     = closed.apply(next)(bearer(GET, "/api/v2/mobile-admin/organizer-request"))
+      status(refused) mustBe FORBIDDEN
+      contentAsJson(refused) mustBe Json.obj("error" -> "organizer_request_not_allowed")
+      verify(audit, never()).record(anyLong(), anyString(), anyString(), any())
     }
 
     "refuse an organizer's grant once they are off the list" in {
@@ -407,6 +477,15 @@ class MobileOrganizeSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
       contentAsString(
         gate(organizeGrant).apply(next)(bearer(GET, "/api/v2/mobile-admin/campaigns"))
       ) mustBe "admin"
+      // ORG-ONB: asking to be an organizer writes only our table, so it isn't held back.
+      Seq(organizeGrant.copy(userId = requester.id, scope = "mobile:organizer-request")).foreach {
+        grant =>
+          withClue(s"request by ${grant.userId}") {
+            contentAsString(
+              gate(grant).apply(next)(bearer(POST, "/api/v2/mobile-admin/organizer-request"))
+            ) mustBe "admin"
+          }
+      }
     }
   }
 

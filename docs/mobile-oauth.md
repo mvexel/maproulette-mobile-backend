@@ -172,9 +172,10 @@ when that comes back `access_denied` with `MapRoulette super-user required`, ask
 - **Listed organizers only.** The user must be on the organizer list (`mobile_memberships`,
   evolution 145), which super-users keep on the admin app's Organizers screen. Anyone else goes
   back to the app at the OSM callback with `error=access_denied` and
-  `error_description=MapRoulette organizer required`. The check is repeated on consent, at code
-  exchange, at every refresh and on every request (`403 organizer_required`), so removing someone
-  from the list takes effect on their next request.
+  `error_description=MapRoulette organizer required`, and may then ask for
+  [`mobile:organizer-request`](#organizer-request-scope-mobileorganizer-request). The check is
+  repeated on consent, at code exchange, at every refresh and on every request (`403
+  organizer_required`), so removing someone from the list takes effect on their next request.
 - **Their projects only.** An organizer runs the campaigns of projects where they hold the
   upstream project role Write or better (`Permission.effectiveRole`, their own grants or their
   teams'), except their Home project. The list does not say which projects; project grants do.
@@ -185,6 +186,24 @@ when that comes back `access_denied` with `MapRoulette super-user required`, ask
   edit OpenStreetMap, manage apps, turn saving answers on or off or get the user's API key.
 - **The write switch applies.** Unlike super-users' admin grants, organizer grants don't write
   while the write switch is off (`403 mobile_writes_disabled` for every non-GET request).
+
+## Organizer request scope (`mobile:organizer-request`)
+
+`mobile:organizer-request` (ORG-ONB) lets someone who isn't an organizer ask to become one in the
+admin app. It stands alone and is never configured on a client: a client that may hold
+`mobile:admin` may be granted it, like `mobile:organize`. The admin app asks for it after
+`mobile:organize` comes back `access_denied`.
+
+- **Who may hold it.** Users signed in with OSM (not guests) while
+  `mobileOAuth.organizers.requests` is `review`, the default. Otherwise the callback returns
+  `error=access_denied` with `error_description=Organizer requests closed`. Checked on consent,
+  at code exchange, at every refresh and on every request (`403 organizer_request_not_allowed`).
+- **Routes.** Only `GET` and `POST /api/v2/mobile-admin/organizer-request`, the person's own
+  request ([mobile-admin-api.md](mobile-admin-api.md#organizer-requests)); everything else is
+  `403 insufficient_scope`. It never reaches organizer routes, so `mobile:organize` keeps meaning
+  a listed organizer. After approval the admin app signs in again for `mobile:organize`.
+- **Consent.** The page says the app can send their request to run campaigns and show the answer,
+  and nothing else.
 
 ## CORS
 

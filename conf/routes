@@ -46,6 +46,12 @@ GET     /api/v2/mobile-admin/organizers                                 @control
 POST    /api/v2/mobile-admin/organizers                                 @controllers.MobileOrganizerController.add
 DELETE  /api/v2/mobile-admin/organizers/:userId                         @controllers.MobileOrganizerController.remove(userId:Long)
 DELETE  /api/v2/mobile-admin/organizers/:userId/projects/:projectId     @controllers.MobileOrganizerController.removeProject(userId:Long, projectId:Long)
+# Organizer requests (ORG-ONB): the requester's own, by their mobile:organize grant, and the super-user decisions
+GET     /api/v2/mobile-admin/organizer-request                          @controllers.MobileOrganizerRequestController.status
+POST    /api/v2/mobile-admin/organizer-request                          @controllers.MobileOrganizerRequestController.create
+GET     /api/v2/mobile-admin/organizer-requests                         @controllers.MobileOrganizerRequestController.list
+POST    /api/v2/mobile-admin/organizer-requests/:id/approve             @controllers.MobileOrganizerRequestController.approve(id:Long)
+POST    /api/v2/mobile-admin/organizer-requests/:id/decline             @controllers.MobileOrganizerRequestController.decline(id:Long)
 # Campaign wizard (fork): question sets, counts and open features from Overpass, create and publish
 GET     /api/v2/mobile-admin/wizard/question-sets                       @controllers.MobileWizardController.questionSets
 GET     /api/v2/mobile-admin/wizard/question-sets/:id/features          @controllers.MobileWizardController.features(id:String)

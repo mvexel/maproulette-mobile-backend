@@ -114,8 +114,8 @@ class MobileOAuthController(
       service.clients.allowedScopes(value.clientId, value.scope).isDefined
 
   /**
-    * `mobile:admin` is for MapRoulette super-users only, `mobile:organize` for listed organizers;
-    * other scopes need no extra check.
+    * `mobile:admin` is for MapRoulette super-users only, `mobile:organize` for listed organizers,
+    * `mobile:organizer-request` for people who may ask to be one; other scopes need no extra check.
     */
   private def adminAllowed(scope: String, userId: Long): Boolean =
     service.admins.mayHold(scope, userId)
@@ -250,7 +250,8 @@ class MobileOAuthController(
                         val csrf = MobileSecrets.generate()
                         if (!adminAllowed(interaction.scope, user.id))
                           // Not a super-user (or organizer): back to the app without a consent page
-                          // or a grant. The admin app asks for mobile:organize next.
+                          // or a grant. The admin app asks for mobile:organize next, then
+                          // mobile:organizer-request.
                           Future.successful(
                             appRedirect(
                               interaction.redirectUri,
@@ -258,6 +259,11 @@ class MobileOAuthController(
                               "error_description" -> (if (MobileScopes
                                                             .isOrganize(interaction.scope))
                                                         "MapRoulette organizer required"
+                                                      else if (MobileScopes
+                                                                 .isOrganizerRequest(
+                                                                   interaction.scope
+                                                                 ))
+                                                        "Organizer requests closed"
                                                       else "MapRoulette super-user required"),
                               "state" -> interaction.clientState
                             )
@@ -312,6 +318,8 @@ class MobileOAuthController(
     val access =
       if (MobileScopes.isAdmin(interaction.scope))
         "This app can administer MapRoulette as you, a super-user: manage the approved mobile apps, create and update challenges, add tasks to them and read challenges and tasks. Every change is recorded in an audit log. It cannot edit OpenStreetMap or obtain your personal API key."
+      else if (MobileScopes.isOrganizerRequest(interaction.scope))
+        s"${html(clientName)} can send your request to run campaigns with Street Tally and show you the answer. It can't do anything else, edit OpenStreetMap or get your personal API key."
       else if (MobileScopes.isOrganize(interaction.scope))
         // Iris's wording; organizers know the product as Street Tally and the work as campaigns.
         s"${html(clientName)} can run campaigns for you in the projects you organize: create and change campaigns, add places to them, publish them and read their results. Every change is recorded in a log. It can't edit OpenStreetMap, manage apps, turn answer saving on or off, or get your personal API key."

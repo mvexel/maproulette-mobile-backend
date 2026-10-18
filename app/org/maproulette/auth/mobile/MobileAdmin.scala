@@ -47,6 +47,12 @@ trait MobileAdminCheck {
   /** On the organizer list. */
   def isOrganizer(userId: Long): Boolean = false
 
+  /**
+    * May ask to become an organizer ([[MobileOrganizerPolicy]]): may hold a
+    * `mobile:organizer-request` grant, which reaches only their own request.
+    */
+  def mayRequestOrganizer(userId: Long): Boolean = false
+
   /** The projects whose campaigns this organizer may run. */
   def organizerProjects(user: User): Set[Long] = Set.empty
 
@@ -60,6 +66,7 @@ trait MobileAdminCheck {
   final def mayHold(scope: String, userId: Long): Boolean =
     if (MobileScopes.isAdmin(scope)) isAdmin(userId)
     else if (MobileScopes.isOrganize(scope)) isOrganizer(userId)
+    else if (MobileScopes.isOrganizerRequest(scope)) mayRequestOrganizer(userId)
     else true
 
   /** Whether this grant may do this now. Never for app grants. */
@@ -95,13 +102,18 @@ class MobileAdminGate @Inject() (
     users: Provider[UserService],
     permission: Provider[Permission],
     projects: Provider[ProjectService],
-    db: Database
+    db: Database,
+    settings: MobileOAuthSettings
 ) extends MobileAdminCheck {
   def isAdmin(user: User): Boolean =
     user.id > 0 && !user.guest && permission.get().isSuperUser(user)
   def isAdmin(userId: Long): Boolean = users.get().retrieve(userId).exists(isAdmin)
 
   override def isOrganizer(userId: Long): Boolean = MobileOrganizers.listed(db, userId)
+
+  override def mayRequestOrganizer(userId: Long): Boolean =
+    settings.organizerRequestsOpen &&
+      users.get().retrieve(userId).exists(MobileOrganizerPolicy.eligible)
 
   /**
     * Write or better, through the user's own grants or their teams (upstream `effectiveRole`),

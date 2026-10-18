@@ -33,29 +33,49 @@ object MobileScopes {
   val TagFix   = "osm:tagfix"
   val Admin    = "mobile:admin"
   val Organize = "mobile:organize"
-  val Guest    = "guest"
-  // Canonical order for stored and returned scope strings.
-  private val supported = Seq(Read, Write, Edit, TagFix, Admin, Organize, Guest)
 
-  /** Strict RFC 6749 scope parsing: single-space separated, known, unique; read, admin or organize alone. */
+  /**
+    * ORG-ONB: someone who isn't an organizer asks to become one. Stands alone and reaches only
+    * their own request ([[MobileOrganizerRequestRoutes]]), so `mobile:organize` keeps meaning a
+    * listed organizer everywhere. Granted, never configured: a client that may hold `mobile:admin`
+    * may hold it.
+    */
+  val OrganizerRequest = "mobile:organizer-request"
+  val Guest            = "guest"
+  // Canonical order for stored and returned scope strings.
+  private val supported = Seq(Read, Write, Edit, TagFix, Admin, Organize, OrganizerRequest, Guest)
+  private val alone     = Set(Admin, Organize, OrganizerRequest)
+
+  /**
+    * Strict RFC 6749 scope parsing: single-space separated, known, unique; read, admin, organize or
+    * organizer-request alone.
+    */
   def parse(value: String): Option[Set[String]] = {
     val items = value.split(" ", -1).toSeq
     val known = items.forall(item => item != Guest && supported.contains(item)) &&
       items.distinct.size == items.size
-    val app = items.contains(Read) && !items.contains(Admin) && !items.contains(Organize) &&
+    val app = items.contains(Read) && !items.exists(alone.contains) &&
       (!items.contains(TagFix) || items.contains(Write)) &&
       (!items.contains(Edit) || items.contains(Write) && !items.contains(TagFix))
-    if (known && (app || items == Seq(Admin) || items == Seq(Organize))) Some(items.toSet) else None
+    if (known && (app || items.size == 1 && alone.contains(items.head))) Some(items.toSet)
+    else None
   }
 
-  /** The scopes a client may be granted: its own, plus `mobile:organize` where it has `mobile:admin`. */
+  /**
+    * The scopes a client may be granted: its own, plus `mobile:organize` and
+    * `mobile:organizer-request` where it has `mobile:admin`.
+    */
   def granted(clientScopes: Set[String]): Set[String] =
-    if (clientScopes.contains(Admin)) clientScopes + Organize else clientScopes
+    if (clientScopes.contains(Admin)) clientScopes + Organize + OrganizerRequest else clientScopes
 
-  /** A client's scopes: a valid grant scope set, plus `guest` on app clients only. */
+  /**
+    * A client's scopes: a valid grant scope set, plus `guest` on app clients only. Never
+    * `mobile:organizer-request`, which comes with `mobile:admin`.
+    */
   def parseClient(value: String): Option[Set[String]] = {
     val items = value.split(" ", -1).toSeq
-    if (items.count(_ == Guest) != 1) parse(value)
+    if (items.contains(OrganizerRequest)) None
+    else if (items.count(_ == Guest) != 1) parse(value)
     else
       parse(items.filterNot(_ == Guest).mkString(" ")).filterNot(isStaff).map(_ + Guest)
   }
@@ -69,10 +89,12 @@ object MobileScopes {
       .flatMap(supported.combinations)
       .filter(set => parseClient(set.mkString(" ")).isDefined)
 
-  def isAdmin(scopes: Set[String]): Boolean    = scopes.contains(Admin)
-  def isAdmin(scope: String): Boolean          = parse(scope).exists(isAdmin)
-  def isOrganize(scopes: Set[String]): Boolean = scopes.contains(Organize)
-  def isOrganize(scope: String): Boolean       = parse(scope).exists(isOrganize)
+  def isAdmin(scopes: Set[String]): Boolean            = scopes.contains(Admin)
+  def isAdmin(scope: String): Boolean                  = parse(scope).exists(isAdmin)
+  def isOrganize(scopes: Set[String]): Boolean         = scopes.contains(Organize)
+  def isOrganize(scope: String): Boolean               = parse(scope).exists(isOrganize)
+  def isOrganizerRequest(scopes: Set[String]): Boolean = scopes.contains(OrganizerRequest)
+  def isOrganizerRequest(scope: String): Boolean       = parse(scope).exists(isOrganizerRequest)
 
   /** An admin app grant, `mobile:admin` or `mobile:organize`: never app scopes. */
   def isStaff(scopes: Set[String]): Boolean = isAdmin(scopes) || isOrganize(scopes)
@@ -93,6 +115,26 @@ class MobileOAuthSettings @Inject() (configuration: Configuration) {
     configuration.getOptional[Boolean]("mobileOAuth.allowTaskWrites").getOrElse(true)
   val writeControlEnabled: Boolean =
     configuration.getOptional[Boolean]("mobileOAuth.writeControlEnabled").getOrElse(false)
+
+  /**
+    * Who may ask to become an organizer ([[MobileOrganizerPolicy]]): `review` (the default) or
+    * `closed`. Anything else is `closed`, with an error in the log.
+    */
+  val organizerRequests: String = {
+    val value = configuration
+      .getOptional[String]("mobileOAuth.organizers.requests")
+      .map(_.trim)
+      .getOrElse(MobileOrganizerPolicy.Review)
+    if (Set(MobileOrganizerPolicy.Review, MobileOrganizerPolicy.Closed).contains(value)) value
+    else {
+      if (enabled)
+        logger.error(
+          s"mobileOAuth.organizers.requests is '$value': expected review or closed; requests are closed"
+        )
+      MobileOrganizerPolicy.Closed
+    }
+  }
+  def organizerRequestsOpen: Boolean = organizerRequests == MobileOrganizerPolicy.Review
 
   /**
     * Deferred sign-up: clients with the `guest` scope may register guests that answer choice tasks

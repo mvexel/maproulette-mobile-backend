@@ -198,15 +198,42 @@ class MobileOrganizerRepository @Inject() (db: Database, audit: MobileAdminRepos
       }
     }
 
-  /** False when the user wasn't listed. Their upstream project grants stay. */
-  def remove(userId: Long, actor: Long): Boolean = {
+  /**
+    * Takes the user off the list. None when they weren't listed. Their approved organizer
+    * requests turn void (evolution 151), so an old approval is never reused, and their roles on
+    * the projects those requests created are dropped, unless they are its last administrator.
+    * Other upstream project grants stay. Some(the projects whose grants changed), for the
+    * caller's cache clearing.
+    */
+  def remove(userId: Long, actor: Long): Option[Seq[Long]] = {
     val before = organizer(userId)
     db.withTransaction { implicit c =>
       val removed =
         SQL"DELETE FROM mobile_memberships WHERE user_id = $userId AND role = $Role"
           .executeUpdate() == 1
-      if (removed) audit.record(actor, "organizer.remove", s"user:$userId", before, None)
-      removed
+      if (!removed) None
+      else {
+        val created =
+          SQL"""UPDATE mobile_organizer_requests SET state = 'void'
+                WHERE user_id = $userId AND state = 'approved' RETURNING project_id"""
+            .as(get[Option[Long]]("project_id").*)
+            .flatten
+            .distinct
+        val dropped = created.filter { projectId =>
+          val held = roles(userId, projectId)
+          held.nonEmpty && !lastAdmin(userId, projectId, held) && {
+            dropRoles(userId, projectId); true
+          }
+        }
+        audit.record(
+          actor,
+          "organizer.remove",
+          s"user:$userId",
+          before,
+          if (dropped.isEmpty) None else Some(Json.obj("droppedProjects" -> dropped))
+        )
+        Some(dropped)
+      }
     }
   }
 }
