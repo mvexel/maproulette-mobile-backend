@@ -75,10 +75,21 @@ class MobileOrganizerController @Inject() (
     }
   }
 
-  /** Off the list: their next `mobile:organize` request is refused. Project roles stay. */
+  /**
+    * Off the list: their next `mobile:organize` request is refused. Their roles on projects their
+    * approved requests created are dropped, other project roles stay.
+    */
   def remove(userId: Long): Action[AnyContent] = Action.async { request =>
     admin(request) { actor =>
-      db(if (organizers.remove(userId, actor.id)) NoContent else problem(NotFound, "not_found"))
+      db {
+        val person = organizers.candidate(userId)
+        organizers.remove(userId, actor.id) match {
+          case None => problem(NotFound, "not_found")
+          case Some(dropped) =>
+            person.foreach(p => dropped.foreach(changed(p, _)))
+            NoContent
+        }
+      }
     }
   }
 

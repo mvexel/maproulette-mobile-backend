@@ -37,3 +37,4 @@ synced d9989212 129
 148 fork choice_pending on_map hold and gone-place backfill, choice_stale for gone places (#50)
 149 fork wizard_osm_features, wizard_osm_extract: the campaign wizard's nightly OSM extract
 150 fork mobile_guests install_id: guest registration retries return the same unused guest (G-IDEM)
+151 fork mobile_organizer_requests: organizer requests and their approval or decline (ORG-ONB)

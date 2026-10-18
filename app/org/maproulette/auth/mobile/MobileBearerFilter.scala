@@ -90,6 +90,17 @@ object MobileOrganizeRoutes {
       (if (MobileAdminRoutes.adminApi(path)) adminApi(method, path) else method == "GET")
 }
 
+/**
+  * Everything a `mobile:organizer-request` grant reaches (ORG-ONB): the grant's own person's
+  * organizer request, to read it or ask.
+  */
+object MobileOrganizerRequestRoutes {
+  val OwnRequest = "/api/v2/mobile-admin/organizer-request"
+
+  def permits(method: String, path: String): Boolean =
+    path == OwnRequest && (method == "GET" || method == "POST")
+}
+
 /** An explicit route allowlist: several legacy GET routes mutate data or disclose API keys. */
 object MobileReadRoutes {
   private val number = "[+-]?[0-9]+(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?"
@@ -406,8 +417,13 @@ object MobileFieldRoutes {
           "/api/v2/mobile-admin/projects",
           "/api/v2/mobile-admin/organizers",
           // W-DRAFT: a wizard campaign is created as a disabled draft; publishing it waits.
-          MobileOrganizeRoutes.WizardCreate
-        ).contains(request.path) || MobileGuestRoutes.own(request.method, request.path) ||
+          MobileOrganizeRoutes.WizardCreate,
+          // ORG-ONB: asking to be an organizer writes only our table.
+          MobileOrganizerRequestRoutes.OwnRequest
+        ).contains(request.path) ||
+          // ORG-ONB decisions: our table, a project and its grants, never a task or OSM.
+          request.path.matches("/api/v2/mobile-admin/organizer-requests/[0-9]+/(approve|decline)") || MobileGuestRoutes
+          .own(request.method, request.path) ||
           MobileLiveRoutes.rotate(request.path) ||
           // The confirm queue reads OSM and writes only our tables (H1b).
           request.path.matches("/api/v2/mobile-admin/challenges/[0-9]+/queue") ||
@@ -759,8 +775,13 @@ class MobileBearerFilter @Inject() (
           // grants reach neither.
           val adminGrant    = MobileScopes.isAdmin(scopes)
           val organizeGrant = MobileScopes.isOrganize(scopes)
-          val staffGrant    = adminGrant || organizeGrant
-          if (if (adminGrant) !admin else if (organizeGrant) !organize else !write && !read)
+          val requestGrant  = MobileScopes.isOrganizerRequest(scopes)
+          val staffGrant    = adminGrant || organizeGrant || requestGrant
+          if (if (adminGrant) !admin
+              else if (organizeGrant) !organize
+              else if (requestGrant)
+                !MobileOrganizerRequestRoutes.permits(request.method, request.path)
+              else !write && !read)
             denied(403, "insufficient_scope")
           else if (!adminGrant && settings.writeControlEnabled &&
                    MobileGuestRoutes.guestOnlyWhenDisabled(request.method, request.path) &&
@@ -786,6 +807,12 @@ class MobileBearerFilter @Inject() (
                 denied(403, "admin_required")
               case Some(user) if organizeGrant && !admins.isOrganizer(user.id) =>
                 denied(403, "organizer_required")
+              // ORG-ONB: asking needs requests open; reading their own request (a decline note)
+              // stays possible while the grant lasts.
+              case Some(user)
+                  if requestGrant && (!MobileOrganizerPolicy.eligible(user) ||
+                    request.method != "GET" && !admins.mayRequestOrganizer(user.id)) =>
+                denied(403, "organizer_request_not_allowed")
               case Some(user) =>
                 val gate =
                   if (staffGrant) Future.successful(None)

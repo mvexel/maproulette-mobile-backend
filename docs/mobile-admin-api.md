@@ -82,13 +82,70 @@ project is `404 project_not_found`. Adding someone to another project is the sam
 #### `DELETE /api/v2/mobile-admin/organizers/:userId`
 
 Takes them off the list (`204`, audited as `organizer.remove`; `404` if they weren't on it).
-Their project roles stay, as upstream roles.
+Their approved [organizer requests](#organizer-requests) turn void, and their role on each
+project such a request created is removed (unless they are its last administrator). Their other
+project roles stay, as upstream roles.
 
 #### `DELETE /api/v2/mobile-admin/organizers/:userId/projects/:projectId`
 
 Removes their upstream role on the project and returns the organizer (audited as
 `organizer.project.remove`, in the same transaction). Removing a project's last administrator is
 `409 last_project_admin`, and changes nothing.
+
+### Organizer requests
+
+Becoming an organizer without email (ORG-ONB, design/organizer-onboarding.md). Who may ask is one
+setting, `mobileOAuth.organizers.requests` (`MR_ORGANIZER_REQUESTS`): `closed` (the default,
+also for any other value) or `review` (anyone signed in with OpenStreetMap, not a guest; a
+super-user decides each request). Dev and stage set `review`; prod stays `closed` until Martijn
+decides who may become an organizer.
+
+Such a person asks with a `mobile:organizer-request` grant
+([mobile-oauth.md](mobile-oauth.md#organizer-request-scope-mobileorganizer-request)), which
+reaches only the two `organizer-request` routes below; anything else is `403 insufficient_scope`,
+and asking with a grant whose person can no longer ask (requests closed since) is `403
+organizer_request_not_allowed`; reading their own request still works while the grant lasts. `mobile:organize` still means a listed organizer: once approved,
+the admin app signs in again for `mobile:organize`. Asking is allowed while the write switch is
+off, like a wizard draft: it writes only this table.
+
+#### `GET /api/v2/mobile-admin/organizer-request`
+
+The grant's own person: `{"name", "osmId", "organizer": bool, "canRequest": bool, "askAgainAt": instant|null,
+"request": {"id", "state": "open"|"approved"|"declined", "place", "subject", "group", "createdAt",
+"decidedAt", "note", "projectId"}|null}`. `request` is their latest one that isn't void (a request
+turns void when its organizer is removed). `note` is the decline note, if any. `askAgainAt` is set
+while a decline is less than 30 days old. `name` is their OSM username, for "You'll use this
+OpenStreetMap account".
+
+#### `POST /api/v2/mobile-admin/organizer-request`
+
+`{"place", "subject", "group"?, "policyAccepted": true}` (each 1 to 200 characters). `201` with
+the request, audited as `organizer.request`. The OSM account's creation date and changeset count
+are looked up on OSM once, now, and kept with the request; if OSM can't say, the request is kept
+without them (the creation date falls back to the one from sign-in). `409 already_organizer`,
+`409 request_open` (one open request per person), `409 too_soon` with `askAgainAt` (30 days after
+the latest decline), `409 requests_closed`.
+
+#### `GET /api/v2/mobile-admin/organizer-requests`
+
+Super-users: `{"requests": [{"id", "userId", "osmId", "name", "osmAccount": {"createdAt",
+"changesets"}, "place", "subject", "group", "policyAcceptedAt", "createdAt"}]}`, the open ones,
+oldest first. The count is the nav's "Organizers (n)".
+
+#### `POST /api/v2/mobile-admin/organizer-requests/:id/approve`
+
+Super-users: `{"projectName"}` (1 to 200 characters, editable before confirming). In one
+transaction: creates the project (owned by the approver, who gets Admin on it as upstream gives a
+project's creator), gives the requester Write on it, puts them on the organizer list, closes the
+request as `approved` and audits it as `organizer.request.approve`. Returns the request. `409
+project_exists` (the name is taken, ignoring case; nothing changes), `409 not_open` with `state`,
+`404 not_found`.
+
+#### `POST /api/v2/mobile-admin/organizer-requests/:id/decline`
+
+Super-users: `{"note"?}` (up to 1000 characters, shown to the requester). Closes the request as
+`declined`, audited as `organizer.request.decline`. Returns the request. `409 not_open`, `404
+not_found`.
 
 ### Stage service key
 
