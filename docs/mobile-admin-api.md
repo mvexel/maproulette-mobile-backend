@@ -89,6 +89,21 @@ Removes their upstream role on the project and returns the organizer (audited as
 `organizer.project.remove`, in the same transaction). Removing a project's last administrator is
 `409 last_project_admin`, and changes nothing.
 
+### Stage service key
+
+Stage only: `Authorization: Bearer <service key>` acts as a dedicated super-user, "Street Tally
+stage service" (OSM id -1001, not a real OSM account; created and promoted on first use), so
+scripts can import test challenges without an admin sign-in. It reaches only `POST
+/api/v2/challenge`, `PUT /api/v2/challenge/:id`, the line-by-line `addFileTasks` import, `GET
+/api/v2/challenge/:id` and `.../tasks`, and `GET /api/v2/mobile-admin/campaigns` and `/projects`;
+anything else is `403 insufficient_scope`. Its writes are audited as `service_key.stock.<METHOD>`.
+
+The server holds only the key's SHA-256 (`MR_STAGE_SERVICE_KEY_SHA256`, lowercase hex) and
+compares in constant time. It accepts the key only when `MR_DEPLOYMENT` is `stage` and the public
+origin is `https://mr-stage.osm.lol`; anywhere else it logs `Stage service key ignored` at startup
+and the key is just an unknown bearer token (`401 invalid_token`). Generate it with
+`openssl rand -hex 32`; its hash with `printf %s "$KEY" | sha256sum`.
+
 ## Clients
 
 A client is `{"id", "name", "redirectUris", "scopes", "enabled"}`.
