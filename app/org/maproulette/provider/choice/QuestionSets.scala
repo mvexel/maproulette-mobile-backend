@@ -34,7 +34,7 @@ case class SetFeature(
 /**
   * One question set of the campaign wizard (campaign-wizard.md §1): its words for the admin, the
   * filter for the server, and the questions and outcomes every task gets. The client sees only
-  * [[publicJson]].
+  * [[publicJson]]: the set's words and its questions' words, never filters, guards or tags.
   */
 case class QuestionSet(
     id: String,
@@ -102,6 +102,18 @@ case class QuestionSet(
 }
 
 object QuestionSet {
+
+  /** A question as the admin may show it (W-EASY L4): its words in order, no tags or guards. */
+  def publicQuestion(question: JsObject): JsObject =
+    JsObject(
+      Seq("id", "prompt", "description").flatMap(k => (question \ k).toOption.map(k -> _)) :+
+        ("options" -> JsArray(
+          (question \ "options").asOpt[List[JsObject]].getOrElse(Nil).map { option =>
+            JsObject(Seq("id", "label").flatMap(k => (option \ k).toOption.map(k -> _)))
+          }
+        ))
+    )
+
   private val Identifier = "^[a-z0-9][a-z0-9-]{0,31}$"
 
   /** `{"key": "value" | null}`; null is "any value" in a filter and "absent" in an expect. */
@@ -173,7 +185,7 @@ object QuestionSet {
       JsObject(
         Seq("id", "version", "name", "why", "audience", "noun", "example", "pace", "description")
           .flatMap(k => (json \ k).toOption.map(k -> _))
-      )
+      ) + ("questions" -> JsArray(questions.map { case (q, _) => QuestionSet.publicQuestion(q) }))
     )
     // A sample feature with nothing set: its payload must pass the backend's own check.
     val sample = SetFeature(

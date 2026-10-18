@@ -78,8 +78,36 @@ class CampaignWizardSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
       )
       library.sets.foreach { set =>
         set.publicJson.keys mustBe
-          Set("id", "version", "name", "why", "audience", "noun", "example", "pace", "description")
+          Set(
+            "id",
+            "version",
+            "name",
+            "why",
+            "audience",
+            "noun",
+            "example",
+            "pace",
+            "description",
+            "questions"
+          )
+        // Each question's words in order, never its guards or tags.
+        val questions = (set.publicJson \ "questions").as[List[JsObject]]
+        questions.map(q => (q \ "id").as[String]) mustBe
+          set.questions.map { case (q, _) => (q \ "id").as[String] }
+        questions.foreach { q =>
+          (q.keys -- Set("description")) mustBe Set("id", "prompt", "options")
+          (q \ "options").as[List[JsObject]].foreach(_.keys mustBe Set("id", "label"))
+        }
+        Json.stringify(set.publicJson) must not include "\"setTags\":"
+        Json.stringify(set.publicJson) must not include "\"expect\":"
       }
+      ((doors.publicJson \ "questions" \ 0).as[JsObject] - "options") mustBe Json.obj(
+        "id"          -> "door-type",
+        "prompt"      -> "How does this door open?",
+        "description" -> "Look only at the door at this entrance."
+      )
+      (doors.publicJson \ "questions" \ 0 \ "options" \ 0).as[JsObject] mustBe
+        Json.obj("id" -> "hinged", "label" -> "Swings open")
       (doors.publicJson \ "why").as[String] mustBe
         "Wheelchair, stroller and walker users know what to expect"
       (library.find("benches").get.publicJson \ "example").as[String] mustBe

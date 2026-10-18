@@ -252,8 +252,10 @@ area. A feature is **open** when the set's filter picks it and at least one ques
 ### `GET /api/v2/mobile-admin/wizard/question-sets`
 
 `{"sets": [{"id", "version", "name", "why", "audience", "noun": {"one", "many"}, "example",
-"pace", "description"}]}`. `pace` is places per participant per hour; `description` is a template
-with `{place}`, `{nounMany}` and `{audience}`.
+"pace", "description", "questions": [{"id", "prompt", "description"?, "options": [{"id",
+"label"}]}]}]}`. `pace` is places per participant per hour; `description` is a template with
+`{place}`, `{nounMany}` and `{audience}`. `questions` are the participant's words in task order,
+without the guards or tags behind them.
 
 ### `GET /api/v2/mobile-admin/wizard/counts?lat=&lon=&radius=`
 
