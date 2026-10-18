@@ -40,7 +40,7 @@ class MobileGuestRepositorySpec extends PlaySpec {
         SQL("CREATE TABLE users(id bigint PRIMARY KEY)").execute()
         SQL("INSERT INTO users VALUES(1)").executeUpdate()
         SQL("CREATE TABLE tasks(id bigint PRIMARY KEY)").execute()
-        Seq("129", "130", "131", "135", "137").foreach { version =>
+        Seq("129", "130", "131", "135", "137", "150").foreach { version =>
           val evolution = new String(
             Files.readAllBytes(Paths.get(s"conf/evolutions/default/$version.sql")),
             "UTF-8"
@@ -79,6 +79,83 @@ class MobileGuestRepositorySpec extends PlaySpec {
       guest.claimed mustBe false
       guest.live(now) mustBe true
       store.get(guest.id) mustBe Some(guest)
+    }
+
+    "return a retried registration's unused guest with the new secret (G-IDEM)" in withStore {
+      (store, db) =>
+        val install = "install-0123456789abcdef"
+        def retry(label: String, at: java.time.Instant = now) =
+          store.register(
+            UUID.randomUUID(),
+            client,
+            hash(s"secret-$label"),
+            at.plusSeconds(86400),
+            at,
+            Some(install),
+            at.minusSeconds(600)
+          )
+        def holders() = db.withConnection { implicit c =>
+          SQL"SELECT id::text FROM mobile_guests WHERE install_id = $install"
+            .as(SqlParser.str(1).*)
+        }
+        val first = retry("a")
+        val again = retry("b", now.plusSeconds(30))
+        again.id mustBe first.id
+        def issue(label: String, token: String) =
+          store.issueToken(
+            first.id,
+            client,
+            hash(s"secret-$label"),
+            hash(token),
+            now.plusSeconds(900),
+            now.plusSeconds(60)
+          )
+        issue("a", "t1") mustBe Left(GuestTokenProblem.InvalidGrant)
+        issue("b", "t2").map(_.id) mustBe Right(first.id)
+        // Used now: a retry gets a new guest, which takes the install id over.
+        val used = retry("c", now.plusSeconds(90))
+        used.id must not be first.id
+        holders() mustBe List(used.id.toString)
+        // Past the window, unused or not, a new guest too.
+        val late = retry("d", now.plusSeconds(90 + 601))
+        late.id must not be used.id
+        holders() mustBe List(late.id.toString)
+        // Without an install id, nothing is reused.
+        store
+          .register(
+            UUID.randomUUID(),
+            client,
+            hash("secret-e"),
+            now.plusSeconds(86400),
+            now,
+            None,
+            now
+          )
+          .id must not be late.id
+    }
+
+    "give concurrent retries of one install a single guest" in withStore { (store, db) =>
+      import scala.concurrent.{Await, Future}
+      import scala.concurrent.ExecutionContext.Implicits.global
+      import scala.concurrent.duration._
+      val install = "concurrent-0123456789"
+      val calls = (1 to 8).map { n =>
+        Future(
+          store.register(
+            UUID.randomUUID(),
+            client,
+            hash(s"secret-race-$n"),
+            now.plusSeconds(86400),
+            now,
+            Some(install),
+            now.minusSeconds(600)
+          )
+        )
+      }
+      Await.result(Future.sequence(calls), 30.seconds).map(_.id).distinct.size mustBe 1
+      db.withConnection { implicit c =>
+        SQL"SELECT count(*) FROM mobile_guests".as(SqlParser.long(1).single)
+      } mustBe 1L
     }
 
     "issue an access token only for the right secret and client" in withStore { (store, _) =>

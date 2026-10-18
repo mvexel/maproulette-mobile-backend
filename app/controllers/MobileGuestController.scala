@@ -2,7 +2,12 @@ package controllers
 
 import javax.inject.Inject
 import org.maproulette.auth.mobile.MobileBearerIdentity
-import org.maproulette.auth.mobile.guest.{GuestError, MobileGuest, MobileGuestService}
+import org.maproulette.auth.mobile.guest.{
+  GuestError,
+  MobileGuest,
+  MobileGuestService,
+  MobileGuestStore
+}
 import org.maproulette.provider.choice.ChoicePendingStore
 import play.api.libs.json.{JsNull, JsObject, Json}
 import play.api.mvc._
@@ -52,13 +57,22 @@ class MobileGuestController @Inject() (
     if (error == GuestError.RateLimited) result.withHeaders(RETRY_AFTER -> "3600") else result
   }
 
-  /** `POST /oauth/mobile/guest`, form-encoded `client_id`. No credential. */
+  /**
+    * `POST /oauth/mobile/guest`, form-encoded `client_id` and optional `install_id` (G-IDEM: a
+    * retry with the same install id returns the same unused guest, with a new secret). No
+    * credential.
+    */
   def register: Action[Map[String, Seq[String]]] =
     Action.async(parse.formUrlEncoded(maxLength = 1024)) { request =>
       handled {
-        request.body.get("client_id") match {
-          case Some(Seq(clientId)) if !request.headers.hasHeader(AUTHORIZATION) =>
-            guests.register(clientId, request.remoteAddress).map {
+        val installId = request.body.get("install_id") match {
+          case None                                                 => Right(None)
+          case Some(Seq(id)) if MobileGuestStore.validInstallId(id) => Right(Some(id))
+          case _                                                    => Left(())
+        }
+        (request.body.get("client_id"), installId) match {
+          case (Some(Seq(clientId)), Right(install)) if !request.headers.hasHeader(AUTHORIZATION) =>
+            guests.register(clientId, request.remoteAddress, install).map {
               case Left(error) => failure(error)
               case Right(registration) =>
                 Created(

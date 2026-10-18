@@ -50,6 +50,22 @@ trait MobileGuestStore {
   ): MobileGuest
   def get(id: UUID): Option[MobileGuest]
 
+  /**
+    * [[create]], or with an install id (G-IDEM), the guest a lost response left behind: when the
+    * client's guest holding this install id was created after `retriedSince` and never used (no
+    * token, email, claim or exchange), it gets this secret instead and is returned. Otherwise a
+    * new guest is created and takes the install id over. Concurrent retries return one guest.
+    */
+  def register(
+      id: UUID,
+      clientId: String,
+      secretHash: String,
+      expiresAt: Instant,
+      now: Instant,
+      installId: Option[String],
+      retriedSince: Instant
+  ): MobileGuest
+
   /** Checks the secret and records a new access token, atomically. Clears the guest's expired tokens. */
   def issueToken(
       id: UUID,
@@ -69,6 +85,12 @@ trait MobileGuestStore {
     * guest was unknown or already deleted.
     */
   def delete(id: UUID, now: Instant): Boolean
+}
+
+object MobileGuestStore {
+
+  /** An install id as the app sends it: random, 16 to 64 URL-safe characters. */
+  def validInstallId(value: String): Boolean = value.matches("[A-Za-z0-9_-]{16,64}")
 }
 
 @Singleton
@@ -105,18 +127,71 @@ class MobileGuestRepository @Inject() (db: Database) extends MobileGuestStore {
   ): MobileGuest = {
     digest(secretHash)
     require(expiresAt.isAfter(now))
-    db.withConnection { implicit c =>
-      SQL("""INSERT INTO mobile_guests (id,client_id,secret_hash,created_at,last_seen_at,expires_at)
-        VALUES ({id}::uuid,{client},{secret},{now},{now},{expires}) RETURNING *""")
-        .on(
-          "id"      -> id.toString,
-          "client"  -> clientId,
-          "secret"  -> secretHash,
-          "now"     -> stamp(now),
-          "expires" -> stamp(expiresAt)
-        )
-        .as(guest.single)
-    }
+    db.withConnection(implicit c => insert(id, clientId, secretHash, expiresAt, now, None))
+  }
+
+  private def insert(
+      id: UUID,
+      clientId: String,
+      secretHash: String,
+      expiresAt: Instant,
+      now: Instant,
+      installId: Option[String]
+  )(implicit c: Connection): MobileGuest =
+    SQL("""INSERT INTO mobile_guests
+      (id,client_id,secret_hash,created_at,last_seen_at,expires_at,install_id)
+      VALUES ({id}::uuid,{client},{secret},{now},{now},{expires},{install}) RETURNING *""")
+      .on(
+        "id"      -> id.toString,
+        "client"  -> clientId,
+        "secret"  -> secretHash,
+        "now"     -> stamp(now),
+        "expires" -> stamp(expiresAt),
+        "install" -> installId
+      )
+      .as(guest.single)
+
+  override def register(
+      id: UUID,
+      clientId: String,
+      secretHash: String,
+      expiresAt: Instant,
+      now: Instant,
+      installId: Option[String],
+      retriedSince: Instant
+  ): MobileGuest = installId match {
+    case None => create(id, clientId, secretHash, expiresAt, now)
+    case Some(install) =>
+      digest(secretHash)
+      require(expiresAt.isAfter(now))
+      require(MobileGuestStore.validInstallId(install), "Expected an install id")
+      db.withTransaction { implicit c =>
+        // Serialises retries of one install, including the first, when there is no row to lock.
+        SQL("SELECT pg_advisory_xact_lock(hashtext({key}))")
+          .on("key" -> s"mobile_guest_install:$clientId:$install")
+          .execute()
+        SQL("""UPDATE mobile_guests g SET secret_hash={secret}
+          WHERE g.client_id={client} AND g.install_id={install} AND g.created_at>{since}
+            AND g.last_seen_at=g.created_at AND g.expires_at>{now} AND g.deleted_at IS NULL
+            AND g.claimed_user_id IS NULL AND g.exchanged_at IS NULL AND g.email_ciphertext IS NULL
+            AND NOT EXISTS (SELECT 1 FROM mobile_guest_tokens t WHERE t.guest_id=g.id)
+          RETURNING *""")
+          .on(
+            "secret"  -> secretHash,
+            "client"  -> clientId,
+            "install" -> install,
+            "since"   -> stamp(retriedSince),
+            "now"     -> stamp(now)
+          )
+          .as(guest.singleOpt)
+          .getOrElse {
+            SQL("""UPDATE mobile_guests SET install_id=NULL
+              WHERE client_id={client} AND install_id={install}""")
+              .on("client" -> clientId, "install" -> install)
+              .executeUpdate()
+            insert(id, clientId, secretHash, expiresAt, now, Some(install))
+          }
+      }
   }
 
   override def get(id: UUID): Option[MobileGuest] =

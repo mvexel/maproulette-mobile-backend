@@ -36,3 +36,4 @@ synced d9989212 129
 147 fork choice_queue_items stale_at: stale queued edits in the hourly check (H1d)
 148 fork choice_pending on_map hold and gone-place backfill, choice_stale for gone places (#50)
 149 fork wizard_osm_features, wizard_osm_extract: the campaign wizard's nightly OSM extract
+150 fork mobile_guests install_id: guest registration retries return the same unused guest (G-IDEM)

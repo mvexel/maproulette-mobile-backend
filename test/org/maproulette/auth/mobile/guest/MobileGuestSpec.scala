@@ -25,8 +25,9 @@ import scala.concurrent.{ExecutionContext, Future}
 /** In-memory guest storage with the repository's rules (MobileGuestRepositorySpec covers SQL). */
 class MemoryGuestStore extends MobileGuestStore {
   private case class Row(guest: MobileGuest, secretHash: Option[String])
-  private val rows   = mutable.Map[UUID, Row]()
-  private val tokens = mutable.Map[String, (UUID, Instant)]()
+  private val rows     = mutable.Map[UUID, Row]()
+  private val tokens   = mutable.Map[String, (UUID, Instant)]()
+  private val installs = mutable.Map[(String, String), UUID]()
 
   def claim(id: UUID): Unit = synchronized {
     val row = rows(id)
@@ -41,6 +42,29 @@ class MemoryGuestStore extends MobileGuestStore {
       rows(id) = Row(guest, Some(secretHash))
       guest
     }
+  def register(
+      id: UUID,
+      clientId: String,
+      secretHash: String,
+      expiresAt: Instant,
+      now: Instant,
+      installId: Option[String],
+      retriedSince: Instant
+  ): MobileGuest = synchronized {
+    val retry = installId.flatMap(i => installs.get((clientId, i))).map(rows).filter { row =>
+      val g = row.guest
+      g.live(now) && !g.claimed && g.exchangedAt.isEmpty && !g.emailSet &&
+      g.createdAt.isAfter(retriedSince) && !tokens.values.exists(_._1 == g.id)
+    }
+    retry match {
+      case Some(row) =>
+        rows(row.guest.id) = row.copy(secretHash = Some(secretHash))
+        row.guest
+      case None =>
+        installId.foreach(i => installs((clientId, i)) = id)
+        create(id, clientId, secretHash, expiresAt, now)
+    }
+  }
   def get(id: UUID): Option[MobileGuest] = synchronized(rows.get(id).map(_.guest))
   def issueToken(
       id: UUID,
@@ -152,10 +176,13 @@ class MobileGuestSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll 
       mock[WSClient],
       Some(service)
     )
-    def register(client: String = "app", ip: String = "192.0.2.1") =
+    def register(client: String = "app", ip: String = "192.0.2.1", install: Seq[String] = Nil) =
       controller.register(
         FakeRequest(POST, "/oauth/mobile/guest")
-          .withBody(Map("client_id" -> Seq(client)))
+          .withBody(
+            Map("client_id" -> Seq(client)) ++
+              (if (install.isEmpty) Map.empty else Map("install_id" -> install))
+          )
           .withConnection(RemoteConnection(ip, secure = false, clientCertificateChain = None))
       )
     def tokenRequest(fields: (String, String)*) =
@@ -193,6 +220,38 @@ class MobileGuestSpec extends PlaySpec with MockitoSugar with BeforeAndAfterAll 
         .parse((body \ "expiresAt").as[String])
         .isAfter(Instant.now().plusSeconds(29L * 86400)) mustBe
         true
+    }
+    "return the same unused guest with a new secret when a retry repeats the install id" in new Fixture {
+      val install = "install-0123456789abcdef"
+      def again() = contentAsJson(register(install = Seq(install)))
+      val first   = again()
+      val retry   = again()
+      (retry \ "guestId").as[String] mustBe (first \ "guestId").as[String]
+      (retry \ "guestSecret").as[String] must not be (first \ "guestSecret").as[String]
+      // Only the latest secret works.
+      def token(body: play.api.libs.json.JsValue) =
+        status(
+          tokenRequest(
+            "grant_type"   -> service.GrantType,
+            "client_id"    -> "app",
+            "guest_id"     -> (body \ "guestId").as[String],
+            "guest_secret" -> (body \ "guestSecret").as[String]
+          )
+        )
+      token(first) mustBe BAD_REQUEST
+      token(retry) mustBe OK
+      // Once the guest has a token it is in use: the same install id gets a new guest.
+      (again() \ "guestId").as[String] must not be (first \ "guestId").as[String]
+      // Without an install id every registration is new, as before.
+      registered()._1 must not be registered()._1
+    }
+    "refuse a malformed install id" in new Fixture {
+      Seq(Seq("short"), Seq("has spaces in it, sixteen+"), Seq("a" * 65), Seq("a" * 16, "b" * 16))
+        .foreach { install =>
+          val result = register(install = install)
+          status(result) mustBe BAD_REQUEST
+          contentAsJson(result) mustBe Json.obj("error" -> "invalid_request")
+        }
     }
     "refuse clients without the guest scope, and unknown clients" in new Fixture {
       status(register("plain")) mustBe UNAUTHORIZED
