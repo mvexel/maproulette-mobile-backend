@@ -50,6 +50,7 @@ services:
       MR_MOBILE_ADMIN_CALLBACK_URI: https://${MR_ADMIN_HOST:?Set the deployment admin host}/callback
       # Deferred sign-up (docs/mobile-oauth.md "Guests"). Off unless set; empty values keep the app defaults.
       MR_MOBILE_GUESTS_ENABLED: ${MR_MOBILE_GUESTS_ENABLED:-false}
+      MR_ORGANIZER_REQUESTS: ${MR_ORGANIZER_REQUESTS:-closed}
       MR_GUEST_MAIL_PROVIDER: ${MR_GUEST_MAIL_PROVIDER:-none}
       MR_GUEST_MAIL_FROM: ${MR_GUEST_MAIL_FROM:-}
       MR_CLAIM_ORIGIN: ${MR_CLAIM_ORIGIN:-}

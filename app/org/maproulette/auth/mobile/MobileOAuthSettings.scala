@@ -117,14 +117,15 @@ class MobileOAuthSettings @Inject() (configuration: Configuration) {
     configuration.getOptional[Boolean]("mobileOAuth.writeControlEnabled").getOrElse(false)
 
   /**
-    * Who may ask to become an organizer ([[MobileOrganizerPolicy]]): `review` (the default) or
-    * `closed`. Anything else is `closed`, with an error in the log.
+    * Who may ask to become an organizer ([[MobileOrganizerPolicy]]): `closed` (the default, until
+    * Martijn decides per deployment) or `review`. Anything else is `closed`, with an error in the
+    * log.
     */
   val organizerRequests: String = {
     val value = configuration
       .getOptional[String]("mobileOAuth.organizers.requests")
       .map(_.trim)
-      .getOrElse(MobileOrganizerPolicy.Review)
+      .getOrElse(MobileOrganizerPolicy.Closed)
     if (Set(MobileOrganizerPolicy.Review, MobileOrganizerPolicy.Closed).contains(value)) value
     else {
       if (enabled)

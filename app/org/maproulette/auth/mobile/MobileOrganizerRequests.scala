@@ -18,9 +18,9 @@ import scala.concurrent.{ExecutionContext, Future}
 
 /**
   * Who may ask to become an organizer (design/organizer-onboarding.md §1). Martijn's call, so it
-  * is one setting, `mobileOAuth.organizers.requests`: `review` (option A, the default: anyone signed
-  * in with OSM may ask, a super-user approves each request) or `closed` (no new requests). Anything
-  * else is `closed`.
+  * is one setting, `mobileOAuth.organizers.requests`: `closed` (the default: no requests) or
+  * `review` (option A: anyone signed in with OSM may ask, a super-user approves each request), set
+  * on dev and stage. Anything else is `closed`.
   */
 object MobileOrganizerPolicy {
   val Review = "review"

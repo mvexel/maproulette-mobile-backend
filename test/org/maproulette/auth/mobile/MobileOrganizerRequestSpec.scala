@@ -50,7 +50,16 @@ class MobileOrganizerRequestSpec(implicit val application: Application) extends 
       organizers.requests = "$requests"
     }"""))
   )
-  private val gate = application.injector.instanceOf[MobileAdminGate]
+  // The deployment's own gate: requests closed, the default.
+  private val closedGate = application.injector.instanceOf[MobileAdminGate]
+  // The real gate as dev and stage run it, with requests open.
+  private val gate = new MobileAdminGate(
+    () => serviceManager.user,
+    () => permission,
+    () => serviceManager.project,
+    db,
+    settings(MobileOrganizerPolicy.Review)
+  )
   private val admins = new MobileAdminCheck {
     def isAdmin(value: User): Boolean                     = value.id == User.superUser.id
     def isAdmin(userId: Long): Boolean                    = userId == User.superUser.id
@@ -141,6 +150,8 @@ class MobileOrganizerRequestSpec(implicit val application: Application) extends 
     "go from asking to approval, and an old approval ends with removal" taggedAs ChoiceTag in {
       val gil = serviceManager.user.create(getTestUser(78001, "Gil_Requester"), User.superUser)
       gate.mayRequestOrganizer(gil.id) mustBe true
+      closedGate.mayRequestOrganizer(gil.id) mustBe false
+      closedGate.mayHold(MobileScopes.OrganizerRequest, gil.id) mustBe false
       gate.mayHold(MobileScopes.OrganizerRequest, gil.id) mustBe true
       gate.mayHold(MobileScopes.Organize, gil.id) mustBe false
       mine(gil) mustBe Json.obj(
@@ -315,6 +326,14 @@ class MobileOrganizerRequestSpec(implicit val application: Application) extends 
       (contentAsJson(closed.status(as(jo))) \ "canRequest").as[Boolean] mustBe false
       contentAsJson(closed.create(as(jo, body = ask))) mustBe Json.obj("error" -> "requests_closed")
       settings("anything else").organizerRequestsOpen mustBe false
+      // Missing means closed: prod stays closed until Martijn's call.
+      new MobileOAuthSettings(
+        Configuration(
+          ConfigFactory.parseString(
+            """mobileOAuth { enabled = true, callbackUri = "https://mr.example/oauth/mobile/callback", clients = [] }"""
+          )
+        )
+      ).organizerRequestsOpen mustBe false
       settings(MobileOrganizerPolicy.Review).organizerRequestsOpen mustBe true
     }
   }

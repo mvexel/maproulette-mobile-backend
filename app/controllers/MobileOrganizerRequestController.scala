@@ -4,7 +4,6 @@ import javax.inject.Inject
 import org.maproulette.auth.mobile._
 import org.maproulette.framework.model.User
 import org.maproulette.framework.service.{ProjectService, UserService}
-import play.api.http.HeaderNames.CACHE_CONTROL
 import play.api.libs.json._
 import play.api.mvc._
 import scala.concurrent.{ExecutionContext, Future}

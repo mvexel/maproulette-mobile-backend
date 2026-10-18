@@ -95,8 +95,10 @@ Removes their upstream role on the project and returns the organizer (audited as
 ### Organizer requests
 
 Becoming an organizer without email (ORG-ONB, design/organizer-onboarding.md). Who may ask is one
-setting, `mobileOAuth.organizers.requests`: `review` (the default, anyone signed in with
-OpenStreetMap, not a guest; a super-user decides each request) or `closed`.
+setting, `mobileOAuth.organizers.requests` (`MR_ORGANIZER_REQUESTS`): `closed` (the default,
+also for any other value) or `review` (anyone signed in with OpenStreetMap, not a guest; a
+super-user decides each request). Dev and stage set `review`; prod stays `closed` until Martijn
+decides who may become an organizer.
 
 Such a person asks with a `mobile:organizer-request` grant
 ([mobile-oauth.md](mobile-oauth.md#organizer-request-scope-mobileorganizer-request)), which

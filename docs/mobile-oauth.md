@@ -195,7 +195,7 @@ admin app. It stands alone and is never configured on a client: a client that ma
 `mobile:organize` comes back `access_denied`.
 
 - **Who may hold it.** Users signed in with OSM (not guests) while
-  `mobileOAuth.organizers.requests` is `review`, the default. Otherwise the callback returns
+  `mobileOAuth.organizers.requests` is `review` (the default is `closed`). Otherwise the callback returns
   `error=access_denied` with `error_description=Organizer requests closed`. Checked on consent,
   at code exchange, at every refresh and on every `POST` (`403 organizer_request_not_allowed`), so
   a grant from before requests closed can still read the person's own request until it expires.
