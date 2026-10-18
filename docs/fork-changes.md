@@ -270,31 +270,51 @@ filed yet; filing is Martijn's step.
 
 Branch
 [`claude/project-thread-rsciiv`](https://github.com/mvexel/maproulette-mobile-backend/tree/claude/project-thread-rsciiv)
-(2026-10-18) is cut from upstream `main` at `d9989212` and holds only the
-generic changes below, one commit each, with no mobile OAuth, guests, choice
-tasks, admin, evolutions, deployment config or branding. Its full test suite
-passes against PostGIS. To offer it upstream, push it to a fork of
-`maproulette/maproulette-backend` and open a PR (or one PR per commit).
+(2026-10-18) is cut from upstream `main` at `d9989212` and holds the generic
+changes below, one commit each, plus the OAuth provider under neutral names.
+It has no guests, choice tasks, admin, deployment config or branding. Its full
+test suite (834 tests) and lint pass against PostGIS. To offer it upstream,
+push it to a fork of `maproulette/maproulette-backend` and open a PR (or one PR
+per commit). The provider's upstream-facing description is
+[`docs/oauth-provider.md`](https://github.com/mvexel/maproulette-mobile-backend/blob/claude/project-thread-rsciiv/docs/oauth-provider.md)
+on that branch.
 
 | Change | Where |
 | ------ | ----- |
 | The cached task carries the `completedBy`, `mappedOn` and `completedTimeSpent` the status write stored | `TaskDAL.setTaskStatus`, `TaskServiceSpec` |
 | `submitOsmChange` closes the changeset when building the change fails | `ChangesetProvider.scala` |
-| The request header trace log redacts `Authorization`, `apiKey`, `Cookie`, `Set-Cookie` and `Referer` (the fork's extra rule for `/oauth/mobile/*` query strings is left out) | `HttpLoggingFilter.scala` (`SafeRequestLog`) |
+| The request header trace log redacts `Authorization`, `apiKey`, `Cookie`, `Set-Cookie` and `Referer`; `/oauth/*` requests log method and path only | `HttpLoggingFilter.scala` (`SafeRequestLog`) |
 | `TestDatabase` also points the background pool at the test database | `test/.../TestDatabase.scala` |
 | CI: PostGIS health check; integration job uses `devMode` instead of `MR_SUPER_KEY`; Metals/Bloop in `.gitignore` | `.github/workflows/scala.yml`, `.gitignore` |
 | `cct` search filter on `challenges.cooperative_type` | `SearchParameters.scala`, `SearchParametersMixin.scala` |
 | `addFileTasks?lineByLine=true&report=true` returns created/updated counts and rejected lines; a rejected line does not mark the challenge FAILED | `ChallengeController.scala`, `ChallengeProvider.scala`, `conf/v2_route/challenge.api` |
 | Machine-readable `error` codes next to `status`/`message`; lock responses include `expiresAt` | `MPExceptions.scala` (`ErrorCodes`, `ErrorCoded`), `MPExceptionUtil.body`, `Locking.resolveLockExpiry`, `TaskController.scala`, `TaskBundleController.scala` |
 | `PUT /task/:id/changeset?changesetId=` links a named changeset after ownership and timing checks, behind `maproulette.tasks.changesets.linkEnabled` (default `true`) | `TaskDAL.linkOSMChangeSet`, `TaskController.matchToOSMChangeSet`, `conf/v2_route/task.api`, `Config.scala` |
+| OAuth 2.0 provider for phone apps and desktop editors (JOSM), off by default: PKCE, loopback redirects, rotating refresh tokens, scopes `tasks:read`, `tasks:write`, `tasks:edit` | `app/org/maproulette/auth/oauth/`, `OAuthProviderController.scala`, `conf/routes`, `oauthProvider` in `application.conf`, evolution `130.sql`, `docs/oauth-provider.md` |
 
-Left out on purpose: choice tasks (`meta.type = 3`, proposed in §10 but the
-core of the apps, with its validator and fork tables), the `inTransaction`
-hook in `setTaskStatus` (used only by choice submissions), `excludeStale`,
-`excludePending` and `includePending`, the draft gate in
-`TaskBundleController`, the mobile bearer and CORS filters, the `curl` added
-to the `Dockerfile`, and all fork evolutions (129–132, 134–151). The branch
-needs no evolution.
+The provider is renamed for upstream. If upstream accepts it, the fork and its
+clients must move to the new names:
+
+| Fork | Upstream branch |
+| ---- | --------------- |
+| `/oauth/mobile/*` | `/oauth/*` |
+| `mobileOAuth { ... }` | `oauthProvider { ... }` |
+| `mobile_oauth_*` tables (fork evolution 129) | `oauth_*` tables (evolution 130) |
+| `org.maproulette.auth.mobile`, `Mobile*` classes | `org.maproulette.auth.oauth`, `OAuth*` classes |
+| `MobileOAuthController` | `OAuthProviderController` |
+| cookie `mr_mobile_oauth` | cookie `mr_oauth` (path `/oauth`) |
+
+Left out of the provider: guest sign-in and claim, the admin and `osm:tagfix`
+scopes with stored OSM tokens, choice-task routes in the bearer allowlists,
+admin-managed clients (the branch reads clients from config only), the
+`allowTaskWrites` switch, and `MobileCorsFilter`.
+
+Left out on purpose elsewhere: choice tasks (`meta.type = 3`, proposed in §10
+but the core of the apps, with its validator and fork tables), the
+`inTransaction` hook in `setTaskStatus` (used only by choice submissions),
+`excludeStale`, `excludePending` and `includePending`, the draft gate in
+`TaskBundleController`, the `curl` added to the `Dockerfile`, and all other
+fork evolutions (130–132, 134–151).
 
 The earlier upstream-based branches from #36 and #37 (`52dbe965`,
 `7d04c452`, `a2919099`) are superseded by this branch.
