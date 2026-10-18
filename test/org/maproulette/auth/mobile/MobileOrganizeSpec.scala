@@ -284,6 +284,7 @@ class MobileOrganizeSpec extends PlaySpec with MockitoSugar with BeforeAndAfterA
       GET  -> "/oauth/mobile/me",
       GET  -> "/api/v2/mobile-admin/wizard/question-sets",
       GET  -> "/api/v2/mobile-admin/wizard/counts?lat=40.75&lon=-111.9&radius=800",
+      GET  -> "/api/v2/mobile-admin/wizard/coverage",
       GET  -> "/api/v2/mobile-admin/wizard/question-sets/entrance-doors/features?lat=40.75&lon=-111.9&radius=800",
       POST -> "/api/v2/mobile-admin/wizard/campaigns",
       POST -> "/api/v2/mobile-admin/wizard/campaigns/70/publish",

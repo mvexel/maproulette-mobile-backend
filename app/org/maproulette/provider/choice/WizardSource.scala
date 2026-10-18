@@ -5,7 +5,7 @@ import anorm.SqlParser.{double, long, str}
 import javax.inject.{Inject, Singleton}
 import org.maproulette.Config
 import play.api.db.Database
-import play.api.libs.json.Json
+import play.api.libs.json.{JsObject, Json}
 import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future, blocking}
 
@@ -33,6 +33,9 @@ trait WizardSource {
       userId: Long,
       cached: Boolean
   ): Future[Either[WizardQueryFailure, OpenFeatures]]
+
+  /** What the nightly extract covers, when one is loaded ([[WizardExtract.coverage]]). */
+  def coverage(): Future[Option[JsObject]] = Future.successful(None)
 }
 
 /**
@@ -87,6 +90,41 @@ class WizardExtract @Inject() (db: Database, config: Config)(implicit ec: Execut
             .as(parser.*)
         )
       }
+    }))
+
+  /**
+    * The loaded extract and the area it covers, for the wizard to stop early on a place outside
+    * it: `bbox` is [west, south, east, north] and `coverage` a GeoJSON geometry, simplified to
+    * about 100 m. `fresh` is false once the extract is older than [[maxAge]]; the wizard then asks
+    * Overpass everywhere. None when no extract was ever loaded.
+    */
+  def coverage(): Future[Option[JsObject]] =
+    Future(blocking(db.withConnection { implicit c =>
+      val parser = (str("source") ~ str("extract_at") ~ str("loaded_at") ~ long("features") ~
+        SqlParser.bool("fresh") ~ double("west") ~ double("south") ~ double("east") ~
+        double("north") ~ str("geojson")).map {
+        case source ~ extractAt ~ loadedAt ~ features ~ fresh ~ w ~ s ~ e ~ n ~ geojson =>
+          Json.obj(
+            "source"      -> source,
+            "extractAt"   -> extractAt,
+            "loadedAt"    -> loadedAt,
+            "features"    -> features,
+            "fresh"       -> fresh,
+            "maxAgeHours" -> maxAge.toHours,
+            "bbox"        -> Json.arr(w, s, e, n),
+            "coverage"    -> Json.parse(geojson)
+          )
+      }
+      SQL"""SELECT source,
+              to_char(extract_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS extract_at,
+              to_char(loaded_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS loaded_at,
+              features::bigint AS features,
+              extract_at > NOW() - (${maxAge.toSeconds} * INTERVAL '1 second') AS fresh,
+              ST_XMin(coverage) AS west, ST_YMin(coverage) AS south,
+              ST_XMax(coverage) AS east, ST_YMax(coverage) AS north,
+              ST_AsGeoJSON(ST_SimplifyPreserveTopology(coverage, 0.001), 5) AS geojson
+            FROM wizard_osm_extract WHERE id = 1"""
+        .as(parser.singleOpt)
     }))
 
   def counts(sets: Seq[QuestionSet], area: SearchArea): Future[Option[List[SetCount]]] =
@@ -158,6 +196,8 @@ class WizardSources @Inject() (extract: WizardExtract, overpass: WizardOverpass)
     orOverpass(s"${set.id} features", area)(extract.features(set, area, limit))(
       overpass.features(set, area, limit, userId, cached)
     )
+
+  override def coverage(): Future[Option[JsObject]] = extract.coverage()
 }
 
 /**

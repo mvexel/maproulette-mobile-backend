@@ -252,14 +252,24 @@ area. A feature is **open** when the set's filter picks it and at least one ques
 ### `GET /api/v2/mobile-admin/wizard/question-sets`
 
 `{"sets": [{"id", "version", "name", "why", "audience", "noun": {"one", "many"}, "example",
-"pace", "description"}]}`. `pace` is places per participant per hour; `description` is a template
-with `{place}`, `{nounMany}` and `{audience}`.
+"pace", "description", "questions": [{"id", "prompt", "description"?, "options": [{"id",
+"label"}]}]}]}`. `pace` is places per participant per hour; `description` is a template with
+`{place}`, `{nounMany}` and `{audience}`. `questions` are the participant's words in task order,
+without the guards or tags behind them.
 
 ### `GET /api/v2/mobile-admin/wizard/counts?lat=&lon=&radius=`
 
 `radius` 200 to 3000 metres; anything else is `400 invalid_request` with `detail`. One Overpass
 query: `{"counts": [{"set", "version", "open", "complete"}]}`, or every set `{"set", "version",
 "unavailable": true}` when Overpass didn't answer.
+
+### `GET /api/v2/mobile-admin/wizard/coverage`
+
+What the nightly OSM extract covers, so the wizard can stop early on a place outside it:
+`{"extract": {"source", "extractAt", "loadedAt", "features", "fresh", "maxAgeHours", "bbox":
+[west, south, east, north], "coverage": <GeoJSON geometry, simplified to about 100 m>}}`, or
+`{"extract": null}` when none was ever loaded. A place is read from the extract when `fresh` is
+true and its whole circle lies inside `coverage`; anywhere else counts and features ask Overpass.
 
 ### `GET /api/v2/mobile-admin/wizard/question-sets/:id/features?lat=&lon=&radius=`
 
